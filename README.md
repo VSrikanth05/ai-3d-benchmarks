@@ -1,12 +1,12 @@
 # AI 3D Benchmarks
 
-A collection of **13 single-file procedural Three.js 3D scenes** running live at **60 FPS** directly in the browser — built purely from analytic geometry, procedural PBR textures, and custom GLSL shaders with **no external 3D models, image textures, or build steps**.
+A collection of **14 single-file AI benchmark builds** (procedural Three.js 3D scenes & interactive web OS demos) running live at **60 FPS** directly in the browser — built with **no external 3D models, image textures, or build steps**.
 
 - **Live Fullscreen Showcase (auto-plays immediately):** https://vsrikanth05.github.io/ai-3d-benchmarks/
 
 ## Playable 3D Scenes
 
-Opening the showcase URL above plays **Chandrayaan-3 Landing** fullscreen right away, with a subtle bottom-right scene switcher to browse all 13 scenes, replay, or jump to any standalone no-UI file.
+Opening the showcase URL above plays **Chandrayaan-3 Landing** fullscreen right away, with a subtle bottom-right scene switcher to browse all 14 builds, replay, or jump to any standalone no-UI file.
 
 | # | Scene | Showcase Link | Direct Standalone (No UI) | Source |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@ Opening the showcase URL above plays **Chandrayaan-3 Landing** fullscreen right 
 | 11 | **Supermassive Black Hole** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=supermassive-black-hole) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/supermassive-black-hole.html) | [`supermassive-black-hole.html`](./supermassive-black-hole.html) |
 | 12 | **Coffee Ghost** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=coffee-ghost) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/coffee-ghost.html) | [`coffee-ghost.html`](./coffee-ghost.html) |
 | 13 | **Sci-Fi Galaxy Hologram** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=07-galaxy-hologram) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/07-galaxy-hologram.html) | [`07-galaxy-hologram.html`](./07-galaxy-hologram.html) |
+| 14 | **macOS Sequoia — Interactive Desktop (Gemini 4 Neon)** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=macos-sequoia-desktop) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/macos_sequoia_interactive_desktop.html) | [`macos_sequoia_interactive_desktop.html`](./macos_sequoia_interactive_desktop.html) |
 
 ## Tools & Tech Stack Used
 

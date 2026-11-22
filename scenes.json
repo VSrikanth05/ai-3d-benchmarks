@@ -76,5 +76,11 @@
     "title": "Sci-Fi Galaxy Hologram",
     "file": "07-galaxy-hologram.html",
     "description": "Spiral galaxy holographic projection with volumetric particle arms, scanlines, and futuristic emitter pedestal."
+  },
+  {
+    "id": "macos-sequoia-desktop",
+    "title": "macOS Sequoia — Interactive Desktop",
+    "file": "macos_sequoia_interactive_desktop.html",
+    "description": "3,500-line zero-CDN macOS Sequoia desktop OS clone built one-shot with Gemini 4 Neon: 3 animated mesh wallpapers, draggable/resizable window manager, Spotlight (Cmd/Ctrl+K), Calculator, Terminal (neofetch), Paint Studio, Web Audio Synth Player, and localStorage Notes."
   }
 ]

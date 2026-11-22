@@ -1,0 +1,3500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>macOS Sequoia — Interactive Desktop</title>
+<style>
+  :root {
+    --menubar-h: 28px;
+    --dock-h: 70px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: "SF Mono", Menlo, Monaco, "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    --glass-bg: rgba(28, 28, 34, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.16);
+    --glass-highlight: rgba(255, 255, 255, 0.08);
+    --accent: #0a84ff;
+    --text-primary: #f5f5f7;
+    --text-secondary: rgba(245, 245, 247, 0.65);
+    --shadow-win: 0 24px 68px rgba(0, 0, 0, 0.52), 0 0 0 0.5px rgba(255, 255, 255, 0.22);
+    --shadow-win-unfocused: 0 12px 34px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    background: #0c131c;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== DYNAMIC MESH WALLPAPER ===== */
+  #desktop-wallpaper {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    background: #0a141d;
+    transition: background 0.8s ease;
+  }
+
+  .mesh-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(88px);
+    opacity: 0.88;
+    will-change: transform;
+    pointer-events: none;
+  }
+
+  /* Sequoia Sunrise (Default) */
+  #desktop-wallpaper[data-theme="sunrise"] {
+    background: linear-gradient(155deg, #0b1929 0%, #102b36 42%, #1e2a38 72%, #241926 100%);
+  }
+  #desktop-wallpaper[data-theme="sunrise"] .orb-1 {
+    width: 65vw; height: 65vw; left: -12vw; top: -18vw;
+    background: radial-gradient(circle, #18a979 0%, #0d6864 50%, transparent 72%);
+    animation: drift1 22s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="sunrise"] .orb-2 {
+    width: 58vw; height: 58vw; right: -10vw; top: -8vw;
+    background: radial-gradient(circle, #f59e0b 0%, #c2410c 46%, transparent 72%);
+    animation: drift2 26s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="sunrise"] .orb-3 {
+    width: 62vw; height: 62vw; left: 22vw; bottom: -24vw;
+    background: radial-gradient(circle, #0ea5e9 0%, #1d4ed8 48%, transparent 74%);
+    animation: drift3 24s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="sunrise"] .orb-4 {
+    width: 48vw; height: 48vw; right: 12vw; bottom: -14vw;
+    background: radial-gradient(circle, #ec4899 0%, #7c3aed 52%, transparent 72%);
+    opacity: 0.65;
+    animation: drift4 19s ease-in-out infinite alternate;
+  }
+
+  /* Sequoia Dusk */
+  #desktop-wallpaper[data-theme="dusk"] {
+    background: linear-gradient(160deg, #130f26 0%, #24153c 48%, #3b1c32 100%);
+  }
+  #desktop-wallpaper[data-theme="dusk"] .orb-1 {
+    width: 65vw; height: 65vw; left: -10vw; top: -12vw;
+    background: radial-gradient(circle, #8b5cf6 0%, #4c1d95 55%, transparent 72%);
+    animation: drift1 22s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="dusk"] .orb-2 {
+    width: 58vw; height: 58vw; right: -12vw; top: 4vw;
+    background: radial-gradient(circle, #fb7185 0%, #be123c 48%, transparent 72%);
+    animation: drift2 26s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="dusk"] .orb-3 {
+    width: 60vw; height: 60vw; left: 24vw; bottom: -22vw;
+    background: radial-gradient(circle, #f59e0b 0%, #9a3412 52%, transparent 72%);
+    animation: drift3 24s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="dusk"] .orb-4 {
+    width: 50vw; height: 50vw; left: -4vw; bottom: -16vw;
+    background: radial-gradient(circle, #38bdf8 0%, #1e3a8a 55%, transparent 72%);
+    opacity: 0.55;
+    animation: drift4 19s ease-in-out infinite alternate;
+  }
+
+  /* Midnight Aurora */
+  #desktop-wallpaper[data-theme="aurora"] {
+    background: linear-gradient(155deg, #040b14 0%, #071b24 55%, #0b132b 100%);
+  }
+  #desktop-wallpaper[data-theme="aurora"] .orb-1 {
+    width: 68vw; height: 68vw; left: -14vw; top: -18vw;
+    background: radial-gradient(circle, #10b981 0%, #047857 50%, transparent 72%);
+    animation: drift1 22s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="aurora"] .orb-2 {
+    width: 56vw; height: 56vw; right: -10vw; top: -6vw;
+    background: radial-gradient(circle, #06b6d4 0%, #0e7490 50%, transparent 72%);
+    animation: drift2 26s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="aurora"] .orb-3 {
+    width: 60vw; height: 60vw; left: 20vw; bottom: -24vw;
+    background: radial-gradient(circle, #6366f1 0%, #312e81 52%, transparent 72%);
+    animation: drift3 24s ease-in-out infinite alternate;
+  }
+  #desktop-wallpaper[data-theme="aurora"] .orb-4 {
+    width: 44vw; height: 44vw; right: 16vw; bottom: -10vw;
+    background: radial-gradient(circle, #34d399 0%, #0f766e 50%, transparent 72%);
+    opacity: 0.5;
+    animation: drift4 19s ease-in-out infinite alternate;
+  }
+
+  /* Subtle Sequoia forest horizon silhouette */
+  .wallpaper-horizon {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(120% 70% at 50% 100%, rgba(5, 10, 18, 0.52) 0%, transparent 62%);
+    pointer-events: none;
+  }
+
+  .wallpaper-ridges {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 36vh;
+    width: 100%;
+    opacity: 0.42;
+    pointer-events: none;
+  }
+
+  @keyframes drift1 {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(7vw, 6vh) scale(1.12); }
+  }
+  @keyframes drift2 {
+    0% { transform: translate(0, 0) scale(1.04); }
+    100% { transform: translate(-8vw, 7vh) scale(0.95); }
+  }
+  @keyframes drift3 {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(-6vw, -7vh) scale(1.1); }
+  }
+  @keyframes drift4 {
+    0% { transform: translate(0, 0) scale(0.96); }
+    100% { transform: translate(5vw, -6vh) scale(1.08); }
+  }
+
+  /* ===== TOP MENU BAR ===== */
+  #menubar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--menubar-h);
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    background: rgba(20, 22, 30, 0.46);
+    backdrop-filter: blur(28px) saturate(190%);
+    -webkit-backdrop-filter: blur(28px) saturate(190%);
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.14);
+    font-size: 13px;
+    color: #fff;
+  }
+
+  .menubar-left, .menubar-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 100%;
+  }
+
+  .menu-item {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 5px;
+    cursor: default;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+
+  .menu-item:hover, .menu-item.open {
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .menu-item.app-name {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  .menu-item svg {
+    display: block;
+  }
+
+  .menu-dropdown {
+    display: none;
+    position: absolute;
+    top: 26px;
+    left: 0;
+    min-width: 210px;
+    padding: 5px;
+    border-radius: 10px;
+    background: rgba(34, 35, 43, 0.86);
+    backdrop-filter: blur(36px) saturate(180%);
+    -webkit-backdrop-filter: blur(36px) saturate(180%);
+    border: 0.5px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    z-index: 9500;
+  }
+
+  .menu-dropdown.right-aligned {
+    left: auto;
+    right: 0;
+    min-width: 220px;
+  }
+
+  .menu-item.open > .menu-dropdown {
+    display: block;
+  }
+
+  .dropdown-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 5px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: default;
+  }
+
+  .dropdown-btn:hover {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .dropdown-shortcut {
+    font-size: 11px;
+    opacity: 0.65;
+    margin-left: 14px;
+  }
+
+  .dropdown-sep {
+    height: 1px;
+    margin: 4px 8px;
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .dropdown-info {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+  }
+
+  .wifi-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #30d158;
+  }
+  .wifi-dot.off {
+    background: #ff453a;
+  }
+
+  /* ===== DESKTOP ICONS ===== */
+  #desktop-icons {
+    position: fixed;
+    top: calc(var(--menubar-h) + 16px);
+    right: 16px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    align-items: flex-end;
+  }
+
+  .desktop-icon {
+    width: 82px;
+    padding: 7px 6px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    cursor: default;
+    border: 1px solid transparent;
+    transition: background 0.12s, border-color 0.12s;
+  }
+
+  .desktop-icon:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .desktop-icon.selected {
+    background: rgba(10, 132, 255, 0.32);
+    border-color: rgba(10, 132, 255, 0.65);
+  }
+
+  .desktop-icon-glyph {
+    width: 50px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
+  }
+
+  .desktop-icon-label {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #fff;
+    text-align: center;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+    line-height: 1.25;
+    word-break: break-word;
+  }
+
+  /* ===== WINDOWS LAYER ===== */
+  #windows-layer {
+    position: fixed;
+    inset: var(--menubar-h) 0 0 0;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .mac-window {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    border-radius: 13px;
+    background: rgba(30, 31, 38, 0.84);
+    backdrop-filter: blur(36px) saturate(180%);
+    -webkit-backdrop-filter: blur(36px) saturate(180%);
+    box-shadow: var(--shadow-win-unfocused);
+    overflow: hidden;
+    pointer-events: auto;
+    transition: box-shadow 0.18s ease, opacity 0.2s ease, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .mac-window.focused {
+    box-shadow: var(--shadow-win);
+  }
+
+  .mac-window.minimized {
+    opacity: 0;
+    transform: translateY(38vh) scale(0.28);
+    pointer-events: none;
+  }
+
+  .mac-window.no-transition {
+    transition: none !important;
+  }
+
+  .window-titlebar {
+    height: 36px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.1);
+    cursor: default;
+  }
+
+  .traffic-lights {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 2;
+  }
+
+  .tl-btn {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 0.5px solid rgba(0, 0, 0, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    background: #5c5e66;
+    color: transparent;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 1;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .mac-window.focused .tl-close, .traffic-lights:hover .tl-close { background: #ff5f57; }
+  .mac-window.focused .tl-min,   .traffic-lights:hover .tl-min   { background: #febc2e; }
+  .mac-window.focused .tl-max,   .traffic-lights:hover .tl-max   { background: #28c840; }
+
+  .traffic-lights:hover .tl-btn {
+    color: rgba(0, 0, 0, 0.65);
+  }
+
+  .window-title {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+    pointer-events: none;
+    white-space: nowrap;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mac-window:not(.focused) .window-title {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .window-content {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Resize Handles */
+  .resize-handle {
+    position: absolute;
+    z-index: 20;
+  }
+  .rh-n  { top: -3px; left: 8px; right: 8px; height: 7px; cursor: ns-resize; }
+  .rh-s  { bottom: -3px; left: 8px; right: 8px; height: 7px; cursor: ns-resize; }
+  .rh-e  { right: -3px; top: 8px; bottom: 8px; width: 7px; cursor: ew-resize; }
+  .rh-w  { left: -3px; top: 8px; bottom: 8px; width: 7px; cursor: ew-resize; }
+  .rh-ne { top: -3px; right: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+  .rh-nw { top: -3px; left: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+  .rh-se { bottom: -3px; right: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+  .rh-sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+
+  /* ===== BOTTOM DOCK ===== */
+  #dock-container {
+    position: fixed;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 8500;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  #dock {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 6px 10px 8px;
+    border-radius: 22px;
+    background: rgba(28, 30, 38, 0.44);
+    backdrop-filter: blur(32px) saturate(200%);
+    -webkit-backdrop-filter: blur(32px) saturate(200%);
+    border: 0.5px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  }
+
+  .dock-item {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transform-origin: bottom center;
+    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1), margin 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: transform;
+  }
+
+  .dock-item svg {
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.35));
+    pointer-events: none;
+  }
+
+  .dock-tooltip {
+    position: absolute;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    transform: translateX(-50%) scale(0.92);
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(32, 33, 42, 0.88);
+    backdrop-filter: blur(18px);
+    border: 0.5px solid rgba(255, 255, 255, 0.18);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s, transform 0.12s;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  .dock-item:hover .dock-tooltip {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+
+  .dock-dot {
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.88);
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+
+  .dock-item.running .dock-dot {
+    opacity: 1;
+  }
+  .dock-item.minimized .dock-dot {
+    background: #febc2e;
+    opacity: 1;
+  }
+
+  .dock-divider {
+    width: 1px;
+    height: 36px;
+    margin: 0 4px 6px;
+    background: rgba(255, 255, 255, 0.22);
+    align-self: flex-end;
+  }
+
+  @keyframes dockBounce {
+    0%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-16px); }
+    70% { transform: translateY(-4px); }
+  }
+  .dock-item.bouncing {
+    animation: dockBounce 0.48s ease;
+  }
+
+  /* ===== SPOTLIGHT SEARCH ===== */
+  #spotlight-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9600;
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 15vh;
+    background: rgba(0, 0, 0, 0.25);
+  }
+  #spotlight-overlay.open {
+    display: flex;
+  }
+
+  #spotlight-box {
+    width: min(600px, 92vw);
+    border-radius: 16px;
+    background: rgba(34, 35, 44, 0.86);
+    backdrop-filter: blur(44px) saturate(200%);
+    -webkit-backdrop-filter: blur(44px) saturate(200%);
+    border: 0.5px solid rgba(255, 255, 255, 0.24);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65);
+    overflow: hidden;
+  }
+
+  .spotlight-input-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.12);
+  }
+
+  #spotlight-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #fff;
+    font-family: inherit;
+    font-size: 20px;
+    font-weight: 400;
+  }
+  #spotlight-input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  #spotlight-results {
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 6px;
+  }
+
+  .spotlight-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 12px;
+    border-radius: 9px;
+    cursor: pointer;
+    gap: 12px;
+  }
+  .spotlight-item:hover, .spotlight-item.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .spotlight-item-left {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    min-width: 0;
+  }
+  .spotlight-item-icon {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .spotlight-item-title {
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .spotlight-item-sub {
+    font-size: 11.5px;
+    opacity: 0.68;
+  }
+
+  /* ===== CONTEXT MENU ===== */
+  #context-menu {
+    position: fixed;
+    display: none;
+    min-width: 190px;
+    padding: 5px;
+    border-radius: 10px;
+    background: rgba(34, 35, 43, 0.88);
+    backdrop-filter: blur(36px) saturate(180%);
+    -webkit-backdrop-filter: blur(36px) saturate(180%);
+    border: 0.5px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    z-index: 9700;
+  }
+  #context-menu.open {
+    display: block;
+  }
+
+  /* ===== ABOUT MODAL & BOOT / SLEEP OVERLAYS ===== */
+  #about-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 9800;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  #about-modal.open {
+    display: flex;
+  }
+  .about-card {
+    width: 310px;
+    padding: 24px 22px 20px;
+    border-radius: 16px;
+    background: rgba(34, 35, 44, 0.92);
+    backdrop-filter: blur(40px);
+    border: 0.5px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65);
+    text-align: center;
+  }
+  .about-card h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 12px 0 2px;
+  }
+  .about-card .about-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+  .about-specs {
+    text-align: left;
+    font-size: 12px;
+    display: grid;
+    grid-template-columns: 95px 1fr;
+    gap: 6px 8px;
+    margin-bottom: 18px;
+  }
+  .about-specs span:nth-child(odd) {
+    color: var(--text-secondary);
+    text-align: right;
+  }
+  .mac-btn {
+    padding: 6px 16px;
+    border-radius: 7px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .mac-btn:hover { filter: brightness(1.1); }
+  .mac-btn.secondary {
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  #boot-overlay, #sleep-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #000;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    color: #fff;
+  }
+  #boot-overlay.open, #sleep-overlay.open {
+    display: flex;
+  }
+  .boot-bar-track {
+    width: 210px;
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.2);
+    overflow: hidden;
+  }
+  .boot-bar-fill {
+    width: 0%;
+    height: 100%;
+    background: #fff;
+    border-radius: 3px;
+    transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  #sleep-overlay {
+    cursor: pointer;
+    background: radial-gradient(circle at 50% 45%, #111827 0%, #030712 100%);
+  }
+  .sleep-clock {
+    font-size: 64px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+  }
+  .sleep-hint {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.55);
+  }
+
+  /* ===== APP 1: CALCULATOR ===== */
+  .calc-app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: rgba(24, 24, 28, 0.92);
+    padding: 8px 12px 12px;
+  }
+  .calc-display-wrap {
+    flex-shrink: 0;
+    padding: 8px 6px 12px;
+    text-align: right;
+    min-height: 76px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .calc-expr {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.45);
+    min-height: 18px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .calc-value {
+    font-size: 40px;
+    font-weight: 300;
+    letter-spacing: -0.02em;
+    color: #fff;
+    line-height: 1.1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .calc-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .calc-btn {
+    border: none;
+    border-radius: 50px;
+    font-family: inherit;
+    font-size: 19px;
+    font-weight: 500;
+    color: #fff;
+    background: #3a3a3f;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: filter 0.08s, transform 0.06s;
+  }
+  .calc-btn:hover { filter: brightness(1.16); }
+  .calc-btn:active { transform: scale(0.95); }
+  .calc-btn.fn { background: #5c5c64; color: #fff; }
+  .calc-btn.op { background: #ff9f0a; color: #fff; font-size: 22px; }
+  .calc-btn.op.active-op { background: #fff; color: #ff9f0a; }
+  .calc-btn.zero { grid-column: span 2; justify-content: flex-start; padding-left: 24px; }
+
+  /* ===== APP 2: TERMINAL ===== */
+  .term-app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: rgba(13, 16, 23, 0.94);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: #e6edf3;
+    padding: 10px 14px;
+    overflow-y: auto;
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .term-output {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .term-line {
+    margin-bottom: 2px;
+  }
+  .term-input-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .term-prompt {
+    color: #34d399;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .term-prompt-path {
+    color: #38bdf8;
+  }
+  .term-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #f8fafc;
+    font-family: inherit;
+    font-size: inherit;
+    caret-color: #34d399;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .nf-grid {
+    display: flex;
+    gap: 16px;
+    margin: 6px 0 8px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .nf-logo {
+    line-height: 1.25;
+    font-weight: 700;
+    white-space: pre;
+    font-size: 11.5px;
+  }
+  .nf-info {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .nf-key { color: #38bdf8; font-weight: 600; }
+  .nf-swatches {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .nf-swatch {
+    width: 14px;
+    height: 10px;
+    border-radius: 2px;
+  }
+
+  /* ===== APP 3: PAINT STUDIO ===== */
+  .paint-app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #1e1f26;
+  }
+  .paint-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.1);
+  }
+  .paint-tool-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 3px;
+    border-radius: 8px;
+  }
+  .paint-btn {
+    padding: 4px 9px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .paint-btn:hover { background: rgba(255, 255, 255, 0.12); }
+  .paint-btn.active { background: var(--accent); color: #fff; }
+  .paint-swatches {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .paint-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  .paint-swatch:hover { transform: scale(1.15); }
+  .paint-swatch.active { border-color: #fff; transform: scale(1.15); }
+  .paint-color-input {
+    width: 24px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .paint-size-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+  }
+  .paint-size-wrap input[type="range"] {
+    width: 74px;
+    accent-color: var(--accent);
+  }
+  .paint-stage {
+    flex: 1;
+    min-height: 0;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #16171d;
+    overflow: hidden;
+  }
+  #paint-canvas {
+    background: #ffffff;
+    border-radius: 6px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    cursor: crosshair;
+    touch-action: none;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ===== APP 4: SYNTH PLAYER ===== */
+  .synth-app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: linear-gradient(165deg, #161824 0%, #10121b 100%);
+    padding: 14px 16px;
+    gap: 12px;
+  }
+  .synth-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .synth-art {
+    width: 58px;
+    height: 58px;
+    border-radius: 12px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+    transition: background 0.4s ease;
+  }
+  .synth-meta {
+    min-width: 0;
+    flex: 1;
+  }
+  .synth-title {
+    font-size: 16px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .synth-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+  .synth-viz-wrap {
+    height: 92px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.34);
+    border: 0.5px solid rgba(255, 255, 255, 0.1);
+    padding: 8px 10px;
+    display: flex;
+    align-items: flex-end;
+  }
+  #synth-viz {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .synth-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .synth-transport {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .synth-ctrl-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: background 0.12s, transform 0.08s;
+  }
+  .synth-ctrl-btn:hover { background: rgba(255, 255, 255, 0.2); }
+  .synth-ctrl-btn.primary {
+    width: 42px;
+    height: 42px;
+    background: var(--accent);
+    font-size: 16px;
+  }
+  .synth-ctrl-btn.primary:hover { filter: brightness(1.12); }
+  .synth-vol-wrap {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .synth-vol-wrap input[type="range"] {
+    width: 90px;
+    accent-color: var(--accent);
+  }
+  .synth-tracks {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .synth-track-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 11px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 0.12s;
+  }
+  .synth-track-row:hover { background: rgba(255, 255, 255, 0.09); }
+  .synth-track-row.active {
+    background: rgba(10, 132, 255, 0.22);
+    border-color: rgba(10, 132, 255, 0.45);
+  }
+  .synth-track-name { font-weight: 600; font-size: 13px; }
+  .synth-track-bpm { font-size: 11.5px; color: var(--text-secondary); }
+
+  /* ===== APP 5: NOTES ===== */
+  .notes-app {
+    display: flex;
+    height: 100%;
+    background: #1c1d22;
+  }
+  .notes-sidebar {
+    width: 210px;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.04);
+    border-right: 0.5px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+  }
+  .notes-side-top {
+    padding: 8px;
+    display: flex;
+    gap: 6px;
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
+  }
+  .notes-search {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 0.5px solid rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.25);
+    color: #fff;
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  .notes-new-btn {
+    padding: 5px 9px;
+    border-radius: 6px;
+    border: none;
+    background: #f59e0b;
+    color: #111;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .notes-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .note-item {
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .note-item:hover { background: rgba(255, 255, 255, 0.07); }
+  .note-item.active { background: rgba(245, 158, 11, 0.24); }
+  .note-item-title {
+    font-weight: 600;
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .note-item-preview {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+  .notes-editor {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    gap: 8px;
+  }
+  .notes-editor-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+  }
+  .notes-del-btn {
+    padding: 3px 9px;
+    border-radius: 5px;
+    border: none;
+    background: rgba(255, 69, 58, 0.18);
+    color: #ff6961;
+    font-family: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+  .notes-del-btn:hover { background: rgba(255, 69, 58, 0.32); }
+  .notes-title-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #fff;
+    font-family: inherit;
+    font-size: 18px;
+    font-weight: 700;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .notes-body-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    resize: none;
+    color: rgba(245, 245, 247, 0.9);
+    font-family: inherit;
+    font-size: 13.5px;
+    line-height: 1.55;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Custom subtle scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.35); }
+
+  @media (max-width: 720px) {
+    .menubar-hide-sm { display: none; }
+    .notes-sidebar { width: 150px; }
+    .dock-item { width: 42px; height: 42px; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- DYNAMIC SEQUOIA MESH WALLPAPER -->
+  <div id="desktop-wallpaper" data-theme="sunrise">
+    <div class="mesh-orb orb-1"></div>
+    <div class="mesh-orb orb-2"></div>
+    <div class="mesh-orb orb-3"></div>
+    <div class="mesh-orb orb-4"></div>
+    <div class="wallpaper-horizon"></div>
+    <svg class="wallpaper-ridges" viewBox="0 0 1440 320" preserveAspectRatio="none" aria-hidden="true">
+      <path fill="#07131c" fill-opacity="0.65" d="M0,224L96,192C192,160,384,96,576,106.7C768,117,960,203,1152,218.7C1344,235,1440,181,1440,181L1440,320L0,320Z"></path>
+      <path fill="#040b12" fill-opacity="0.82" d="M0,268L120,245C240,222,480,178,720,192C960,206,1200,278,1320,284L1440,290L1440,320L0,320Z"></path>
+    </svg>
+  </div>
+
+  <!-- TOP MENU BAR -->
+  <header id="menubar">
+    <div class="menubar-left">
+      <div class="menu-item" id="menu-apple" data-menu="apple" aria-label="Apple menu">
+        <svg width="13" height="16" viewBox="0 0 170 200" fill="currentColor">
+          <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.35.13-9.13-1.9-14.34-6.08-3.69-3.03-7.61-7.82-11.77-14.37-5.93-9.25-10.72-19.98-14.38-32.19-3.66-12.22-5.49-23.95-5.49-35.21 0-13.12 3.24-24.22 9.72-33.31 6.48-9.09 14.66-13.79 24.55-14.1 4.81 0 10.45 1.49 16.92 4.46 6.47 2.98 10.63 4.49 12.48 4.54 1.45 0 6.08-1.76 13.89-5.27 7.81-3.51 14.38-4.96 19.72-4.37 14.54 1.18 25.49 6.91 32.85 17.2-13.06 7.93-19.47 19.04-19.22 33.32.24 11.12 4.24 20.38 11.98 27.76 5.42 5.14 11.95 8.21 19.6 9.21-1.58 4.65-3.36 9.15-5.35 13.48zM119.22 31.01c0 8.63-3.15 16.69-9.44 24.16-7.58 8.85-16.75 13.97-26.71 13.15-.13-1.05-.21-2.16-.21-3.32 0-8.29 3.6-17.16 10.8-25.36 3.45-3.95 7.84-7.24 13.17-9.87 5.33-2.62 10.36-4.08 15.1-4.35.19 1.91.29 3.77.29 5.59z"/>
+        </svg>
+        <div class="menu-dropdown">
+          <button class="dropdown-btn" data-action="about">About This Mac</button>
+          <div class="dropdown-sep"></div>
+          <button class="dropdown-btn" data-action="wallpaper-sunrise">Wallpaper: Sequoia Sunrise</button>
+          <button class="dropdown-btn" data-action="wallpaper-dusk">Wallpaper: Sequoia Dusk</button>
+          <button class="dropdown-btn" data-action="wallpaper-aurora">Wallpaper: Midnight Aurora</button>
+          <div class="dropdown-sep"></div>
+          <button class="dropdown-btn" data-action="sleep">Sleep <span class="dropdown-shortcut">⌥⌘Q</span></button>
+          <button class="dropdown-btn" data-action="restart">Restart…</button>
+        </div>
+      </div>
+
+      <div class="menu-item app-name" id="menubar-active-app">Finder</div>
+
+      <div class="menu-item menubar-hide-sm" data-menu="file">
+        File
+        <div class="menu-dropdown">
+          <button class="dropdown-btn" data-action="open-terminal">New Terminal <span class="dropdown-shortcut">⌘T</span></button>
+          <button class="dropdown-btn" data-action="open-notes">New Note <span class="dropdown-shortcut">⌘N</span></button>
+          <button class="dropdown-btn" data-action="open-paint">New Canvas</button>
+          <div class="dropdown-sep"></div>
+          <button class="dropdown-btn" data-action="close-active">Close Window <span class="dropdown-shortcut">⌘W</span></button>
+        </div>
+      </div>
+
+      <div class="menu-item menubar-hide-sm" data-menu="window">
+        Window
+        <div class="menu-dropdown">
+          <button class="dropdown-btn" data-action="tile-side">Tile Terminal &amp; Calculator</button>
+          <button class="dropdown-btn" data-action="minimize-active">Minimize <span class="dropdown-shortcut">⌘M</span></button>
+          <button class="dropdown-btn" data-action="maximize-active">Zoom / Restore</button>
+          <div class="dropdown-sep"></div>
+          <button class="dropdown-btn" data-action="open-all">Show All 5 Apps</button>
+        </div>
+      </div>
+
+      <div class="menu-item menubar-hide-sm" data-menu="help">
+        Help
+        <div class="menu-dropdown">
+          <button class="dropdown-btn" data-action="spotlight">Spotlight Search <span class="dropdown-shortcut">⌘K</span></button>
+          <button class="dropdown-btn" data-action="about">macOS Sequoia Tips</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="menubar-right">
+      <div class="menu-item" id="menubar-spotlight-btn" title="Spotlight Search (Cmd/Ctrl+K)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"></circle>
+          <line x1="20" y1="20" x2="16.2" y2="16.2"></line>
+        </svg>
+      </div>
+
+      <div class="menu-item" id="menu-wifi" data-menu="wifi" title="Wi-Fi">
+        <svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round">
+          <path id="wifi-arc-1" d="M2 7.5C7.6 2.5 16.4 2.5 22 7.5"/>
+          <path id="wifi-arc-2" d="M5.5 11.2C9.2 7.8 14.8 7.8 18.5 11.2"/>
+          <path id="wifi-arc-3" d="M9.2 14.8C10.8 13.3 13.2 13.3 14.8 14.8"/>
+          <circle cx="12" cy="17.8" r="1.3" fill="currentColor" stroke="none"/>
+        </svg>
+        <div class="menu-dropdown right-aligned">
+          <div class="dropdown-info">
+            <span class="status-pill"><span class="wifi-dot" id="wifi-status-dot"></span><strong id="wifi-status-text">Sequoia-5G</strong></span>
+            <span>Wi-Fi 6E</span>
+          </div>
+          <div class="dropdown-sep"></div>
+          <button class="dropdown-btn" data-action="toggle-wifi" id="wifi-toggle-btn">Turn Wi-Fi Off</button>
+        </div>
+      </div>
+
+      <div class="menu-item" id="menu-battery" data-menu="battery" title="Battery">
+        <span style="font-size:11.5px;margin-right:3px;opacity:0.9;">94%</span>
+        <svg width="22" height="12" viewBox="0 0 26 14" fill="none">
+          <rect x="1" y="1.5" width="21" height="11" rx="2.8" stroke="currentColor" stroke-width="1.4" opacity="0.85"/>
+          <rect x="3" y="3.5" width="16" height="7" rx="1.4" fill="#30d158"/>
+          <path d="M23.5 4.8V9.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
+        </svg>
+        <div class="menu-dropdown right-aligned">
+          <div class="dropdown-info"><strong>Battery</strong><span>94%</span></div>
+          <div class="dropdown-info"><span>Power Source</span><span>Battery</span></div>
+          <div class="dropdown-info"><span>Condition</span><span style="color:#30d158;">Normal</span></div>
+        </div>
+      </div>
+
+      <div class="menu-item" id="menubar-clock" style="font-variant-numeric:tabular-nums;">--:--</div>
+    </div>
+  </header>
+
+  <!-- DESKTOP ICONS -->
+  <div id="desktop-icons">
+    <div class="desktop-icon" data-launch="terminal" data-cmd="ls -la">
+      <div class="desktop-icon-glyph">
+        <svg width="48" height="48" viewBox="0 0 64 64">
+          <defs>
+            <linearGradient id="hdGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#e5e7eb"/><stop offset="100%" stop-color="#9ca3af"/>
+            </linearGradient>
+          </defs>
+          <rect x="10" y="8" width="44" height="48" rx="8" fill="url(#hdGrad)" stroke="#fff" stroke-opacity="0.5"/>
+          <rect x="14" y="42" width="36" height="8" rx="3" fill="#4b5563"/>
+          <circle cx="44" cy="46" r="2" fill="#34d399"/>
+        </svg>
+      </div>
+      <div class="desktop-icon-label">Macintosh HD</div>
+    </div>
+
+    <div class="desktop-icon" data-launch="notes">
+      <div class="desktop-icon-glyph">
+        <svg width="46" height="46" viewBox="0 0 64 64">
+          <rect x="12" y="6" width="40" height="52" rx="6" fill="#fefce8"/>
+          <rect x="12" y="6" width="40" height="12" rx="6" fill="#f59e0b"/>
+          <line x1="18" y1="28" x2="46" y2="28" stroke="#cbd5e1" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="18" y1="36" x2="46" y2="36" stroke="#cbd5e1" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="18" y1="44" x2="36" y2="44" stroke="#cbd5e1" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="desktop-icon-label">ReadMe.txt</div>
+    </div>
+
+    <div class="desktop-icon" data-launch="paint">
+      <div class="desktop-icon-glyph">
+        <svg width="46" height="46" viewBox="0 0 64 64">
+          <rect x="6" y="6" width="52" height="52" rx="13" fill="url(#paintIconBg)"/>
+          <circle cx="24" cy="24" r="6" fill="#fb7185"/>
+          <circle cx="40" cy="22" r="5" fill="#fbbf24"/>
+          <circle cx="42" cy="38" r="5.5" fill="#34d399"/>
+          <circle cx="24" cy="40" r="6.5" fill="#60a5fa"/>
+        </svg>
+      </div>
+      <div class="desktop-icon-label">Paint Studio</div>
+    </div>
+
+    <div class="desktop-icon" data-launch="synth">
+      <div class="desktop-icon-glyph">
+        <svg width="46" height="46" viewBox="0 0 64 64">
+          <rect x="6" y="6" width="52" height="52" rx="13" fill="url(#synthIconBg)"/>
+          <rect x="16" y="34" width="6" height="14" rx="3" fill="#fff"/>
+          <rect x="25" y="20" width="6" height="28" rx="3" fill="#fff"/>
+          <rect x="34" y="26" width="6" height="22" rx="3" fill="#fff"/>
+          <rect x="43" y="16" width="6" height="32" rx="3" fill="#fff"/>
+        </svg>
+      </div>
+      <div class="desktop-icon-label">Synth Player</div>
+    </div>
+  </div>
+
+  <!-- WINDOWS LAYER -->
+  <main id="windows-layer"></main>
+
+  <!-- BOTTOM DOCK -->
+  <div id="dock-container">
+    <nav id="dock" aria-label="Application Dock">
+      <!-- Shared SVG Gradients -->
+      <svg width="0" height="0" style="position:absolute">
+        <defs>
+          <linearGradient id="calcIconBg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#4b5563"/><stop offset="100%" stop-color="#1f2937"/>
+          </linearGradient>
+          <linearGradient id="termIconBg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#27272a"/><stop offset="100%" stop-color="#09090b"/>
+          </linearGradient>
+          <linearGradient id="paintIconBg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#312e81"/><stop offset="100%" stop-color="#0f172a"/>
+          </linearGradient>
+          <linearGradient id="synthIconBg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#ec4899"/><stop offset="100%" stop-color="#6366f1"/>
+          </linearGradient>
+          <linearGradient id="notesIconBg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#d97706"/>
+          </linearGradient>
+          <linearGradient id="spotIconBg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2563eb"/>
+          </linearGradient>
+        </defs>
+      </svg>
+
+      <div class="dock-item" data-app="terminal" aria-label="Terminal">
+        <span class="dock-tooltip">Terminal</span>
+        <svg viewBox="0 0 64 64">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#termIconBg)" stroke="rgba(255,255,255,0.22)" stroke-width="1.5"/>
+          <path d="M18 23L29 32L18 41" fill="none" stroke="#34d399" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="33" y1="41" x2="46" y2="41" stroke="#f8fafc" stroke-width="4.2" stroke-linecap="round"/>
+        </svg>
+        <span class="dock-dot"></span>
+      </div>
+
+      <div class="dock-item" data-app="calculator" aria-label="Calculator">
+        <span class="dock-tooltip">Calculator</span>
+        <svg viewBox="0 0 64 64">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#calcIconBg)" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+          <rect x="13" y="12" width="38" height="12" rx="4" fill="#111827"/>
+          <circle cx="19" cy="33" r="4.5" fill="#6b7280"/>
+          <circle cx="32" cy="33" r="4.5" fill="#6b7280"/>
+          <circle cx="45" cy="33" r="4.5" fill="#ff9f0a"/>
+          <circle cx="19" cy="46" r="4.5" fill="#6b7280"/>
+          <circle cx="32" cy="46" r="4.5" fill="#6b7280"/>
+          <circle cx="45" cy="46" r="4.5" fill="#ff9f0a"/>
+        </svg>
+        <span class="dock-dot"></span>
+      </div>
+
+      <div class="dock-item" data-app="paint" aria-label="Paint Studio">
+        <span class="dock-tooltip">Paint Studio</span>
+        <svg viewBox="0 0 64 64">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#paintIconBg)" stroke="rgba(255,255,255,0.22)" stroke-width="1.5"/>
+          <circle cx="23" cy="23" r="6.5" fill="#fb7185"/>
+          <circle cx="41" cy="21" r="5.5" fill="#fbbf24"/>
+          <circle cx="43" cy="39" r="6" fill="#34d399"/>
+          <circle cx="23" cy="41" r="7" fill="#60a5fa"/>
+          <path d="M29 35L46 18" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>
+        </svg>
+        <span class="dock-dot"></span>
+      </div>
+
+      <div class="dock-item" data-app="synth" aria-label="Synth Player">
+        <span class="dock-tooltip">Synth Player</span>
+        <svg viewBox="0 0 64 64">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#synthIconBg)" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <rect x="15" y="34" width="6" height="15" rx="3" fill="#fff"/>
+          <rect x="24" y="20" width="6" height="29" rx="3" fill="#fff"/>
+          <rect x="33" y="26" width="6" height="23" rx="3" fill="#fff"/>
+          <rect x="42" y="15" width="6" height="34" rx="3" fill="#fff"/>
+        </svg>
+        <span class="dock-dot"></span>
+      </div>
+
+      <div class="dock-item" data-app="notes" aria-label="Notes">
+        <span class="dock-tooltip">Notes</span>
+        <svg viewBox="0 0 64 64">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="#fefce8" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+          <path d="M4 18C4 10.268 10.268 4 18 4H46C53.732 4 60 10.268 60 18V20H4V18Z" fill="url(#notesIconBg)"/>
+          <line x1="14" y1="30" x2="50" y2="30" stroke="#cbd5e1" stroke-width="3" stroke-linecap="round"/>
+          <line x1="14" y1="39" x2="50" y2="39" stroke="#cbd5e1" stroke-width="3" stroke-linecap="round"/>
+          <line x1="14" y1="48" x2="36" y2="48" stroke="#cbd5e1" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        <span class="dock-dot"></span>
+      </div>
+
+      <div class="dock-divider"></div>
+
+      <div class="dock-item" id="dock-spotlight-btn" aria-label="Spotlight">
+        <span class="dock-tooltip">Spotlight (⌘K)</span>
+        <svg viewBox="0 0 64 64">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#spotIconBg)" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+          <circle cx="29" cy="29" r="11" fill="none" stroke="#fff" stroke-width="4.2"/>
+          <line x1="37" y1="37" x2="48" y2="48" stroke="#fff" stroke-width="4.6" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </nav>
+  </div>
+
+  <!-- SPOTLIGHT SEARCH MODAL -->
+  <div id="spotlight-overlay" role="dialog" aria-label="Spotlight Search">
+    <div id="spotlight-box">
+      <div class="spotlight-input-row">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.75)" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"></circle>
+          <line x1="20" y1="20" x2="16.2" y2="16.2"></line>
+        </svg>
+        <input id="spotlight-input" type="text" placeholder="Spotlight Search — apps, notes, math (e.g. 24*17)..." autocomplete="off" spellcheck="false">
+      </div>
+      <div id="spotlight-results"></div>
+    </div>
+  </div>
+
+  <!-- DESKTOP CONTEXT MENU -->
+  <div id="context-menu">
+    <button class="dropdown-btn" data-ctx="new-note">New Note</button>
+    <button class="dropdown-btn" data-ctx="open-terminal">Open Terminal</button>
+    <div class="dropdown-sep"></div>
+    <button class="dropdown-btn" data-ctx="cycle-wallpaper">Next Dynamic Wallpaper</button>
+    <button class="dropdown-btn" data-ctx="tile-side">Tile Terminal &amp; Calculator</button>
+    <div class="dropdown-sep"></div>
+    <button class="dropdown-btn" data-ctx="spotlight">Spotlight Search (⌘K)</button>
+  </div>
+
+  <!-- ABOUT THIS MAC MODAL -->
+  <div id="about-modal" role="dialog" aria-label="About This Mac">
+    <div class="about-card">
+      <svg width="44" height="52" viewBox="0 0 170 200" fill="#fff">
+        <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.35.13-9.13-1.9-14.34-6.08-3.69-3.03-7.61-7.82-11.77-14.37-5.93-9.25-10.72-19.98-14.38-32.19-3.66-12.22-5.49-23.95-5.49-35.21 0-13.12 3.24-24.22 9.72-33.31 6.48-9.09 14.66-13.79 24.55-14.1 4.81 0 10.45 1.49 16.92 4.46 6.47 2.98 10.63 4.49 12.48 4.54 1.45 0 6.08-1.76 13.89-5.27 7.81-3.51 14.38-4.96 19.72-4.37 14.54 1.18 25.49 6.91 32.85 17.2-13.06 7.93-19.47 19.04-19.22 33.32.24 11.12 4.24 20.38 11.98 27.76 5.42 5.14 11.95 8.21 19.6 9.21-1.58 4.65-3.36 9.15-5.35 13.48zM119.22 31.01c0 8.63-3.15 16.69-9.44 24.16-7.58 8.85-16.75 13.97-26.71 13.15-.13-1.05-.21-2.16-.21-3.32 0-8.29 3.6-17.16 10.8-25.36 3.45-3.95 7.84-7.24 13.17-9.87 5.33-2.62 10.36-4.08 15.1-4.35.19 1.91.29 3.77.29 5.59z"/>
+      </svg>
+      <h2>macOS Sequoia</h2>
+      <div class="about-sub">Version 15.2 (Web Desktop Edition)</div>
+      <div class="about-specs">
+        <span>Chip</span><span>Apple M4 Max (Simulated)</span>
+        <span>Memory</span><span>36 GB Unified</span>
+        <span>Graphics</span><span>HTML5 Canvas &amp; CSS Mesh</span>
+        <span>Audio</span><span>Pure Web Audio API Synth</span>
+        <span>Storage</span><span>Virtual FS + localStorage</span>
+      </div>
+      <button class="mac-btn" id="about-close-btn">Done</button>
+    </div>
+  </div>
+
+  <!-- BOOT SPLASH & SLEEP OVERLAY -->
+  <div id="boot-overlay">
+    <svg width="64" height="76" viewBox="0 0 170 200" fill="#fff">
+      <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.35.13-9.13-1.9-14.34-6.08-3.69-3.03-7.61-7.82-11.77-14.37-5.93-9.25-10.72-19.98-14.38-32.19-3.66-12.22-5.49-23.95-5.49-35.21 0-13.12 3.24-24.22 9.72-33.31 6.48-9.09 14.66-13.79 24.55-14.1 4.81 0 10.45 1.49 16.92 4.46 6.47 2.98 10.63 4.49 12.48 4.54 1.45 0 6.08-1.76 13.89-5.27 7.81-3.51 14.38-4.96 19.72-4.37 14.54 1.18 25.49 6.91 32.85 17.2-13.06 7.93-19.47 19.04-19.22 33.32.24 11.12 4.24 20.38 11.98 27.76 5.42 5.14 11.95 8.21 19.6 9.21-1.58 4.65-3.36 9.15-5.35 13.48zM119.22 31.01c0 8.63-3.15 16.69-9.44 24.16-7.58 8.85-16.75 13.97-26.71 13.15-.13-1.05-.21-2.16-.21-3.32 0-8.29 3.6-17.16 10.8-25.36 3.45-3.95 7.84-7.24 13.17-9.87 5.33-2.62 10.36-4.08 15.1-4.35.19 1.91.29 3.77.29 5.59z"/>
+    </svg>
+    <div class="boot-bar-track"><div class="boot-bar-fill" id="boot-bar-fill"></div></div>
+  </div>
+
+  <div id="sleep-overlay">
+    <div class="sleep-clock" id="sleep-clock">12:00</div>
+    <div class="sleep-hint">Click anywhere or press any key to wake</div>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* =========================================================
+     SAFE STORAGE HELPER
+     ========================================================= */
+  const SafeStorage = {
+    get(key, fallback) {
+      try {
+        const raw = window.localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    },
+    set(key, value) {
+      try {
+        window.localStorage.setItem(key, JSON.stringify(value));
+      } catch (e) {
+        // Ignore storage quota or sandbox restrictions
+      }
+    }
+  };
+
+  /* =========================================================
+     APP REGISTRY & WINDOW MANAGER STATE
+     ========================================================= */
+  const APP_META = {
+    terminal:   { title: 'Terminal',     minW: 400, minH: 260, defW: 580, defH: 390 },
+    calculator: { title: 'Calculator',   minW: 250, minH: 360, defW: 276, defH: 404 },
+    paint:      { title: 'Paint Studio', minW: 460, minH: 340, defW: 640, defH: 460 },
+    synth:      { title: 'Synth Player', minW: 340, minH: 360, defW: 380, defH: 430 },
+    notes:      { title: 'Notes',        minW: 440, minH: 320, defW: 620, defH: 420 }
+  };
+
+  const windowsLayer = document.getElementById('windows-layer');
+  const activeAppLabel = document.getElementById('menubar-active-app');
+  const openWindows = new Map(); // appId -> { el, appId, x, y, w, h, minimized, maximized, prevRect, onFocus, onResize, onClose }
+  let topZ = 100;
+  let focusedAppId = null;
+  let wifiEnabled = true;
+  const WALLPAPER_THEMES = ['sunrise', 'dusk', 'aurora'];
+  let currentWallpaperIdx = 0;
+
+  function updateDockIndicators() {
+    document.querySelectorAll('#dock .dock-item[data-app]').forEach(item => {
+      const id = item.dataset.app;
+      const win = openWindows.get(id);
+      item.classList.toggle('running', Boolean(win && !win.minimized));
+      item.classList.toggle('minimized', Boolean(win && win.minimized));
+    });
+  }
+
+  function focusWindow(appId) {
+    focusedAppId = appId;
+    openWindows.forEach((win, id) => {
+      win.el.classList.toggle('focused', id === appId);
+    });
+    if (appId && openWindows.has(appId)) {
+      const win = openWindows.get(appId);
+      win.el.style.zIndex = ++topZ;
+      activeAppLabel.textContent = APP_META[appId].title;
+      if (win.onFocus) win.onFocus();
+    } else {
+      activeAppLabel.textContent = 'Finder';
+    }
+  }
+
+  function focusTopVisibleWindow() {
+    let best = null;
+    let bestZ = -1;
+    openWindows.forEach(win => {
+      if (!win.minimized) {
+        const z = parseInt(win.el.style.zIndex || '0', 10);
+        if (z > bestZ) {
+          bestZ = z;
+          best = win.appId;
+        }
+      }
+    });
+    focusWindow(best);
+  }
+
+  function clampRect(x, y, w, h) {
+    const maxW = Math.max(260, window.innerWidth - 16);
+    const maxH = Math.max(220, window.innerHeight - 28 - 84);
+    const cw = Math.min(w, maxW);
+    const ch = Math.min(h, maxH);
+    const cx = Math.max(8, Math.min(x, window.innerWidth - cw - 8));
+    const cy = Math.max(8, Math.min(y, window.innerHeight - 28 - Math.min(ch, 120)));
+    return { x: Math.round(cx), y: Math.round(cy), w: Math.round(cw), h: Math.round(ch) };
+  }
+
+  function applyWindowRect(win) {
+    win.el.style.left = win.x + 'px';
+    win.el.style.top = win.y + 'px';
+    win.el.style.width = win.w + 'px';
+    win.el.style.height = win.h + 'px';
+    if (win.onResize) win.onResize();
+  }
+
+  function toggleMinimize(appId) {
+    const win = openWindows.get(appId);
+    if (!win) return;
+    win.minimized = !win.minimized;
+    win.el.classList.toggle('minimized', win.minimized);
+    if (win.minimized) {
+      focusTopVisibleWindow();
+    } else {
+      focusWindow(appId);
+    }
+    updateDockIndicators();
+  }
+
+  function toggleMaximize(appId) {
+    const win = openWindows.get(appId);
+    if (!win) return;
+    if (!win.maximized) {
+      win.prevRect = { x: win.x, y: win.y, w: win.w, h: win.h };
+      win.x = 8;
+      win.y = 8;
+      win.w = window.innerWidth - 16;
+      win.h = window.innerHeight - 28 - 90;
+      win.maximized = true;
+    } else if (win.prevRect) {
+      win.x = win.prevRect.x;
+      win.y = win.prevRect.y;
+      win.w = win.prevRect.w;
+      win.h = win.prevRect.h;
+      win.maximized = false;
+    }
+    applyWindowRect(win);
+    focusWindow(appId);
+  }
+
+  function closeWindow(appId) {
+    const win = openWindows.get(appId);
+    if (!win) return;
+    if (win.onClose) win.onClose();
+    win.el.remove();
+    openWindows.delete(appId);
+    updateDockIndicators();
+    focusTopVisibleWindow();
+  }
+
+  function openApp(appId, customRect = null, options = {}) {
+    if (!APP_META[appId]) return null;
+    if (openWindows.has(appId)) {
+      const existing = openWindows.get(appId);
+      if (existing.minimized) {
+        existing.minimized = false;
+        existing.el.classList.remove('minimized');
+      }
+      if (customRect) {
+        const c = clampRect(customRect.x, customRect.y, customRect.w, customRect.h);
+        existing.x = c.x; existing.y = c.y; existing.w = c.w; existing.h = c.h;
+        existing.maximized = false;
+        applyWindowRect(existing);
+      }
+      focusWindow(appId);
+      updateDockIndicators();
+      if (options.runCmd && existing.runCmd) existing.runCmd(options.runCmd);
+      if (options.selectNoteId && existing.selectNote) existing.selectNote(options.selectNoteId);
+      return existing;
+    }
+
+    const meta = APP_META[appId];
+    const offset = (openWindows.size % 5) * 28;
+    const rawRect = customRect || {
+      x: Math.max(24, (window.innerWidth - meta.defW) / 2 - 40 + offset),
+      y: Math.max(20, (window.innerHeight - 120 - meta.defH) / 2 + offset),
+      w: meta.defW,
+      h: meta.defH
+    };
+    const rect = clampRect(rawRect.x, rawRect.y, rawRect.w, rawRect.h);
+
+    const el = document.createElement('section');
+    el.className = 'mac-window';
+    el.dataset.app = appId;
+    el.innerHTML = `
+      <div class="window-titlebar">
+        <div class="traffic-lights">
+          <button class="tl-btn tl-close" title="Close" aria-label="Close">×</button>
+          <button class="tl-btn tl-min" title="Minimize" aria-label="Minimize">−</button>
+          <button class="tl-btn tl-max" title="Zoom" aria-label="Zoom">+</button>
+        </div>
+        <div class="window-title">${meta.title}</div>
+        <div style="width:48px;"></div>
+      </div>
+      <div class="window-content"></div>
+      <div class="resize-handle rh-n" data-dir="n"></div>
+      <div class="resize-handle rh-s" data-dir="s"></div>
+      <div class="resize-handle rh-e" data-dir="e"></div>
+      <div class="resize-handle rh-w" data-dir="w"></div>
+      <div class="resize-handle rh-ne" data-dir="ne"></div>
+      <div class="resize-handle rh-nw" data-dir="nw"></div>
+      <div class="resize-handle rh-se" data-dir="se"></div>
+      <div class="resize-handle rh-sw" data-dir="sw"></div>
+    `;
+
+    const winObj = {
+      el,
+      appId,
+      x: rect.x,
+      y: rect.y,
+      w: rect.w,
+      h: rect.h,
+      minimized: false,
+      maximized: false,
+      prevRect: null
+    };
+
+    windowsLayer.appendChild(el);
+    openWindows.set(appId, winObj);
+    applyWindowRect(winObj);
+
+    // Focus on pointerdown
+    el.addEventListener('pointerdown', () => focusWindow(appId));
+
+    // Traffic lights
+    el.querySelector('.tl-close').addEventListener('click', (e) => { e.stopPropagation(); closeWindow(appId); });
+    el.querySelector('.tl-min').addEventListener('click', (e) => { e.stopPropagation(); toggleMinimize(appId); });
+    el.querySelector('.tl-max').addEventListener('click', (e) => { e.stopPropagation(); toggleMaximize(appId); });
+
+    // Dragging by titlebar
+    const titlebar = el.querySelector('.window-titlebar');
+    titlebar.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.traffic-lights')) return;
+      toggleMaximize(appId);
+    });
+    titlebar.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.traffic-lights')) return;
+      e.preventDefault();
+      focusWindow(appId);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origX = winObj.x;
+      const origY = winObj.y;
+      el.classList.add('no-transition');
+
+      const onMove = (mv) => {
+        const dx = mv.clientX - startX;
+        const dy = mv.clientY - startY;
+        winObj.x = Math.max(-winObj.w + 80, Math.min(window.innerWidth - 80, origX + dx));
+        winObj.y = Math.max(0, Math.min(window.innerHeight - 28 - 44, origY + dy));
+        winObj.maximized = false;
+        el.style.left = winObj.x + 'px';
+        el.style.top = winObj.y + 'px';
+      };
+      const onUp = () => {
+        el.classList.remove('no-transition');
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+
+    // Resizing via 8 handles
+    el.querySelectorAll('.resize-handle').forEach(handle => {
+      handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        focusWindow(appId);
+        const dir = handle.dataset.dir;
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const orig = { x: winObj.x, y: winObj.y, w: winObj.w, h: winObj.h };
+        el.classList.add('no-transition');
+
+        const onMove = (mv) => {
+          const dx = mv.clientX - startX;
+          const dy = mv.clientY - startY;
+          let nx = orig.x, ny = orig.y, nw = orig.w, nh = orig.h;
+
+          if (dir.includes('e')) nw = Math.max(meta.minW, orig.w + dx);
+          if (dir.includes('s')) nh = Math.max(meta.minH, orig.h + dy);
+          if (dir.includes('w')) {
+            const proposedW = orig.w - dx;
+            if (proposedW >= meta.minW) { nw = proposedW; nx = orig.x + dx; }
+          }
+          if (dir.includes('n')) {
+            const proposedH = orig.h - dy;
+            if (proposedH >= meta.minH && orig.y + dy >= 0) { nh = proposedH; ny = orig.y + dy; }
+          }
+          winObj.x = nx; winObj.y = ny; winObj.w = nw; winObj.h = nh;
+          winObj.maximized = false;
+          applyWindowRect(winObj);
+        };
+        const onUp = () => {
+          el.classList.remove('no-transition');
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      });
+    });
+
+    // Mount app UI
+    const contentEl = el.querySelector('.window-content');
+    if (appId === 'calculator') mountCalculator(contentEl, winObj);
+    if (appId === 'terminal')   mountTerminal(contentEl, winObj, options);
+    if (appId === 'paint')      mountPaint(contentEl, winObj);
+    if (appId === 'synth')      mountSynth(contentEl, winObj);
+    if (appId === 'notes')      mountNotes(contentEl, winObj, options);
+
+    focusWindow(appId);
+    updateDockIndicators();
+
+    // Subtle dock bounce
+    const dockBtn = document.querySelector(`#dock .dock-item[data-app="${appId}"]`);
+    if (dockBtn && !options.silentBoot) {
+      dockBtn.classList.remove('bouncing');
+      void dockBtn.offsetWidth;
+      dockBtn.classList.add('bouncing');
+    }
+    return winObj;
+  }
+
+  /* =========================================================
+     APP 1: CALCULATOR
+     ========================================================= */
+  function mountCalculator(container, winObj) {
+    container.innerHTML = `
+      <div class="calc-app">
+        <div class="calc-display-wrap">
+          <div class="calc-expr" id="calc-expr"></div>
+          <div class="calc-value" id="calc-value">0</div>
+        </div>
+        <div class="calc-grid">
+          <button class="calc-btn fn" data-k="clear">AC</button>
+          <button class="calc-btn fn" data-k="sign">±</button>
+          <button class="calc-btn fn" data-k="percent">%</button>
+          <button class="calc-btn op" data-k="/">÷</button>
+
+          <button class="calc-btn" data-k="7">7</button>
+          <button class="calc-btn" data-k="8">8</button>
+          <button class="calc-btn" data-k="9">9</button>
+          <button class="calc-btn op" data-k="*">×</button>
+
+          <button class="calc-btn" data-k="4">4</button>
+          <button class="calc-btn" data-k="5">5</button>
+          <button class="calc-btn" data-k="6">6</button>
+          <button class="calc-btn op" data-k="-">−</button>
+
+          <button class="calc-btn" data-k="1">1</button>
+          <button class="calc-btn" data-k="2">2</button>
+          <button class="calc-btn" data-k="3">3</button>
+          <button class="calc-btn op" data-k="+">+</button>
+
+          <button class="calc-btn zero" data-k="0">0</button>
+          <button class="calc-btn" data-k=".">.</button>
+          <button class="calc-btn op" data-k="=">=</button>
+        </div>
+      </div>
+    `;
+
+    const exprEl = container.querySelector('#calc-expr');
+    const valEl = container.querySelector('#calc-value');
+    const clearBtn = container.querySelector('[data-k="clear"]');
+    const opBtns = container.querySelectorAll('.calc-btn.op');
+
+    let current = '0';
+    let prev = null;
+    let operator = null;
+    let resetNext = false;
+    let lastExpr = '';
+
+    const opSymbol = (op) => ({ '/': '÷', '*': '×', '-': '−', '+': '+' }[op] || '');
+
+    function formatDisplay(numStr) {
+      if (numStr === 'Error') return 'Error';
+      if (numStr.endsWith('.')) return numStr;
+      const n = Number(numStr);
+      if (!Number.isFinite(n)) return 'Error';
+      if (Math.abs(n) >= 1e11 || (Math.abs(n) > 0 && Math.abs(n) < 1e-7)) {
+        return n.toExponential(4);
+      }
+      const parts = numStr.split('.');
+      const intPart = Number(parts[0]).toLocaleString('en-US');
+      return parts.length > 1 ? `${intPart}.${parts[1].slice(0, 8)}` : intPart;
+    }
+
+    function render() {
+      valEl.textContent = formatDisplay(current);
+      valEl.style.fontSize = valEl.textContent.length > 10 ? '28px' : '40px';
+      exprEl.textContent = lastExpr;
+      clearBtn.textContent = (current !== '0' || prev !== null) ? 'C' : 'AC';
+      opBtns.forEach(b => b.classList.toggle('active-op', b.dataset.k === operator && resetNext));
+    }
+
+    function compute(a, b, op) {
+      if (op === '+') return a + b;
+      if (op === '-') return a - b;
+      if (op === '*') return a * b;
+      if (op === '/') return b === 0 ? NaN : a / b;
+      return b;
+    }
+
+    function handleKey(k) {
+      if (current === 'Error' && k !== 'clear') current = '0';
+
+      if (/^[0-9]$/.test(k)) {
+        if (resetNext || current === '0') {
+          current = k;
+          resetNext = false;
+        } else if (current.length < 13) {
+          current += k;
+        }
+      } else if (k === '.') {
+        if (resetNext) { current = '0.'; resetNext = false; }
+        else if (!current.includes('.')) current += '.';
+      } else if (k === 'clear') {
+        current = '0'; prev = null; operator = null; resetNext = false; lastExpr = '';
+      } else if (k === 'backspace') {
+        if (!resetNext && current !== '0') {
+          current = current.length > 1 ? current.slice(0, -1) : '0';
+          if (current === '-') current = '0';
+        }
+      } else if (k === 'sign') {
+        if (current !== '0') current = current.startsWith('-') ? current.slice(1) : '-' + current;
+      } else if (k === 'percent') {
+        const n = Number(current);
+        current = Number.isFinite(n) ? String(parseFloat((n / 100).toPrecision(10))) : 'Error';
+      } else if (['+', '-', '*', '/'].includes(k)) {
+        const curNum = Number(current);
+        if (prev !== null && operator && !resetNext) {
+          const res = compute(prev, curNum, operator);
+          current = Number.isFinite(res) ? String(parseFloat(res.toPrecision(12))) : 'Error';
+          prev = Number.isFinite(res) ? res : null;
+        } else {
+          prev = curNum;
+        }
+        operator = k;
+        lastExpr = `${prev} ${opSymbol(operator)}`;
+        resetNext = true;
+      } else if (k === '=') {
+        if (prev !== null && operator) {
+          const curNum = Number(current);
+          const res = compute(prev, curNum, operator);
+          lastExpr = `${prev} ${opSymbol(operator)} ${curNum} =`;
+          current = Number.isFinite(res) ? String(parseFloat(res.toPrecision(12))) : 'Error';
+          prev = null;
+          operator = null;
+          resetNext = true;
+        }
+      }
+      render();
+    }
+
+    container.querySelectorAll('.calc-btn').forEach(btn => {
+      btn.addEventListener('click', () => handleKey(btn.dataset.k));
+    });
+
+    const onKeyDown = (e) => {
+      if (focusedAppId !== 'calculator' || document.getElementById('spotlight-overlay').classList.contains('open')) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (/^[0-9.]$/.test(e.key)) { e.preventDefault(); handleKey(e.key); }
+      else if (['+', '-', '*', '/'].includes(e.key)) { e.preventDefault(); handleKey(e.key); }
+      else if (e.key === 'Enter' || e.key === '=') { e.preventDefault(); handleKey('='); }
+      else if (e.key === 'Backspace') { e.preventDefault(); handleKey('backspace'); }
+      else if (e.key === 'Escape' || e.key.toLowerCase() === 'c') { e.preventDefault(); handleKey('clear'); }
+      else if (e.key === '%') { e.preventDefault(); handleKey('percent'); }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    winObj.onClose = () => window.removeEventListener('keydown', onKeyDown);
+    render();
+  }
+
+  /* =========================================================
+     APP 2: TERMINAL (Virtual FS + Commands + Neofetch)
+     ========================================================= */
+  const VIRTUAL_FS = {
+    type: 'dir',
+    children: {
+      Users: {
+        type: 'dir',
+        children: {
+          sequoia: {
+            type: 'dir',
+            children: {
+              Desktop: {
+                type: 'dir',
+                children: {
+                  'ReadMe.txt': {
+                    type: 'file',
+                    content: 'Welcome to macOS Sequoia Web Desktop!\n\nTry these shortcuts:\n  • Cmd/Ctrl + K  → Open Spotlight Search\n  • Click Dock    → Launch Calculator, Terminal, Paint Studio, Synth Player, Notes\n  • Drag & Resize → Full window management with traffic lights'
+                  },
+                  'sequoia-tips.txt': {
+                    type: 'file',
+                    content: 'Pro Tip: In Terminal you can type `open synth`, `open paint`, or `neofetch` anytime.'
+                  }
+                }
+              },
+              Documents: {
+                type: 'dir',
+                children: {
+                  'architecture.txt': {
+                    type: 'file',
+                    content: 'macOS Sequoia Clone Architecture\n---------------------------------\n• Zero external CDN dependencies\n• Pure CSS animated mesh wallpaper\n• Native HTML5 Canvas Paint Studio\n• Procedural Web Audio API Synth Player\n• localStorage-backed Notes app'
+                  },
+                  'roadmap.md': {
+                    type: 'file',
+                    content: '# Sequoia Desktop\n- [x] Window manager with z-index stacking\n- [x] Smooth Dock magnification\n- [x] 5 functional native apps\n- [x] Spotlight search with inline math'
+                  }
+                }
+              },
+              Projects: {
+                type: 'dir',
+                children: {
+                  'hello.js': {
+                    type: 'file',
+                    content: 'console.log("Hello from macOS Sequoia 15.2!");'
+                  }
+                }
+              },
+              Music: {
+                type: 'dir',
+                children: {
+                  'tracks.txt': {
+                    type: 'file',
+                    content: '1. Sequoia Dawn (108 BPM - Lo-Fi Rhodes)\n2. Midnight Neon (118 BPM - Synthwave)\n3. Redwood Ambient (72 BPM - Generative Drone)'
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      Applications: {
+        type: 'dir',
+        children: {
+          'Calculator.app': { type: 'file', content: '[macOS Application Bundle: Calculator]' },
+          'Terminal.app': { type: 'file', content: '[macOS Application Bundle: Terminal]' },
+          'Paint Studio.app': { type: 'file', content: '[macOS Application Bundle: Paint Studio]' },
+          'Synth Player.app': { type: 'file', content: '[macOS Application Bundle: Synth Player]' },
+          'Notes.app': { type: 'file', content: '[macOS Application Bundle: Notes]' }
+        }
+      }
+    }
+  };
+
+  function mountTerminal(container, winObj, options = {}) {
+    container.innerHTML = `
+      <div class="term-app" id="term-scroll">
+        <div class="term-output" id="term-output"></div>
+        <div class="term-input-row">
+          <span class="term-prompt">sequoia@MacBook-Pro <span class="term-prompt-path" id="term-cwd">~</span> %</span>
+          <input class="term-input" id="term-input" type="text" autocomplete="off" spellcheck="false" aria-label="Terminal command input">
+        </div>
+      </div>
+    `;
+
+    const scrollEl = container.querySelector('#term-scroll');
+    const outEl = container.querySelector('#term-output');
+    const cwdEl = container.querySelector('#term-cwd');
+    const inputEl = container.querySelector('#term-input');
+
+    const HOME = ['Users', 'sequoia'];
+    let cwd = [...HOME];
+    const history = [];
+    let histIdx = -1;
+
+    function formatPath(parts) {
+      return '/' + parts.join('/');
+    }
+    function shortPath(parts) {
+      if (parts.length >= 2 && parts[0] === 'Users' && parts[1] === 'sequoia') {
+        const rest = parts.slice(2);
+        return rest.length ? '~/' + rest.join('/') : '~';
+      }
+      return '/' + parts.join('/');
+    }
+
+    function resolvePath(target) {
+      if (!target || target === '~') return [...HOME];
+      let base = [];
+      let raw = target;
+      if (raw.startsWith('~/')) {
+        base = [...HOME];
+        raw = raw.slice(2);
+      } else if (raw.startsWith('/')) {
+        base = [];
+        raw = raw.slice(1);
+      } else {
+        base = [...cwd];
+      }
+      for (const seg of raw.split('/')) {
+        if (!seg || seg === '.') continue;
+        if (seg === '..') base.pop();
+        else base.push(seg);
+      }
+      return base;
+    }
+
+    function getNode(parts) {
+      let cur = VIRTUAL_FS;
+      for (const p of parts) {
+        if (!cur || cur.type !== 'dir' || !cur.children[p]) return null;
+        cur = cur.children[p];
+      }
+      return cur;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+
+    function appendHtml(html) {
+      const div = document.createElement('div');
+      div.className = 'term-line';
+      div.innerHTML = html;
+      outEl.appendChild(div);
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+    }
+
+    function renderNeofetch() {
+      const res = `${window.innerWidth}x${window.innerHeight}`;
+      const appleAscii = [
+        '<span style="color:#61bb46">                 \'c.</span>',
+        '<span style="color:#61bb46">               ,xNMM.</span>',
+        '<span style="color:#61bb46">             .OMMMMo</span>',
+        '<span style="color:#fdb827">             OMMM0,</span>',
+        '<span style="color:#fdb827">   .;loddo:\' loolloddol;.</span>',
+        '<span style="color:#f5821f"> cKMMMMMMMMMMNWMMMMMMMMMM0:</span>',
+        '<span style="color:#e03a3e">.KMMMMMMMMMMMMMMMMMMMMMMMWd.</span>',
+        '<span style="color:#e03a3e">XMMMMMMMMMMMMMMMMMMMMMMMX.</span>',
+        '<span style="color:#963d97">;MMMMMMMMMMMMMMMMMMMMMMMM:</span>',
+        '<span style="color:#963d97">:MMMMMMMMMMMMMMMMMMMMMMMM:</span>',
+        '<span style="color:#009ddc">.MMMMMMMMMMMMMMMMMMMMMMMMX.</span>',
+        '<span style="color:#009ddc"> kMMMMMMMMMMMMMMMMMMMMMMMMWd.</span>',
+        '<span style="color:#009ddc">  .XMMMMMMMMMMMMMMMMMMMMMMk</span>',
+        '<span style="color:#009ddc">    .XMMMMMMMMMMMMMMMMMMK.</span>',
+        '<span style="color:#009ddc">      kMMMMMMMMMMMMMMMMd</span>',
+        '<span style="color:#009ddc">       ;KMMMMMMMWXXWMMk</span>'
+      ].join('\n');
+
+      const info = [
+        `<span style="color:#34d399;font-weight:700">sequoia</span>@<span style="color:#38bdf8;font-weight:700">MacBook-Pro</span>`,
+        `-----------------------`,
+        `<span class="nf-key">OS:</span> macOS Sequoia 15.2 arm64`,
+        `<span class="nf-key">Host:</span> MacBook Pro (M4 Max)`,
+        `<span class="nf-key">Kernel:</span> Darwin 24.2.0`,
+        `<span class="nf-key">Shell:</span> zsh 5.9 (simulated)`,
+        `<span class="nf-key">Resolution:</span> ${res}`,
+        `<span class="nf-key">WM:</span> Sequoia Quartz Compositor`,
+        `<span class="nf-key">Apps:</span> Calc, Term, Paint, Synth, Notes`,
+        `<span class="nf-key">Memory:</span> 14.2 GiB / 36.0 GiB`,
+        `<div class="nf-swatches">
+          <span class="nf-swatch" style="background:#ef4444"></span>
+          <span class="nf-swatch" style="background:#f97316"></span>
+          <span class="nf-swatch" style="background:#eab308"></span>
+          <span class="nf-swatch" style="background:#22c55e"></span>
+          <span class="nf-swatch" style="background:#06b6d4"></span>
+          <span class="nf-swatch" style="background:#3b82f6"></span>
+          <span class="nf-swatch" style="background:#a855f7"></span>
+          <span class="nf-swatch" style="background:#ec4899"></span>
+        </div>`
+      ].join('<br>');
+
+      appendHtml(`<div class="nf-grid"><div class="nf-logo">${appleAscii}</div><div class="nf-info">${info}</div></div>`);
+    }
+
+    function execute(rawLine) {
+      const line = rawLine.trim();
+      const promptHtml = `<span class="term-prompt">sequoia@MacBook-Pro <span class="term-prompt-path">${escapeHtml(shortPath(cwd))}</span> %</span> ${escapeHtml(line)}`;
+      appendHtml(promptHtml);
+      if (!line) return;
+
+      history.push(line);
+      histIdx = history.length;
+
+      const tokens = line.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+      const cmd = tokens[0];
+      const args = tokens.slice(1).map(t => t.replace(/^"|"$/g, ''));
+
+      switch (cmd) {
+        case 'help':
+          appendHtml(
+            `<span style="color:#38bdf8;font-weight:600">Available commands:</span>\n` +
+            `  help            Show this command list\n` +
+            `  ls [path]       List directory contents (-l for details)\n` +
+            `  cd [dir]        Change directory (~, .., /, relative)\n` +
+            `  cat &lt;file&gt;      Display file contents\n` +
+            `  pwd             Print working directory\n` +
+            `  echo &lt;text&gt;     Print text (supports $USER, $PWD)\n` +
+            `  date            Show current date and time\n` +
+            `  neofetch        Display macOS Sequoia system info\n` +
+            `  open &lt;app&gt;      Launch app (calculator, paint, synth, notes)\n` +
+            `  clear           Clear terminal output`
+          );
+          break;
+
+        case 'pwd':
+          appendHtml(escapeHtml(formatPath(cwd)));
+          break;
+
+        case 'date':
+          appendHtml(escapeHtml(new Date().toString()));
+          break;
+
+        case 'whoami':
+          appendHtml('sequoia');
+          break;
+
+        case 'clear':
+          outEl.innerHTML = '';
+          break;
+
+        case 'neofetch':
+          renderNeofetch();
+          break;
+
+        case 'echo': {
+          const text = args.join(' ')
+            .replace(/\$USER/g, 'sequoia')
+            .replace(/\$PWD/g, formatPath(cwd))
+            .replace(/\$SHELL/g, '/bin/zsh');
+          appendHtml(escapeHtml(text));
+          break;
+        }
+
+        case 'ls': {
+          const isLong = args.includes('-l') || args.includes('-la') || args.includes('-al');
+          const pathArg = args.find(a => !a.startsWith('-'));
+          const targetParts = pathArg ? resolvePath(pathArg) : cwd;
+          const node = getNode(targetParts);
+          if (!node) {
+            appendHtml(`<span style="color:#ff6961">ls: ${escapeHtml(pathArg)}: No such file or directory</span>`);
+          } else if (node.type === 'file') {
+            appendHtml(escapeHtml(targetParts[targetParts.length - 1]));
+          } else {
+            const entries = Object.entries(node.children);
+            if (!entries.length) {
+              appendHtml('<span style="opacity:0.5">(empty directory)</span>');
+            } else if (isLong) {
+              const rows = entries.map(([name, item]) => {
+                const perm = item.type === 'dir' ? 'drwxr-xr-x' : '-rw-r--r--';
+                const size = item.type === 'dir' ? '  128' : String(item.content.length).padStart(5, ' ');
+                const styled = item.type === 'dir'
+                  ? `<span style="color:#38bdf8;font-weight:600">${escapeHtml(name)}/</span>`
+                  : escapeHtml(name);
+                return `${perm}  sequoia  staff  ${size}  Nov 22  ${styled}`;
+              });
+              appendHtml(rows.join('\n'));
+            } else {
+              const cols = entries.map(([name, item]) =>
+                item.type === 'dir'
+                  ? `<span style="color:#38bdf8;font-weight:600">${escapeHtml(name)}/</span>`
+                  : escapeHtml(name)
+              );
+              appendHtml(cols.join('   '));
+            }
+          }
+          break;
+        }
+
+        case 'cd': {
+          const target = args[0] || '~';
+          const resolved = resolvePath(target);
+          const node = getNode(resolved);
+          if (!node) {
+            appendHtml(`<span style="color:#ff6961">cd: no such file or directory: ${escapeHtml(target)}</span>`);
+          } else if (node.type !== 'dir') {
+            appendHtml(`<span style="color:#ff6961">cd: not a directory: ${escapeHtml(target)}</span>`);
+          } else {
+            cwd = resolved;
+            cwdEl.textContent = shortPath(cwd);
+          }
+          break;
+        }
+
+        case 'cat': {
+          if (!args[0]) {
+            appendHtml('<span style="color:#ff6961">usage: cat &lt;file&gt;</span>');
+            break;
+          }
+          const resolved = resolvePath(args[0]);
+          const node = getNode(resolved);
+          if (!node) {
+            appendHtml(`<span style="color:#ff6961">cat: ${escapeHtml(args[0])}: No such file or directory</span>`);
+          } else if (node.type === 'dir') {
+            appendHtml(`<span style="color:#ff6961">cat: ${escapeHtml(args[0])}: Is a directory</span>`);
+          } else {
+            appendHtml(escapeHtml(node.content));
+          }
+          break;
+        }
+
+        case 'open': {
+          const appKey = (args[0] || '').toLowerCase();
+          if (APP_META[appKey]) {
+            openApp(appKey);
+            appendHtml(`Launched <span style="color:#34d399">${APP_META[appKey].title}</span>.`);
+          } else {
+            appendHtml(`<span style="color:#ff6961">open: unknown app "${escapeHtml(args[0] || '')}". Try: calculator, paint, synth, notes</span>`);
+          }
+          break;
+        }
+
+        default:
+          appendHtml(`<span style="color:#ff6961">zsh: command not found: ${escapeHtml(cmd)}</span>  (type <span style="color:#38bdf8">help</span>)`);
+      }
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+    }
+
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const val = inputEl.value;
+        inputEl.value = '';
+        execute(val);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (histIdx > 0) {
+          histIdx--;
+          inputEl.value = history[histIdx];
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (histIdx < history.length - 1) {
+          histIdx++;
+          inputEl.value = history[histIdx];
+        } else {
+          histIdx = history.length;
+          inputEl.value = '';
+        }
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        const parts = inputEl.value.split(' ');
+        const last = parts[parts.length - 1];
+        if (parts.length === 1) {
+          const cmds = ['help', 'ls', 'cd', 'cat', 'pwd', 'clear', 'date', 'neofetch', 'echo', 'open'];
+          const hit = cmds.find(c => c.startsWith(last));
+          if (hit) inputEl.value = hit + ' ';
+        } else {
+          const dirNode = getNode(cwd);
+          if (dirNode && dirNode.children) {
+            const hit = Object.keys(dirNode.children).find(k => k.toLowerCase().startsWith(last.toLowerCase()));
+            if (hit) {
+              parts[parts.length - 1] = hit;
+              inputEl.value = parts.join(' ');
+            }
+          }
+        }
+      }
+    });
+
+    scrollEl.addEventListener('click', () => {
+      if (!window.getSelection().toString()) inputEl.focus();
+    });
+
+    winObj.onFocus = () => setTimeout(() => inputEl.focus(), 10);
+    winObj.runCmd = (cmd) => execute(cmd);
+
+    // Initial startup command
+    if (options.initialCmd) {
+      execute(options.initialCmd);
+    } else {
+      appendHtml('<span style="color:rgba(255,255,255,0.5)">Last login: ' + escapeHtml(new Date().toLocaleTimeString()) + ' on ttys001 — type "help" or "neofetch"</span>');
+    }
+  }
+
+  /* =========================================================
+     APP 3: PAINT STUDIO (HTML5 Canvas)
+     ========================================================= */
+  function mountPaint(container, winObj) {
+    const swatches = ['#111827', '#ef4444', '#f97316', '#facc15', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#ffffff'];
+    container.innerHTML = `
+      <div class="paint-app">
+        <div class="paint-toolbar">
+          <div class="paint-tool-group">
+            <button class="paint-btn active" data-tool="brush">Brush</button>
+            <button class="paint-btn" data-tool="eraser">Eraser</button>
+          </div>
+          <div class="paint-swatches">
+            ${swatches.map((c, i) => `<button class="paint-swatch ${i === 6 ? 'active' : ''}" data-color="${c}" style="background:${c};${c === '#ffffff' ? 'box-shadow:inset 0 0 0 1px #cbd5e1;' : ''}" title="${c}"></button>`).join('')}
+            <input type="color" class="paint-color-input" id="paint-custom-color" value="#3b82f6" title="Custom color">
+          </div>
+          <div class="paint-size-wrap">
+            <span>Size</span>
+            <input type="range" id="paint-size" min="1" max="42" value="6">
+            <span id="paint-size-val" style="min-width:26px;">6px</span>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:5px;">
+            <button class="paint-btn" id="paint-undo">Undo</button>
+            <button class="paint-btn" id="paint-clear">Clear</button>
+            <button class="paint-btn active" id="paint-download">Download PNG</button>
+          </div>
+        </div>
+        <div class="paint-stage">
+          <canvas id="paint-canvas"></canvas>
+        </div>
+      </div>
+    `;
+
+    const canvas = container.querySelector('#paint-canvas');
+    const ctx = canvas.getContext('2d');
+    const sizeSlider = container.querySelector('#paint-size');
+    const sizeVal = container.querySelector('#paint-size-val');
+    const colorInput = container.querySelector('#paint-custom-color');
+
+    let tool = 'brush';
+    let color = '#3b82f6';
+    let size = 6;
+    let drawing = false;
+    let lastPt = null;
+    const undoStack = [];
+
+    function initCanvasSize(preserve = false) {
+      const stage = container.querySelector('.paint-stage');
+      const targetW = Math.max(300, Math.floor(stage.clientWidth - 24));
+      const targetH = Math.max(200, Math.floor(stage.clientHeight - 24));
+      if (canvas.width === targetW && canvas.height === targetH) return;
+
+      let snapshot = null;
+      if (preserve && canvas.width > 0 && canvas.height > 0) {
+        snapshot = document.createElement('canvas');
+        snapshot.width = canvas.width;
+        snapshot.height = canvas.height;
+        snapshot.getContext('2d').drawImage(canvas, 0, 0);
+      }
+      canvas.width = targetW;
+      canvas.height = targetH;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (snapshot) ctx.drawImage(snapshot, 0, 0);
+    }
+
+    function saveSnapshot() {
+      if (undoStack.length >= 20) undoStack.shift();
+      undoStack.push(canvas.toDataURL());
+    }
+
+    function getPt(e) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (e.clientX - rect.left) * (canvas.width / rect.width),
+        y: (e.clientY - rect.top) * (canvas.height / rect.height)
+      };
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      saveSnapshot();
+      drawing = true;
+      lastPt = getPt(e);
+      ctx.beginPath();
+      ctx.fillStyle = tool === 'eraser' ? '#ffffff' : color;
+      ctx.arc(lastPt.x, lastPt.y, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drawing) return;
+      const pt = getPt(e);
+      ctx.beginPath();
+      ctx.moveTo(lastPt.x, lastPt.y);
+      ctx.lineTo(pt.x, pt.y);
+      ctx.strokeStyle = tool === 'eraser' ? '#ffffff' : color;
+      ctx.lineWidth = size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      lastPt = pt;
+    });
+
+    const endDraw = () => { drawing = false; lastPt = null; };
+    canvas.addEventListener('pointerup', endDraw);
+    canvas.addEventListener('pointercancel', endDraw);
+
+    container.querySelectorAll('[data-tool]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        tool = btn.dataset.tool;
+        container.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b === btn));
+      });
+    });
+
+    container.querySelectorAll('.paint-swatch').forEach(sw => {
+      sw.addEventListener('click', () => {
+        color = sw.dataset.color;
+        colorInput.value = color;
+        tool = 'brush';
+        container.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === 'brush'));
+        container.querySelectorAll('.paint-swatch').forEach(s => s.classList.toggle('active', s === sw));
+      });
+    });
+
+    colorInput.addEventListener('input', () => {
+      color = colorInput.value;
+      tool = 'brush';
+      container.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === 'brush'));
+      container.querySelectorAll('.paint-swatch').forEach(s => s.classList.remove('active'));
+    });
+
+    sizeSlider.addEventListener('input', () => {
+      size = Number(sizeSlider.value);
+      sizeVal.textContent = size + 'px';
+    });
+
+    container.querySelector('#paint-undo').addEventListener('click', () => {
+      if (!undoStack.length) return;
+      const prevUrl = undoStack.pop();
+      const img = new Image();
+      img.onload = () => {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+      };
+      img.src = prevUrl;
+    });
+
+    container.querySelector('#paint-clear').addEventListener('click', () => {
+      saveSnapshot();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    });
+
+    container.querySelector('#paint-download').addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.download = 'sequoia-painting.png';
+      a.href = canvas.toDataURL('image/png');
+      a.click();
+    });
+
+    winObj.onResize = () => initCanvasSize(true);
+    setTimeout(() => initCanvasSize(false), 0);
+  }
+
+  /* =========================================================
+     APP 4: SYNTH PLAYER (Pure Web Audio API + Live Visualizer)
+     ========================================================= */
+  const SYNTH_TRACKS = [
+    {
+      name: 'Sequoia Dawn',
+      subtitle: 'Lo-Fi Rhodes & Warm Beat',
+      bpm: 108,
+      gradient: 'linear-gradient(135deg, #10b981, #0ea5e9)',
+      chords: [[261.63, 329.63, 392.00, 493.88], [220.00, 261.63, 329.63, 392.00], [174.61, 220.00, 261.63, 329.63], [196.00, 246.94, 293.66, 392.00]],
+      arp: [523.25, 659.25, 783.99, 659.25, 587.33, 523.25, 440.00, 523.25],
+      wave: 'triangle',
+      beat: true
+    },
+    {
+      name: 'Midnight Neon',
+      subtitle: 'Retrowave Pulse & Bass',
+      bpm: 118,
+      gradient: 'linear-gradient(135deg, #ec4899, #6366f1)',
+      chords: [[146.83, 220.00, 293.66, 349.23], [116.54, 174.61, 233.08, 293.66], [130.81, 196.00, 261.63, 329.63], [110.00, 164.81, 220.00, 277.18]],
+      arp: [587.33, 440.00, 523.25, 659.25, 587.33, 440.00, 392.00, 440.00],
+      wave: 'sawtooth',
+      beat: true
+    },
+    {
+      name: 'Redwood Ambient',
+      subtitle: 'Generative Forest Pad',
+      bpm: 72,
+      gradient: 'linear-gradient(135deg, #f59e0b, #7c3aed)',
+      chords: [[196.00, 293.66, 392.00, 493.88], [164.81, 246.94, 329.63, 440.00], [130.81, 196.00, 261.63, 392.00], [146.83, 220.00, 293.66, 369.99]],
+      arp: [587.33, 783.99, 659.25, 987.77, 739.99, 659.25, 587.33, 493.88],
+      wave: 'sine',
+      beat: false
+    }
+  ];
+
+  function mountSynth(container, winObj) {
+    container.innerHTML = `
+      <div class="synth-app">
+        <div class="synth-header">
+          <div class="synth-art" id="synth-art">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round">
+              <path d="M9 18V5l12-2v13"></path>
+              <circle cx="6" cy="18" r="3"></circle>
+              <circle cx="18" cy="16" r="3"></circle>
+            </svg>
+          </div>
+          <div class="synth-meta">
+            <div class="synth-title" id="synth-title">Sequoia Dawn</div>
+            <div class="synth-sub" id="synth-sub">Lo-Fi Rhodes &amp; Warm Beat · 108 BPM</div>
+          </div>
+        </div>
+
+        <div class="synth-viz-wrap">
+          <canvas id="synth-viz"></canvas>
+        </div>
+
+        <div class="synth-controls">
+          <div class="synth-transport">
+            <button class="synth-ctrl-btn" id="synth-prev" title="Previous track">⏮</button>
+            <button class="synth-ctrl-btn primary" id="synth-play" title="Play / Pause">▶</button>
+            <button class="synth-ctrl-btn" id="synth-next" title="Next track">⏭</button>
+          </div>
+          <div class="synth-vol-wrap">
+            <span>Vol</span>
+            <input type="range" id="synth-vol" min="0" max="1" step="0.01" value="0.65">
+          </div>
+        </div>
+
+        <div class="synth-tracks" id="synth-tracks"></div>
+      </div>
+    `;
+
+    const artEl = container.querySelector('#synth-art');
+    const titleEl = container.querySelector('#synth-title');
+    const subEl = container.querySelector('#synth-sub');
+    const playBtn = container.querySelector('#synth-play');
+    const volSlider = container.querySelector('#synth-vol');
+    const tracksEl = container.querySelector('#synth-tracks');
+    const vizCanvas = container.querySelector('#synth-viz');
+    const vctx = vizCanvas.getContext('2d');
+
+    let trackIdx = 0;
+    let isPlaying = false;
+    let audioCtx = null;
+    let masterGain = null;
+    let analyser = null;
+    let stepTimer = null;
+    let rafId = null;
+    let stepCount = 0;
+    const freqData = new Uint8Array(64);
+    const barPeaks = new Array(24).fill(2);
+
+    function initAudio() {
+      if (!audioCtx) {
+        const AudioCtor = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioCtor();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = Number(volSlider.value) * 0.55;
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 128;
+        analyser.smoothingTimeConstant = 0.78;
+        masterGain.connect(analyser);
+        analyser.connect(audioCtx.destination);
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playKick(t) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.setValueAtTime(135, t);
+      osc.frequency.exponentialRampToValueAtTime(42, t + 0.14);
+      gain.gain.setValueAtTime(0.75, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      osc.connect(gain); gain.connect(masterGain);
+      osc.start(t); osc.stop(t + 0.24);
+    }
+
+    function playHat(t, accent) {
+      const bufferSize = Math.floor(audioCtx.sampleRate * 0.045);
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = buffer;
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 6500;
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(accent ? 0.18 : 0.09, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+      noise.connect(filter); filter.connect(gain); gain.connect(masterGain);
+      noise.start(t);
+    }
+
+    function playChord(freqs, t, dur, wave) {
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(wave === 'sawtooth' ? 1100 : 1800, t);
+      filter.connect(masterGain);
+
+      freqs.forEach(f => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = wave;
+        osc.frequency.setValueAtTime(f, t);
+        gain.gain.setValueAtTime(0.001, t);
+        gain.gain.linearRampToValueAtTime(0.11, t + 0.06);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        osc.connect(gain); gain.connect(filter);
+        osc.start(t); osc.stop(t + dur + 0.04);
+      });
+    }
+
+    function playNote(freq, t, dur) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(0.14, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(gain); gain.connect(masterGain);
+      osc.start(t); osc.stop(t + dur + 0.03);
+    }
+
+    function tickStep() {
+      if (!isPlaying || !audioCtx) return;
+      const tr = SYNTH_TRACKS[trackIdx];
+      const now = audioCtx.currentTime;
+      const beatSec = 60 / tr.bpm;
+      const stepInBar = stepCount % 8;
+      const chordIdx = Math.floor(stepCount / 8) % tr.chords.length;
+
+      if (stepInBar === 0) {
+        playChord(tr.chords[chordIdx], now, beatSec * 3.8, tr.wave);
+      }
+      if (tr.beat) {
+        if (stepInBar === 0 || stepInBar === 4) playKick(now);
+        if (stepInBar % 2 === 1) playHat(now, stepInBar === 3 || stepInBar === 7);
+      }
+      if (stepInBar % 2 === 0 || !tr.beat) {
+        const arpNote = tr.arp[stepInBar % tr.arp.length];
+        playNote(arpNote, now, beatSec * (tr.beat ? 0.45 : 1.1));
+      }
+      stepCount++;
+    }
+
+    function startPlayback() {
+      initAudio();
+      if (stepTimer) clearInterval(stepTimer);
+      isPlaying = true;
+      playBtn.textContent = '⏸';
+      const tr = SYNTH_TRACKS[trackIdx];
+      const stepMs = (60 / tr.bpm / 2) * 1000;
+      tickStep();
+      stepTimer = setInterval(tickStep, stepMs);
+    }
+
+    function stopPlayback() {
+      isPlaying = false;
+      playBtn.textContent = '▶';
+      if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
+    }
+
+    function renderTrackUI() {
+      const tr = SYNTH_TRACKS[trackIdx];
+      artEl.style.background = tr.gradient;
+      titleEl.textContent = tr.name;
+      subEl.textContent = `${tr.subtitle} · ${tr.bpm} BPM`;
+      tracksEl.innerHTML = SYNTH_TRACKS.map((t, idx) => `
+        <div class="synth-track-row ${idx === trackIdx ? 'active' : ''}" data-idx="${idx}">
+          <div>
+            <div class="synth-track-name">${t.name}</div>
+            <div class="synth-track-bpm">${t.subtitle}</div>
+          </div>
+          <div class="synth-track-bpm">${t.bpm} BPM</div>
+        </div>
+      `).join('');
+      tracksEl.querySelectorAll('.synth-track-row').forEach(row => {
+        row.addEventListener('click', () => {
+          trackIdx = Number(row.dataset.idx);
+          stepCount = 0;
+          renderTrackUI();
+          if (isPlaying) startPlayback();
+        });
+      });
+    }
+
+    function drawVisualizer() {
+      rafId = requestAnimationFrame(drawVisualizer);
+      const w = vizCanvas.clientWidth || 300;
+      const h = vizCanvas.clientHeight || 72;
+      if (vizCanvas.width !== w || vizCanvas.height !== h) {
+        vizCanvas.width = w;
+        vizCanvas.height = h;
+      }
+      vctx.clearRect(0, 0, w, h);
+
+      const bars = 24;
+      const gap = 4;
+      const barW = Math.max(4, (w - gap * (bars - 1)) / bars);
+
+      if (analyser && isPlaying) {
+        analyser.getByteFrequencyData(freqData);
+      }
+
+      const grad = vctx.createLinearGradient(0, h, 0, 0);
+      grad.addColorStop(0, '#0a84ff');
+      grad.addColorStop(0.55, '#34d399');
+      grad.addColorStop(1, '#f472b6');
+
+      for (let i = 0; i < bars; i++) {
+        const val = (analyser && isPlaying) ? (freqData[i + 1] / 255) : (0.07 + 0.03 * Math.sin(Date.now() * 0.003 + i * 0.6));
+        const bh = Math.max(4, val * (h - 6));
+        barPeaks[i] = Math.max(bh, barPeaks[i] * 0.94);
+
+        const x = i * (barW + gap);
+        vctx.fillStyle = grad;
+        vctx.beginPath();
+        vctx.roundRect(x, h - bh, barW, bh, 3);
+        vctx.fill();
+
+        vctx.fillStyle = 'rgba(255,255,255,0.8)';
+        vctx.fillRect(x, h - barPeaks[i] - 2, barW, 2);
+      }
+    }
+
+    playBtn.addEventListener('click', () => isPlaying ? stopPlayback() : startPlayback());
+    container.querySelector('#synth-prev').addEventListener('click', () => {
+      trackIdx = (trackIdx - 1 + SYNTH_TRACKS.length) % SYNTH_TRACKS.length;
+      stepCount = 0;
+      renderTrackUI();
+      if (isPlaying) startPlayback();
+    });
+    container.querySelector('#synth-next').addEventListener('click', () => {
+      trackIdx = (trackIdx + 1) % SYNTH_TRACKS.length;
+      stepCount = 0;
+      renderTrackUI();
+      if (isPlaying) startPlayback();
+    });
+    volSlider.addEventListener('input', () => {
+      if (masterGain && audioCtx) {
+        masterGain.gain.setTargetAtTime(Number(volSlider.value) * 0.55, audioCtx.currentTime, 0.03);
+      }
+    });
+
+    winObj.onClose = () => {
+      stopPlayback();
+      if (rafId) cancelAnimationFrame(rafId);
+      if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    };
+
+    renderTrackUI();
+    drawVisualizer();
+  }
+
+  /* =========================================================
+     APP 5: NOTES (localStorage Persistence)
+     ========================================================= */
+  const NOTES_KEY = 'sequoia_os_notes_v1';
+  const DEFAULT_NOTES = [
+    {
+      id: 'n1',
+      title: 'Welcome to macOS Sequoia',
+      body: 'Everything on this desktop runs locally in one self-contained HTML file.\n\nTry opening Spotlight with Cmd/Ctrl + K, drawing in Paint Studio, or generating live synth beats in Synth Player.',
+      updatedAt: 'Today, 11:00 PM'
+    },
+    {
+      id: 'n2',
+      title: 'Terminal Cheat Sheet',
+      body: 'Useful Terminal commands:\n• neofetch — System specs & ASCII logo\n• ls -l — Detailed directory listing\n• cd Documents && cat roadmap.md\n• open paint — Launch Paint Studio',
+      updatedAt: 'Today, 10:45 PM'
+    },
+    {
+      id: 'n3',
+      title: 'Quick Scratchpad',
+      body: 'Ideas for the next build:\n- Add custom mesh wallpaper presets\n- Experiment with FM chords in Synth Player',
+      updatedAt: 'Yesterday'
+    }
+  ];
+
+  function loadNotes() {
+    const saved = SafeStorage.get(NOTES_KEY, null);
+    return Array.isArray(saved) && saved.length ? saved : DEFAULT_NOTES.map(n => ({ ...n }));
+  }
+
+  function mountNotes(container, winObj, options = {}) {
+    container.innerHTML = `
+      <div class="notes-app">
+        <aside class="notes-sidebar">
+          <div class="notes-side-top">
+            <input class="notes-search" id="notes-search" type="text" placeholder="Search notes...">
+            <button class="notes-new-btn" id="notes-new-btn" title="New Note">+</button>
+          </div>
+          <div class="notes-list" id="notes-list"></div>
+        </aside>
+        <section class="notes-editor">
+          <div class="notes-editor-bar">
+            <span id="notes-meta">Saved locally</span>
+            <button class="notes-del-btn" id="notes-del-btn">Delete</button>
+          </div>
+          <input class="notes-title-input" id="notes-title" type="text" placeholder="Note Title">
+          <textarea class="notes-body-input" id="notes-body" placeholder="Start typing..."></textarea>
+        </section>
+      </div>
+    `;
+
+    const searchEl = container.querySelector('#notes-search');
+    const listEl = container.querySelector('#notes-list');
+    const titleEl = container.querySelector('#notes-title');
+    const bodyEl = container.querySelector('#notes-body');
+    const metaEl = container.querySelector('#notes-meta');
+    const newBtn = container.querySelector('#notes-new-btn');
+    const delBtn = container.querySelector('#notes-del-btn');
+
+    let notes = loadNotes();
+    let activeId = options.selectNoteId || notes[0].id;
+
+    function persist() {
+      SafeStorage.set(NOTES_KEY, notes);
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+
+    function renderList() {
+      const q = searchEl.value.trim().toLowerCase();
+      const filtered = notes.filter(n =>
+        n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q)
+      );
+      listEl.innerHTML = filtered.map(n => `
+        <div class="note-item ${n.id === activeId ? 'active' : ''}" data-id="${n.id}">
+          <div class="note-item-title">${escapeHtml(n.title || 'Untitled Note')}</div>
+          <div class="note-item-preview">${escapeHtml((n.body || 'No additional text').split('\n')[0])}</div>
+        </div>
+      `).join('');
+
+      listEl.querySelectorAll('.note-item').forEach(el => {
+        el.addEventListener('click', () => {
+          activeId = el.dataset.id;
+          renderAll();
+        });
+      });
+    }
+
+    function renderEditor() {
+      const note = notes.find(n => n.id === activeId);
+      if (!note) {
+        titleEl.value = '';
+        bodyEl.value = '';
+        titleEl.disabled = true;
+        bodyEl.disabled = true;
+        metaEl.textContent = 'No note selected';
+        return;
+      }
+      titleEl.disabled = false;
+      bodyEl.disabled = false;
+      titleEl.value = note.title;
+      bodyEl.value = note.body;
+      const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
+      metaEl.textContent = `${note.updatedAt} · ${words} words · Saved`;
+    }
+
+    function renderAll() {
+      renderList();
+      renderEditor();
+    }
+
+    function onEdit() {
+      const note = notes.find(n => n.id === activeId);
+      if (!note) return;
+      note.title = titleEl.value;
+      note.body = bodyEl.value;
+      note.updatedAt = 'Edited ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      persist();
+      renderList();
+      const words = note.body.trim() ? note.body.trim().split(/\s+/).length : 0;
+      metaEl.textContent = `${note.updatedAt} · ${words} words · Saved`;
+    }
+
+    titleEl.addEventListener('input', onEdit);
+    bodyEl.addEventListener('input', onEdit);
+    searchEl.addEventListener('input', renderList);
+
+    newBtn.addEventListener('click', () => {
+      const newNote = {
+        id: 'n_' + Date.now(),
+        title: 'Untitled Note',
+        body: '',
+        updatedAt: 'Just now'
+      };
+      notes.unshift(newNote);
+      activeId = newNote.id;
+      persist();
+      renderAll();
+      titleEl.focus();
+      titleEl.select();
+    });
+
+    delBtn.addEventListener('click', () => {
+      if (!notes.length) return;
+      notes = notes.filter(n => n.id !== activeId);
+      if (!notes.length) {
+        notes.push({ id: 'n_' + Date.now(), title: 'New Note', body: '', updatedAt: 'Just now' });
+      }
+      activeId = notes[0].id;
+      persist();
+      renderAll();
+    });
+
+    winObj.selectNote = (id) => {
+      if (notes.some(n => n.id === id)) {
+        activeId = id;
+        renderAll();
+      }
+    };
+
+    renderAll();
+  }
+
+  /* =========================================================
+     DOCK SMOOTH HOVER MAGNIFICATION
+     ========================================================= */
+  const dockEl = document.getElementById('dock');
+  const dockItems = Array.from(dockEl.querySelectorAll('.dock-item'));
+
+  dockEl.addEventListener('mousemove', (e) => {
+    const mouseX = e.clientX;
+    dockItems.forEach(item => {
+      const rect = item.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const dist = Math.abs(mouseX - centerX);
+      const maxDist = 115;
+      if (dist < maxDist) {
+        const ratio = Math.cos((dist / maxDist) * (Math.PI / 2));
+        const scale = 1 + ratio * 0.52;
+        const lift = ratio * 10;
+        item.style.transform = `translateY(${-lift.toFixed(1)}px) scale(${scale.toFixed(3)})`;
+        item.style.margin = `0 ${(ratio * 8).toFixed(1)}px`;
+      } else {
+        item.style.transform = 'translateY(0) scale(1)';
+        item.style.margin = '0';
+      }
+    });
+  });
+
+  dockEl.addEventListener('mouseleave', () => {
+    dockItems.forEach(item => {
+      item.style.transform = 'translateY(0) scale(1)';
+      item.style.margin = '0';
+    });
+  });
+
+  dockItems.forEach(item => {
+    const appId = item.dataset.app;
+    if (appId) {
+      item.addEventListener('click', () => {
+        const win = openWindows.get(appId);
+        if (win && win.minimized) {
+          toggleMinimize(appId);
+        } else if (win && focusedAppId === appId) {
+          toggleMinimize(appId);
+        } else {
+          openApp(appId);
+        }
+      });
+    }
+  });
+
+  document.getElementById('dock-spotlight-btn').addEventListener('click', () => openSpotlight());
+
+  /* =========================================================
+     SPOTLIGHT SEARCH (Cmd/Ctrl + K)
+     ========================================================= */
+  const spotlightOverlay = document.getElementById('spotlight-overlay');
+  const spotlightInput = document.getElementById('spotlight-input');
+  const spotlightResults = document.getElementById('spotlight-results');
+  let spotItems = [];
+  let spotActiveIdx = 0;
+
+  function evalQuickMath(q) {
+    const cleaned = q.trim();
+    if (!/^[0-9+\-*/().\s]+$/.test(cleaned) || !/[+\-*/]/.test(cleaned)) return null;
+    try {
+      const val = Function('"use strict"; return (' + cleaned + ')')();
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        return parseFloat(val.toPrecision(12));
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }
+
+  function renderSpotlightResults() {
+    const q = spotlightInput.value.trim().toLowerCase();
+    spotItems = [];
+
+    const mathVal = evalQuickMath(spotlightInput.value);
+    if (mathVal !== null) {
+      spotItems.push({
+        icon: '＝',
+        title: `${spotlightInput.value.trim()} = ${mathVal}`,
+        sub: 'Calculator Quick Result',
+        run: () => openApp('calculator')
+      });
+    }
+
+    const apps = [
+      { id: 'terminal',   icon: '⌘', title: 'Terminal',     sub: 'Command-line shell & neofetch' },
+      { id: 'calculator', icon: '÷', title: 'Calculator',   sub: 'Full arithmetic + keyboard' },
+      { id: 'paint',      icon: '✎', title: 'Paint Studio', sub: 'HTML5 Canvas drawing & PNG export' },
+      { id: 'synth',      icon: '♫', title: 'Synth Player', sub: 'Web Audio API beats & visualizer' },
+      { id: 'notes',      icon: '▤', title: 'Notes',        sub: 'LocalStorage persistent notes' }
+    ];
+    apps.forEach(a => {
+      if (!q || a.title.toLowerCase().includes(q) || a.sub.toLowerCase().includes(q)) {
+        spotItems.push({ icon: a.icon, title: a.title, sub: a.sub, run: () => openApp(a.id) });
+      }
+    });
+
+    const savedNotes = loadNotes();
+    savedNotes.forEach(n => {
+      if (q && (n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q))) {
+        spotItems.push({
+          icon: '📝',
+          title: n.title || 'Untitled Note',
+          sub: 'Note · ' + n.updatedAt,
+          run: () => openApp('notes', null, { selectNoteId: n.id })
+        });
+      }
+    });
+
+    if (!q || 'wallpaper'.includes(q) || 'theme'.includes(q)) {
+      spotItems.push({
+        icon: '◐',
+        title: 'Switch Dynamic Wallpaper',
+        sub: 'Cycle Sequoia Sunrise, Dusk & Midnight Aurora',
+        run: () => cycleWallpaper()
+      });
+    }
+
+    spotActiveIdx = Math.min(spotActiveIdx, Math.max(0, spotItems.length - 1));
+    if (!spotItems.length) {
+      spotlightResults.innerHTML = `<div style="padding:18px;text-align:center;color:rgba(255,255,255,0.5);">No results for "${spotlightInput.value}"</div>`;
+      return;
+    }
+
+    spotlightResults.innerHTML = spotItems.map((it, idx) => `
+      <div class="spotlight-item ${idx === spotActiveIdx ? 'active' : ''}" data-idx="${idx}">
+        <div class="spotlight-item-left">
+          <div class="spotlight-item-icon">${it.icon}</div>
+          <div>
+            <div class="spotlight-item-title">${it.title}</div>
+            <div class="spotlight-item-sub">${it.sub}</div>
+          </div>
+        </div>
+        <span style="font-size:11px;opacity:0.65;">↵</span>
+      </div>
+    `).join('');
+
+    spotlightResults.querySelectorAll('.spotlight-item').forEach(row => {
+      row.addEventListener('click', () => {
+        const idx = Number(row.dataset.idx);
+        closeSpotlight();
+        if (spotItems[idx]) spotItems[idx].run();
+      });
+    });
+  }
+
+  function openSpotlight() {
+    closeAllMenus();
+    spotlightOverlay.classList.add('open');
+    spotlightInput.value = '';
+    spotActiveIdx = 0;
+    renderSpotlightResults();
+    setTimeout(() => spotlightInput.focus(), 10);
+  }
+
+  function closeSpotlight() {
+    spotlightOverlay.classList.remove('open');
+  }
+
+  spotlightInput.addEventListener('input', () => { spotActiveIdx = 0; renderSpotlightResults(); });
+  spotlightInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeSpotlight(); }
+    else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (spotItems.length) { spotActiveIdx = (spotActiveIdx + 1) % spotItems.length; renderSpotlightResults(); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (spotItems.length) { spotActiveIdx = (spotActiveIdx - 1 + spotItems.length) % spotItems.length; renderSpotlightResults(); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const hit = spotItems[spotActiveIdx];
+      closeSpotlight();
+      if (hit) hit.run();
+    }
+  });
+  spotlightOverlay.addEventListener('click', (e) => {
+    if (e.target === spotlightOverlay) closeSpotlight();
+  });
+
+  /* =========================================================
+     MENU BAR, WALLPAPER, DESKTOP ICONS & SYSTEM ACTIONS
+     ========================================================= */
+  function setWallpaper(theme) {
+    const idx = WALLPAPER_THEMES.indexOf(theme);
+    if (idx >= 0) currentWallpaperIdx = idx;
+    document.getElementById('desktop-wallpaper').dataset.theme = WALLPAPER_THEMES[currentWallpaperIdx];
+  }
+
+  function cycleWallpaper() {
+    currentWallpaperIdx = (currentWallpaperIdx + 1) % WALLPAPER_THEMES.length;
+    setWallpaper(WALLPAPER_THEMES[currentWallpaperIdx]);
+  }
+
+  function tileInitialWindows(silentBoot = false) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight - 28 - 96;
+    const gap = 16;
+
+    if (vw >= 900) {
+      const termW = Math.min(580, Math.floor(vw * 0.52));
+      const calcW = 276;
+      const totalW = termW + gap + calcW;
+      const startX = Math.max(18, Math.floor((vw - totalW) / 2) - 36);
+      const startY = Math.max(20, Math.floor((vh - 404) / 2));
+      openApp('terminal', { x: startX, y: startY, w: termW, h: 404 }, { initialCmd: 'neofetch', silentBoot });
+      openApp('calculator', { x: startX + termW + gap, y: startY, w: calcW, h: 404 }, { silentBoot });
+      focusWindow('terminal');
+    } else {
+      const termW = Math.max(320, vw - 28);
+      openApp('terminal', { x: 14, y: 14, w: termW, h: Math.min(340, Math.floor(vh * 0.56)) }, { initialCmd: 'neofetch', silentBoot });
+      openApp('calculator', { x: Math.max(14, vw - 284), y: Math.min(180, Math.floor(vh * 0.36)), w: 266, h: 376 }, { silentBoot });
+      focusWindow('terminal');
+    }
+  }
+
+  function triggerBootSplash() {
+    const bootEl = document.getElementById('boot-overlay');
+    const bar = document.getElementById('boot-bar-fill');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+    bootEl.classList.add('open');
+    requestAnimationFrame(() => {
+      bar.style.transition = 'width 0.9s cubic-bezier(0.22, 1, 0.36, 1)';
+      bar.style.width = '100%';
+    });
+    setTimeout(() => {
+      bootEl.classList.remove('open');
+    }, 1050);
+  }
+
+  function closeAllMenus() {
+    document.querySelectorAll('#menubar .menu-item.open').forEach(m => m.classList.remove('open'));
+    document.getElementById('context-menu').classList.remove('open');
+  }
+
+  document.querySelectorAll('#menubar .menu-item[data-menu]').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.dropdown-btn')) return;
+      e.stopPropagation();
+      const wasOpen = item.classList.contains('open');
+      closeAllMenus();
+      if (!wasOpen) item.classList.add('open');
+    });
+  });
+
+  document.getElementById('menubar-spotlight-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openSpotlight();
+  });
+
+  function runSystemAction(action) {
+    closeAllMenus();
+    switch (action) {
+      case 'about': document.getElementById('about-modal').classList.add('open'); break;
+      case 'wallpaper-sunrise': setWallpaper('sunrise'); break;
+      case 'wallpaper-dusk': setWallpaper('dusk'); break;
+      case 'wallpaper-aurora': setWallpaper('aurora'); break;
+      case 'cycle-wallpaper': cycleWallpaper(); break;
+      case 'sleep': document.getElementById('sleep-overlay').classList.add('open'); break;
+      case 'restart': triggerBootSplash(); break;
+      case 'open-terminal': openApp('terminal'); break;
+      case 'open-notes':
+      case 'new-note': openApp('notes'); break;
+      case 'open-paint': openApp('paint'); break;
+      case 'close-active': if (focusedAppId) closeWindow(focusedAppId); break;
+      case 'minimize-active': if (focusedAppId) toggleMinimize(focusedAppId); break;
+      case 'maximize-active': if (focusedAppId) toggleMaximize(focusedAppId); break;
+      case 'tile-side': tileInitialWindows(false); break;
+      case 'open-all':
+        openApp('terminal'); openApp('calculator'); openApp('paint'); openApp('synth'); openApp('notes');
+        break;
+      case 'spotlight': openSpotlight(); break;
+      case 'toggle-wifi': {
+        wifiEnabled = !wifiEnabled;
+        document.getElementById('wifi-status-dot').classList.toggle('off', !wifiEnabled);
+        document.getElementById('wifi-status-text').textContent = wifiEnabled ? 'Sequoia-5G' : 'Wi-Fi Off';
+        document.getElementById('wifi-toggle-btn').textContent = wifiEnabled ? 'Turn Wi-Fi Off' : 'Turn Wi-Fi On';
+        document.getElementById('menu-wifi').style.opacity = wifiEnabled ? '1' : '0.4';
+        break;
+      }
+    }
+  }
+
+  document.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      runSystemAction(btn.dataset.action);
+    });
+  });
+
+  document.querySelectorAll('[data-ctx]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      runSystemAction(btn.dataset.ctx);
+    });
+  });
+
+  // Desktop icons selection & double-click launch
+  document.querySelectorAll('.desktop-icon').forEach(icon => {
+    icon.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.desktop-icon').forEach(i => i.classList.remove('selected'));
+      icon.classList.add('selected');
+    });
+    icon.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      openApp(icon.dataset.launch, null, icon.dataset.cmd ? { runCmd: icon.dataset.cmd } : {});
+    });
+  });
+
+  // Desktop right-click context menu
+  document.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.mac-window') || e.target.closest('#menubar') || e.target.closest('#dock')) return;
+    e.preventDefault();
+    closeAllMenus();
+    const cm = document.getElementById('context-menu');
+    cm.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
+    cm.style.top = Math.min(e.clientY, window.innerHeight - 190) + 'px';
+    cm.classList.add('open');
+  });
+
+  document.addEventListener('click', () => {
+    closeAllMenus();
+    document.querySelectorAll('.desktop-icon').forEach(i => i.classList.remove('selected'));
+  });
+
+  // About modal & sleep wake
+  document.getElementById('about-close-btn').addEventListener('click', () => {
+    document.getElementById('about-modal').classList.remove('open');
+  });
+  document.getElementById('about-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'about-modal') e.target.classList.remove('open');
+  });
+
+  const sleepEl = document.getElementById('sleep-overlay');
+  const wakeUp = () => sleepEl.classList.remove('open');
+  sleepEl.addEventListener('click', wakeUp);
+
+  // Global keyboard shortcuts
+  window.addEventListener('keydown', (e) => {
+    if (sleepEl.classList.contains('open')) { wakeUp(); return; }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (spotlightOverlay.classList.contains('open')) closeSpotlight();
+      else openSpotlight();
+    }
+  });
+
+  // Live Clock
+  function updateClock() {
+    const now = new Date();
+    const dayStr = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    document.getElementById('menubar-clock').textContent = `${dayStr}  ${timeStr}`;
+    document.getElementById('sleep-clock').textContent = timeStr.replace(/\s?[AP]M$/, '');
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  // Boot immediately with Terminal (neofetch) + Calculator side-by-side at frame 0!
+  tileInitialWindows(true);
+})();
+</script>
+</body>
+</html>
