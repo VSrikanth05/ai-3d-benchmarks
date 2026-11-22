@@ -6,74 +6,283 @@
   <title>AI 3D Benchmarks</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
-    body {
+    html, body {
       margin: 0;
-      min-height: 100vh;
-      background: #07090d;
-      color: #edf1f7;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000000;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #eef2f8;
+    }
+
+    #stage {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      border: 0;
+      display: block;
+      background: #000000;
+    }
+
+    /* Minimal floating corner switcher */
+    #hud {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      opacity: 0.42;
+      transition: opacity 0.25s ease;
+      user-select: none;
+    }
+    #hud:hover,
+    #hud.open {
+      opacity: 1;
+    }
+
+    #drawer {
+      display: none;
+      width: min(320px, calc(100vw - 32px));
+      max-height: 60vh;
+      overflow-y: auto;
+      padding: 8px;
+      border-radius: 14px;
+      background: rgba(10, 12, 18, 0.84);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.65);
+    }
+    #hud.open #drawer {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .scene-item {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      padding: 10px 12px;
+      color: #e6ecf5;
+      cursor: pointer;
+      transition: background 0.16s ease, border-color 0.16s ease;
+    }
+    .scene-item:hover {
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .scene-item.active {
+      background: rgba(240, 184, 73, 0.14);
+      border-color: rgba(240, 184, 73, 0.42);
+    }
+    .scene-title {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .scene-desc {
+      margin-top: 3px;
+      font-size: 11.5px;
+      color: #9ba6b8;
+      line-height: 1.35;
+    }
+
+    #bar {
       display: flex;
       align-items: center;
-      justify-content: center;
-      padding: 32px;
+      gap: 6px;
+      padding: 6px 8px 6px 12px;
+      border-radius: 999px;
+      background: rgba(10, 12, 18, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
     }
-    main {
-      max-width: 680px;
-      width: 100%;
+
+    #current-label {
+      font-size: 12.5px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      color: #edf2fa;
+      max-width: 210px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      background: none;
+      border: 0;
+      padding: 2px 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
-    h1 {
-      margin: 0 0 8px;
-      font-size: 1.9rem;
-      letter-spacing: -0.02em;
-    }
-    p.sub {
-      margin: 0 0 28px;
-      color: #9aa4b4;
-      line-height: 1.5;
-    }
-    a.card {
-      display: block;
-      padding: 22px 24px;
-      border-radius: 14px;
-      background: #10141d;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: inherit;
-      text-decoration: none;
-      transition: border-color 0.2s, transform 0.2s, background 0.2s;
-    }
-    a.card:hover {
-      border-color: rgba(236, 178, 66, 0.55);
-      background: #141a26;
-      transform: translateY(-2px);
-    }
-    .card h2 {
-      margin: 0 0 6px;
-      font-size: 1.2rem;
-    }
-    .card p {
-      margin: 0;
-      color: #a6b0c0;
-      font-size: 0.95rem;
-      line-height: 1.5;
-    }
-    .cta {
-      display: inline-block;
-      margin-top: 12px;
-      font-size: 0.88rem;
+
+    .badge {
+      font-size: 10.5px;
       font-weight: 600;
-      color: #f0b849;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #cbd5e1;
+    }
+
+    .icon-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: rgba(255, 255, 255, 0.06);
+      color: #dce4f0;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      text-decoration: none;
+      transition: background 0.16s ease, border-color 0.16s ease;
+    }
+    .icon-btn:hover {
+      background: rgba(255, 255, 255, 0.16);
+      border-color: rgba(255, 255, 255, 0.22);
     }
   </style>
 </head>
 <body>
-  <main>
-    <h1>AI 3D Benchmarks</h1>
-    <p class="sub">Single-file procedural Three.js scenes running at 60 FPS directly in the browser with no external assets.</p>
-    <a class="card" href="./chandrayaan-3-landing.html">
-      <h2>Chandrayaan-3 Lunar South Pole Landing</h2>
-      <p>25-second cinematic sequence of Vikram descending over cratered lunar regolith, soft touchdown with leg compression, ramp unfolding, and Pragyan rolling out leaving wheel tracks.</p>
-      <span class="cta">Launch 3D Scene &rarr;</span>
-    </a>
-  </main>
+  <iframe id="stage" allow="fullscreen" allowfullscreen title="3D Scene"></iframe>
+
+  <div id="hud">
+    <div id="drawer" role="menu" aria-label="3D Scenes"></div>
+    <div id="bar">
+      <button id="current-label" type="button" title="Switch 3D scene">
+        <span id="current-title">Loading...</span>
+        <span id="scene-count" class="badge" style="display:none"></span>
+      </button>
+      <button id="prev-btn" class="icon-btn" type="button" title="Previous scene" aria-label="Previous scene" style="display:none">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <button id="next-btn" class="icon-btn" type="button" title="Next scene" aria-label="Next scene" style="display:none">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <button id="replay-btn" class="icon-btn" type="button" title="Replay scene" aria-label="Replay scene">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+      </button>
+      <a id="direct-link" class="icon-btn" href="#" title="Open standalone HTML (no overlay)" aria-label="Open standalone HTML">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </a>
+    </div>
+  </div>
+
+  <script>
+    const stage = document.getElementById('stage');
+    const hud = document.getElementById('hud');
+    const drawer = document.getElementById('drawer');
+    const currentLabel = document.getElementById('current-label');
+    const currentTitle = document.getElementById('current-title');
+    const sceneCount = document.getElementById('scene-count');
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    const replayBtn = document.getElementById('replay-btn');
+    const directLink = document.getElementById('direct-link');
+
+    let scenes = [];
+    let activeIdx = 0;
+
+    function getRequestedId() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('scene')) return params.get('scene');
+      if (window.location.hash.length > 1) return window.location.hash.slice(1);
+      return null;
+    }
+
+    function renderDrawer() {
+      drawer.innerHTML = '';
+      scenes.forEach((sc, idx) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'scene-item' + (idx === activeIdx ? ' active' : '');
+        btn.innerHTML = `
+          <div class="scene-title">${sc.title}</div>
+          ${sc.description ? `<div class="scene-desc">${sc.description}</div>` : ''}
+        `;
+        btn.addEventListener('click', () => {
+          loadScene(idx, true);
+          hud.classList.remove('open');
+        });
+        drawer.appendChild(btn);
+      });
+    }
+
+    function loadScene(idx, updateHistory) {
+      if (!scenes.length) return;
+      activeIdx = (idx + scenes.length) % scenes.length;
+      const sc = scenes[activeIdx];
+
+      stage.src = sc.file;
+      currentTitle.textContent = sc.title;
+      directLink.href = sc.file;
+      document.title = `${sc.title} — AI 3D Benchmarks`;
+
+      if (updateHistory) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('scene', sc.id);
+        url.hash = '';
+        history.replaceState(null, '', url.toString());
+      }
+      renderDrawer();
+    }
+
+    currentLabel.addEventListener('click', () => {
+      hud.classList.toggle('open');
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!hud.contains(e.target)) hud.classList.remove('open');
+    });
+
+    prevBtn.addEventListener('click', () => loadScene(activeIdx - 1, true));
+    nextBtn.addEventListener('click', () => loadScene(activeIdx + 1, true));
+    replayBtn.addEventListener('click', () => {
+      const sc = scenes[activeIdx];
+      if (!sc) return;
+      stage.src = 'about:blank';
+      requestAnimationFrame(() => { stage.src = sc.file; });
+    });
+
+    async function init() {
+      try {
+        const res = await fetch('./scenes.json', { cache: 'no-cache' });
+        scenes = await res.json();
+      } catch {
+        scenes = [{
+          id: 'chandrayaan-3-landing',
+          title: 'Chandrayaan-3 Landing',
+          file: 'chandrayaan-3-landing.html',
+          description: 'Procedural ISRO Chandrayaan-3 lunar south pole landing.'
+        }];
+      }
+
+      if (scenes.length > 1) {
+        sceneCount.textContent = scenes.length;
+        sceneCount.style.display = 'inline-block';
+        prevBtn.style.display = 'inline-flex';
+        nextBtn.style.display = 'inline-flex';
+      }
+
+      const reqId = getRequestedId();
+      const found = reqId ? scenes.findIndex(s => s.id === reqId || s.file === reqId) : -1;
+      loadScene(found >= 0 ? found : 0, false);
+    }
+
+    init();
+  </script>
 </body>
 </html>
