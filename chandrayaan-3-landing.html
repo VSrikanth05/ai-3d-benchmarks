@@ -1,0 +1,3391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chandrayaan-3 Lunar South Pole Landing</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000000;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ============================================================================
+// 1. DETERMINISTIC PRNG, NOISE & MATH UTILITIES
+// ============================================================================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+const smootherstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * t * (t * (t * 6 - 15) + 10);
+};
+
+// Fast 2D hash & value noise
+function hash2(ix, iy) {
+  const n = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+  return n - Math.floor(n);
+}
+
+function noise2D(x, y) {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy);
+  const b = hash2(ix + 1, iy);
+  const c = hash2(ix, iy + 1);
+  const d = hash2(ix + 1, iy + 1);
+  return lerp(lerp(a, b, ux), lerp(c, d, ux), uy);
+}
+
+function fbm2D(x, y, octaves = 5) {
+  let sum = 0;
+  let amp = 0.5;
+  let freq = 1.0;
+  let norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += amp * noise2D(x * freq, y * freq);
+    norm += amp;
+    freq *= 2.03;
+    amp *= 0.5;
+  }
+  return sum / norm;
+}
+
+function ridged2D(x, y, octaves = 4) {
+  let sum = 0;
+  let amp = 0.5;
+  let freq = 1.0;
+  let norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    const n = 1.0 - Math.abs(noise2D(x * freq, y * freq) * 2.0 - 1.0);
+    sum += amp * n * n;
+    norm += amp;
+    freq *= 2.1;
+    amp *= 0.48;
+  }
+  return sum / norm;
+}
+
+// ============================================================================
+// 2. RENDERER, SCENE, CAMERA & LIGHTING CONSTANTS
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance',
+  stencil: false
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.08, 600);
+
+// Low-angle South Pole Sun (~11.8 deg elevation, raking from left-front)
+const SUN_DIR = new THREE.Vector3(-0.845, 0.205, 0.494).normalize();
+// Earth position in upper-left black sky (clearly visible in orbit and final hero shot)
+const EARTH_DIR = new THREE.Vector3(-0.55, 0.245, -0.798).normalize();
+const EARTH_DIST = 165;
+
+const LUNAR_GRAVITY = 1.62; // m/s^2
+
+// ============================================================================
+// 3. PROCEDURAL SPACE HDR ENVIRONMENT MAP (PMREM)
+// ============================================================================
+function createLunarSpaceEnvironment() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  const envScene = new THREE.Scene();
+  envScene.background = new THREE.Color(0x010102);
+
+  // Blazing hard solar disc in environment map for crisp metallic foil speculars
+  const sunSphere = new THREE.Mesh(
+    new THREE.SphereGeometry(2.6, 24, 24),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(42, 40.5, 38) })
+  );
+  sunSphere.position.copy(SUN_DIR).multiplyScalar(40);
+  envScene.add(sunSphere);
+
+  // Subtle solar corona halo for wider foil grazing highlights
+  const sunGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(6.8, 20, 20),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(4.5, 4.3, 4.0),
+      transparent: true,
+      opacity: 0.35
+    })
+  );
+  sunGlow.position.copy(SUN_DIR).multiplyScalar(42);
+  envScene.add(sunGlow);
+
+  // Small blue Earth light source in reflection map
+  const earthEnv = new THREE.Mesh(
+    new THREE.SphereGeometry(3.2, 16, 16),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.55, 0.95, 1.9) })
+  );
+  earthEnv.position.copy(EARTH_DIR).multiplyScalar(38);
+  envScene.add(earthEnv);
+
+  // Sunlit dusty lunar ground bounce hemisphere (strictly below horizon)
+  const groundBounce = new THREE.Mesh(
+    new THREE.SphereGeometry(35, 32, 16, 0, Math.PI * 2, Math.PI * 0.52, Math.PI * 0.48),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(0.24, 0.24, 0.25),
+      side: THREE.BackSide
+    })
+  );
+  envScene.add(groundBounce);
+
+  // Brighter sunlit ground patch beneath the lander for realistic bottom-up foil bounce
+  const nadirPatch = new THREE.Mesh(
+    new THREE.CircleGeometry(20, 24),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.45, 0.45, 0.47) })
+  );
+  nadirPatch.rotation.x = -Math.PI / 2;
+  nadirPatch.position.y = -18;
+  envScene.add(nadirPatch);
+
+  const rt = pmrem.fromScene(envScene, 0.015);
+  pmrem.dispose();
+  return rt.texture;
+}
+
+scene.environment = createLunarSpaceEnvironment();
+
+// ============================================================================
+// 4. LIGHTING (HARD SOUTH-POLE SUN + SUBTLE BOUNCE + EARTHSHINE)
+// ============================================================================
+const sunLight = new THREE.DirectionalLight(0xfffcf6, 4.4);
+sunLight.position.copy(SUN_DIR).multiplyScalar(48);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(4096, 4096);
+sunLight.shadow.camera.near = 14;
+sunLight.shadow.camera.far = 92;
+const shadowBounds = 22;
+sunLight.shadow.camera.left = -shadowBounds;
+sunLight.shadow.camera.right = shadowBounds;
+sunLight.shadow.camera.top = shadowBounds;
+sunLight.shadow.camera.bottom = -shadowBounds;
+sunLight.shadow.bias = -0.0005;
+sunLight.shadow.normalBias = 0.045;
+scene.add(sunLight);
+scene.add(sunLight.target);
+sunLight.target.position.set(0, 0.4, 2.0);
+
+// Faint cold blue earthshine kissing shadowed metal rims (keeps shadows near-black)
+const earthLight = new THREE.DirectionalLight(0x6da6ff, 0.075);
+earthLight.position.copy(EARTH_DIR).multiplyScalar(30);
+scene.add(earthLight);
+
+// Extremely subtle regolith ground-bounce hemisphere (black sky, very faint dusty floor)
+const bounceLight = new THREE.HemisphereLight(0x000000, 0x2a2c30, 0.22);
+scene.add(bounceLight);
+
+// Dynamic thruster plume ground-illumination light (active during descent only)
+const thrusterLight = new THREE.PointLight(0xffb466, 0.0, 14, 1.8);
+thrusterLight.position.set(0, 1.5, 0);
+scene.add(thrusterLight);
+
+// ============================================================================
+// 5. PROCEDURAL PBR TEXTURE GENERATORS
+// ============================================================================
+function heightFieldToNormalCanvas(heightData, size, strength) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+  const idx = (x, y) => ((y + size) % size) * size + ((x + size) % size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const tl = heightData[idx(x - 1, y - 1)];
+      const t  = heightData[idx(x,     y - 1)];
+      const tr = heightData[idx(x + 1, y - 1)];
+      const l  = heightData[idx(x - 1, y    )];
+      const r  = heightData[idx(x + 1, y    )];
+      const bl = heightData[idx(x - 1, y + 1)];
+      const b  = heightData[idx(x,     y + 1)];
+      const br = heightData[idx(x + 1, y + 1)];
+
+      const dx = (tr + 2 * r + br - tl - 2 * l - bl) * strength;
+      const dy = (bl + 2 * b + br - tl - 2 * t - tr) * strength;
+      const dz = 1.0;
+      const invLen = 1.0 / Math.hypot(dx, dy, dz);
+
+      const p = (y * size + x) * 4;
+      d[p]     = clamp(Math.round((-dx * invLen * 0.5 + 0.5) * 255), 0, 255);
+      d[p + 1] = clamp(Math.round((-dy * invLen * 0.5 + 0.5) * 255), 0, 255);
+      d[p + 2] = clamp(Math.round(( dz * invLen * 0.5 + 0.5) * 255), 0, 255);
+      d[p + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+// Crinkled Kapton Gold / Silver Mylar MLI Foil PBR Texture Set
+function createFoilTextureSet(variant = 'gold', seed = 101) {
+  const size = 512;
+  const rand = mulberry32(seed);
+  const height = new Float32Array(size * size);
+
+  // Generate Voronoi-style crumpled polygonal facets for authentic MLI crinkles
+  const numPts = variant === 'gold' ? 72 : 96;
+  const pts = [];
+  for (let i = 0; i < numPts; i++) {
+    pts.push({
+      x: rand() * size,
+      y: rand() * size,
+      tiltX: (rand() - 0.5) * 2.2,
+      tiltY: (rand() - 0.5) * 2.2,
+      base: rand() * 0.45
+    });
+  }
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let d1 = 1e9, d2 = 1e9;
+      let nearest = pts[0];
+      let ndx = 0, ndy = 0;
+      for (let i = 0; i < numPts; i++) {
+        let dx = x - pts[i].x;
+        let dy = y - pts[i].y;
+        if (dx > size * 0.5) dx -= size;
+        if (dx < -size * 0.5) dx += size;
+        if (dy > size * 0.5) dy -= size;
+        if (dy < -size * 0.5) dy += size;
+        const dist = dx * dx + dy * dy;
+        if (dist < d1) {
+          d2 = d1;
+          d1 = dist;
+          nearest = pts[i];
+          ndx = dx;
+          ndy = dy;
+        } else if (dist < d2) {
+          d2 = dist;
+        }
+      }
+      const edge = Math.sqrt(d2) - Math.sqrt(d1);
+      const crease = smoothstep(0, 7.5, edge);
+      const facetPlane = nearest.base + (ndx * nearest.tiltX + ndy * nearest.tiltY) / size * 3.5;
+
+      // Secondary micro-crinkles + quilted thermal blanket seam grid
+      const u = x / size;
+      const v = y / size;
+      const micro = ridged2D(u * 14 + seed, v * 14 + seed, 3) * 0.24;
+      const fine = noise2D(u * 42 + 7, v * 42 + 13) * 0.08;
+
+      // Thermal blanket quilt stitch lines (every 1/4 tile)
+      const qx = Math.abs(((u * 4) % 1) - 0.5);
+      const qy = Math.abs(((v * 4) % 1) - 0.5);
+      const quiltPinch = smoothstep(0.46, 0.5, Math.max(qx, qy)) * 0.22;
+
+      height[y * size + x] = (facetPlane * 0.55 + crease * 0.35 + micro + fine) - quiltPinch;
+    }
+  }
+
+  const normalCanvas = heightFieldToNormalCanvas(height, size, 3.6);
+  const albedoCanvas = document.createElement('canvas');
+  albedoCanvas.width = size;
+  albedoCanvas.height = size;
+  const actx = albedoCanvas.getContext('2d');
+  const aimg = actx.createImageData(size, size);
+
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = size;
+  roughCanvas.height = size;
+  const rctx = roughCanvas.getContext('2d');
+  const rimg = rctx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const h = height[y * size + x];
+      const u = x / size;
+      const v = y / size;
+      const tonal = fbm2D(u * 6 + seed * 0.1, v * 6 + 3.1, 3);
+      const p = (y * size + x) * 4;
+
+      // Seam tape lines
+      const seamX = Math.abs(((u * 4) % 1) - 0.5) > 0.484;
+      const seamY = Math.abs(((v * 4) % 1) - 0.5) > 0.484;
+      const isSeam = seamX || seamY;
+
+      if (variant === 'gold') {
+        // Rich aerospace Kapton gold-amber foil
+        const shade = clamp(0.84 + h * 0.22 + (tonal - 0.5) * 0.16, 0.62, 1.15);
+        let r = 228 * shade;
+        let g = 160 * shade;
+        let b = 36 * shade;
+        if (isSeam) {
+          r *= 0.80;
+          g *= 0.72;
+          b *= 0.55;
+        }
+        aimg.data[p]     = clamp(Math.round(r), 0, 255);
+        aimg.data[p + 1] = clamp(Math.round(g), 0, 255);
+        aimg.data[p + 2] = clamp(Math.round(b), 0, 255);
+        aimg.data[p + 3] = 255;
+
+        const roughVal = clamp(0.24 + (1.0 - clamp(h, 0, 1)) * 0.18 + (isSeam ? 0.14 : 0), 0.18, 0.54);
+        const rv = Math.round(roughVal * 255);
+        rimg.data[p] = rimg.data[p + 1] = rimg.data[p + 2] = rv;
+        rimg.data[p + 3] = 255;
+      } else {
+        // Silver aluminized Mylar MLI blanket
+        const shade = clamp(0.86 + h * 0.18 + (tonal - 0.5) * 0.12, 0.68, 1.12);
+        let r = 208 * shade;
+        let g = 213 * shade;
+        let b = 220 * shade;
+        if (isSeam) {
+          r *= 0.82;
+          g *= 0.83;
+          b *= 0.85;
+        }
+        aimg.data[p]     = clamp(Math.round(r), 0, 255);
+        aimg.data[p + 1] = clamp(Math.round(g), 0, 255);
+        aimg.data[p + 2] = clamp(Math.round(b), 0, 255);
+        aimg.data[p + 3] = 255;
+
+        const roughVal = clamp(0.20 + (1.0 - clamp(h, 0, 1)) * 0.16 + (isSeam ? 0.12 : 0), 0.16, 0.48);
+        const rv = Math.round(roughVal * 255);
+        rimg.data[p] = rimg.data[p + 1] = rimg.data[p + 2] = rv;
+        rimg.data[p + 3] = 255;
+      }
+    }
+  }
+  actx.putImageData(aimg, 0, 0);
+  rctx.putImageData(rimg, 0, 0);
+
+  const map = new THREE.CanvasTexture(albedoCanvas);
+  const normalMap = new THREE.CanvasTexture(normalCanvas);
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  [map, normalMap, roughnessMap].forEach(t => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  });
+  return { map, normalMap, roughnessMap };
+}
+
+// Brushed Aerospace Aluminum Texture Set
+function createBrushedAluminumTextures() {
+  const size = 256;
+  const rand = mulberry32(404);
+  const albedo = document.createElement('canvas');
+  albedo.width = albedo.height = size;
+  const actx = albedo.getContext('2d');
+  actx.fillStyle = '#bcc2ca';
+  actx.fillRect(0, 0, size, size);
+
+  const rough = document.createElement('canvas');
+  rough.width = rough.height = size;
+  const rctx = rough.getContext('2d');
+  rctx.fillStyle = '#5c5c5c';
+  rctx.fillRect(0, 0, size, size);
+
+  const height = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const streak = (rand() - 0.5) * 18;
+    const rStreak = Math.round(88 + (rand() - 0.5) * 28);
+    actx.fillStyle = `rgb(${188 + streak}, ${193 + streak}, ${201 + streak})`;
+    actx.fillRect(0, y, size, 1);
+    rctx.fillStyle = `rgb(${rStreak}, ${rStreak}, ${rStreak})`;
+    rctx.fillRect(0, y, size, 1);
+    for (let x = 0; x < size; x++) {
+      height[y * size + x] = streak * 0.02 + (rand() - 0.5) * 0.08;
+    }
+  }
+
+  const normalCanvas = heightFieldToNormalCanvas(height, size, 1.5);
+  const map = new THREE.CanvasTexture(albedo);
+  const normalMap = new THREE.CanvasTexture(normalCanvas);
+  const roughnessMap = new THREE.CanvasTexture(rough);
+  map.colorSpace = THREE.SRGBColorSpace;
+  [map, normalMap, roughnessMap].forEach(t => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  });
+  return { map, normalMap, roughnessMap };
+}
+
+// Photovoltaic Solar Panel Texture Set
+function createSolarPanelTextures(cols = 6, rows = 10) {
+  const w = 512, h = 512;
+  const albedo = document.createElement('canvas');
+  albedo.width = w; albedo.height = h;
+  const ctx = albedo.getContext('2d');
+
+  // Deep silicon photovoltaic substrate
+  ctx.fillStyle = '#091224';
+  ctx.fillRect(0, 0, w, h);
+
+  const rough = document.createElement('canvas');
+  rough.width = w; rough.height = h;
+  const rctx = rough.getContext('2d');
+  rctx.fillStyle = '#383838';
+  rctx.fillRect(0, 0, w, h);
+
+  const cellW = w / cols;
+  const cellH = h / rows;
+  const pad = 4;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = c * cellW + pad;
+      const y = r * cellH + pad;
+      const cw = cellW - pad * 2;
+      const ch = cellH - pad * 2;
+
+      // Subtle variation between solar wafers
+      const v = hash2(c * 3.1, r * 5.7);
+      const grad = ctx.createLinearGradient(x, y, x + cw, y + ch);
+      grad.addColorStop(0, `rgb(${12 + v * 8}, ${26 + v * 12}, ${58 + v * 20})`);
+      grad.addColorStop(0.5, `rgb(${16 + v * 10}, ${35 + v * 14}, ${74 + v * 22})`);
+      grad.addColorStop(1, `rgb(${10 + v * 7}, ${22 + v * 10}, ${52 + v * 18})`);
+      ctx.fillStyle = grad;
+
+      // Chamfered silicon cell corners (classic space-grade GaAs / Si cells)
+      const cut = 5;
+      ctx.beginPath();
+      ctx.moveTo(x + cut, y);
+      ctx.lineTo(x + cw - cut, y);
+      ctx.lineTo(x + cw, y + cut);
+      ctx.lineTo(x + cw, y + ch - cut);
+      ctx.lineTo(x + cw - cut, y + ch);
+      ctx.lineTo(x + cut, y + ch);
+      ctx.lineTo(x, y + ch - cut);
+      ctx.lineTo(x, y + cut);
+      ctx.closePath();
+      ctx.fill();
+
+      // Fine horizontal collector fingers
+      ctx.strokeStyle = 'rgba(175, 196, 222, 0.24)';
+      ctx.lineWidth = 0.7;
+      for (let fy = y + 5; fy < y + ch - 3; fy += 5.5) {
+        ctx.beginPath();
+        ctx.moveTo(x + 2, fy);
+        ctx.lineTo(x + cw - 2, fy);
+        ctx.stroke();
+      }
+
+      // Twin vertical silver busbars
+      ctx.fillStyle = 'rgba(215, 224, 236, 0.82)';
+      ctx.fillRect(x + cw * 0.28, y, 1.6, ch);
+      ctx.fillRect(x + cw * 0.72, y, 1.6, ch);
+
+      // Shiny silver corner interconnect tab
+      ctx.fillStyle = '#c8d0dc';
+      ctx.fillRect(x + cw * 0.45, y - 2, cw * 0.1, 3);
+
+      // Smooth glass cell surface in roughness map
+      rctx.fillStyle = '#262626';
+      rctx.fillRect(x, y, cw, ch);
+    }
+  }
+
+  const map = new THREE.CanvasTexture(albedo);
+  const roughnessMap = new THREE.CanvasTexture(rough);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 8;
+  roughnessMap.anisotropy = 8;
+  return { map, roughnessMap };
+}
+
+// Matte Lunar South Pole Regolith Texture Set (Granular Dust & Micro-Pits)
+function createRegolithTextures() {
+  const size = 1024;
+  const rand = mulberry32(9001);
+  const height = new Float32Array(size * size);
+
+  // Generate micro-craters baked into normal/albedo tile
+  const microCraters = [];
+  for (let i = 0; i < 110; i++) {
+    microCraters.push({
+      x: rand() * size,
+      y: rand() * size,
+      r: 4 + Math.pow(rand(), 2.2) * 32,
+      depth: 0.14 + rand() * 0.28
+    });
+  }
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const v = y / size;
+      // Seamless periodic approx via folded coordinates
+      const n1 = fbm2D(u * 12, v * 12, 4);
+      const n2 = noise2D(u * 48 + 11.3, v * 48 + 7.9);
+      const grain = (rand() - 0.5) * 0.14;
+      height[y * size + x] = n1 * 0.55 + n2 * 0.25 + grain;
+    }
+  }
+
+  // Stamp micro-craters with raised rims
+  for (const c of microCraters) {
+    const rOuter = Math.ceil(c.r * 1.45);
+    const cx = Math.floor(c.x);
+    const cy = Math.floor(c.y);
+    for (let dy = -rOuter; dy <= rOuter; dy++) {
+      for (let dx = -rOuter; dx <= rOuter; dx++) {
+        const dist = Math.hypot(dx, dy) / c.r;
+        if (dist > 1.45) continue;
+        let dh = 0;
+        if (dist < 1.0) {
+          dh = -c.depth * (1.0 - dist * dist);
+        } else {
+          const t = (dist - 1.0) / 0.45;
+          dh = c.depth * 0.24 * Math.sin((1.0 - t) * Math.PI);
+        }
+        const px = (cx + dx + size) % size;
+        const py = (cy + dy + size) % size;
+        height[py * size + px] += dh;
+      }
+    }
+  }
+
+  const normalCanvas = heightFieldToNormalCanvas(height, size, 3.2);
+  const albedoCanvas = document.createElement('canvas');
+  albedoCanvas.width = albedoCanvas.height = size;
+  const actx = albedoCanvas.getContext('2d');
+  const aimg = actx.createImageData(size, size);
+
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = roughCanvas.height = size;
+  const rctx = roughCanvas.getContext('2d');
+  const rimg = rctx.createImageData(size, size);
+
+  for (let i = 0; i < size * size; i++) {
+    const x = i % size;
+    const y = (i / size) | 0;
+    const u = x / size;
+    const v = y / size;
+    const h = height[i];
+    const patch = fbm2D(u * 5.0 + 3.2, v * 5.0 + 9.4, 3);
+    const speck = (hash2(x * 1.3, y * 1.7) - 0.5) * 18;
+
+    // Calibrated lunar highland anorthosite grey (slightly warm neutral)
+    const lum = clamp(104 + (h - 0.42) * 34 + (patch - 0.5) * 28 + speck, 62, 152);
+    const p = i * 4;
+    aimg.data[p]     = clamp(Math.round(lum * 1.01), 0, 255);
+    aimg.data[p + 1] = clamp(Math.round(lum * 1.00), 0, 255);
+    aimg.data[p + 2] = clamp(Math.round(lum * 0.99), 0, 255);
+    aimg.data[p + 3] = 255;
+
+    const rv = clamp(Math.round((0.91 + (1.0 - clamp(h, 0, 1)) * 0.08) * 255), 224, 254);
+    rimg.data[p] = rimg.data[p + 1] = rimg.data[p + 2] = rv;
+    rimg.data[p + 3] = 255;
+  }
+  actx.putImageData(aimg, 0, 0);
+  rctx.putImageData(rimg, 0, 0);
+
+  const map = new THREE.CanvasTexture(albedoCanvas);
+  const normalMap = new THREE.CanvasTexture(normalCanvas);
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  [map, normalMap, roughnessMap].forEach(t => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(22, 22);
+    t.anisotropy = 8;
+  });
+  return { map, normalMap, roughnessMap };
+}
+
+// Pragyan Rover Wheel Track Imprint Texture (Chevron Cleats + Compacted Trough)
+function createWheelTrackTextures() {
+  const w = 128, h = 256;
+  const height = new Float32Array(w * h);
+  const albedo = document.createElement('canvas');
+  albedo.width = w; albedo.height = h;
+  const actx = albedo.getContext('2d');
+  const aimg = actx.createImageData(w, h);
+
+  const alpha = document.createElement('canvas');
+  alpha.width = w; alpha.height = h;
+  const alctx = alpha.getContext('2d');
+  const alimg = alctx.createImageData(w, h);
+
+  for (let y = 0; y < h; y++) {
+    const v = y / h;
+    for (let x = 0; x < w; x++) {
+      const u = x / w; // 0..1 across track width
+      const cx = Math.abs(u - 0.5) * 2.0; // 0 at center, 1 at edge
+
+      // Compacted center trough + raised outer berms
+      let hVal = 0;
+      if (cx < 0.68) {
+        hVal = -0.55;
+        // Repeating transverse rover cleat ridges (8 treads per repeat)
+        const chevronPhase = (v * 8.0 + cx * 0.35) % 1.0;
+        const cleat = Math.exp(-Math.pow((chevronPhase - 0.5) * 7.0, 2));
+        hVal -= cleat * 0.42;
+      } else if (cx < 0.94) {
+        const bt = (cx - 0.68) / 0.26;
+        hVal = Math.sin(bt * Math.PI) * 0.42;
+      }
+      const grit = (hash2(x * 0.9, y * 0.9) - 0.5) * 0.14;
+      height[y * w + x] = hVal + grit;
+
+      const p = (y * w + x) * 4;
+      // Darkened compacted lunar regolith in trough, brighter disturbed edge dust
+      const shade = cx < 0.68
+        ? clamp(54 + (hVal + 0.85) * 32 + grit * 45, 34, 96)
+        : clamp(114 + hVal * 36 + grit * 35, 80, 146);
+      aimg.data[p] = aimg.data[p + 1] = aimg.data[p + 2] = Math.round(shade);
+      aimg.data[p + 3] = 255;
+
+      const edgeAlpha = 1.0 - smoothstep(0.76, 0.98, cx);
+      alimg.data[p] = alimg.data[p + 1] = alimg.data[p + 2] = Math.round(edgeAlpha * 255);
+      alimg.data[p + 3] = 255;
+    }
+  }
+  actx.putImageData(aimg, 0, 0);
+  alctx.putImageData(alimg, 0, 0);
+
+  // Normal map (non-square helper inline)
+  const normCanvas = document.createElement('canvas');
+  normCanvas.width = w; normCanvas.height = h;
+  const nctx = normCanvas.getContext('2d');
+  const nimg = nctx.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const xm = (x - 1 + w) % w, xp = (x + 1) % w;
+      const ym = (y - 1 + h) % h, yp = (y + 1) % h;
+      const dx = (height[y * w + xp] - height[y * w + xm]) * 4.5;
+      const dy = (height[yp * w + x] - height[ym * w + x]) * 4.5;
+      const dz = 1.0;
+      const inv = 1.0 / Math.hypot(dx, dy, dz);
+      const p = (y * w + x) * 4;
+      nimg.data[p]     = clamp(Math.round((-dx * inv * 0.5 + 0.5) * 255), 0, 255);
+      nimg.data[p + 1] = clamp(Math.round((-dy * inv * 0.5 + 0.5) * 255), 0, 255);
+      nimg.data[p + 2] = clamp(Math.round(( dz * inv * 0.5 + 0.5) * 255), 0, 255);
+      nimg.data[p + 3] = 255;
+    }
+  }
+  nctx.putImageData(nimg, 0, 0);
+
+  const map = new THREE.CanvasTexture(albedo);
+  const normalMap = new THREE.CanvasTexture(normCanvas);
+  const alphaMap = new THREE.CanvasTexture(alpha);
+  map.colorSpace = THREE.SRGBColorSpace;
+  [map, normalMap, alphaMap].forEach(t => {
+    t.wrapS = THREE.ClampToEdgeWrapping;
+    t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  });
+  return { map, normalMap, alphaMap };
+}
+
+// Soft Wispy Radial Lunar Dust Sprite Texture
+function createDustSpriteTexture() {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = (x / size) * 2 - 1;
+      const v = (y / size) * 2 - 1;
+      const r = Math.hypot(u, v);
+      const puff1 = fbm2D(u * 2.6 + 4.1, v * 2.6 + 2.7, 4);
+      const puff2 = fbm2D(u * 5.2 + 9.3, v * 5.2 + 1.4, 3);
+      const radial = Math.pow(1.0 - smoothstep(0.02, 0.96, r), 2.35);
+      const wisp = clamp(0.32 + puff1 * 0.65 + (puff2 - 0.5) * 0.35, 0, 1);
+      const a = clamp(radial * wisp, 0, 1);
+      const p = (y * size + x) * 4;
+      img.data[p] = 205;
+      img.data[p + 1] = 204;
+      img.data[p + 2] = 202;
+      img.data[p + 3] = Math.round(a * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Soft Contact Shadow Texture
+function createContactShadowTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0.0, 'rgba(0, 0, 0, 0.88)');
+  grad.addColorStop(0.32, 'rgba(0, 0, 0, 0.68)');
+  grad.addColorStop(0.65, 'rgba(0, 0, 0, 0.25)');
+  grad.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+// Procedural Earth Surface & Clouds Texture
+function createEarthTextures() {
+  const w = 512, h = 256;
+  const surf = document.createElement('canvas');
+  surf.width = w; surf.height = h;
+  const sctx = surf.getContext('2d');
+  const simg = sctx.createImageData(w, h);
+
+  const cloud = document.createElement('canvas');
+  cloud.width = w; cloud.height = h;
+  const cctx = cloud.getContext('2d');
+  const cimg = cctx.createImageData(w, h);
+
+  for (let y = 0; y < h; y++) {
+    const v = y / h;
+    const lat = (v - 0.5) * Math.PI;
+    const cosLat = Math.cos(lat);
+    const absLat = Math.abs(v - 0.5) * 2.0; // 0 eq, 1 pole
+
+    for (let x = 0; x < w; x++) {
+      const u = x / w;
+      const lon = u * Math.PI * 2;
+      // Seamless 3D spherical coordinates projected into 2D domain-warped fBM
+      const sx = Math.cos(lon) * cosLat;
+      const sy = Math.sin(lat);
+      const sz = Math.sin(lon) * cosLat;
+
+      const cont = fbm2D(sx * 2.1 + sz * 1.1 + 4.3, sy * 2.2 - sz * 0.8 + 7.1, 5);
+      const detail = fbm2D(sx * 5.2 + 12.1, sy * 5.2 + sz * 3.1, 4);
+      const p = (y * w + x) * 4;
+
+      let r, g, b;
+      const iceMask = smoothstep(0.76, 0.91, absLat + (detail - 0.5) * 0.14);
+      if (iceMask > 0.5) {
+        r = 228; g = 236; b = 244;
+      } else if (cont > 0.535) {
+        // Continents: lush greens & arid ochres
+        const arid = smoothstep(0.38, 0.68, detail) * (1.0 - smoothstep(0.35, 0.65, absLat));
+        const elev = smoothstep(0.535, 0.78, cont);
+        r = lerp(42, 162, arid) + elev * 38;
+        g = lerp(96, 138, arid) + elev * 24;
+        b = lerp(46, 86, arid) + elev * 14;
+      } else {
+        // Deep vivid oceanic blues
+        const shallow = smoothstep(0.47, 0.535, cont);
+        r = lerp(10, 26, shallow);
+        g = lerp(44, 96, shallow);
+        b = lerp(128, 178, shallow);
+      }
+
+      simg.data[p]     = clamp(Math.round(r), 0, 255);
+      simg.data[p + 1] = clamp(Math.round(g), 0, 255);
+      simg.data[p + 2] = clamp(Math.round(b), 0, 255);
+      simg.data[p + 3] = 255;
+
+      // Swirling weather cloud bands
+      const swirl = fbm2D(sx * 3.4 + sy * 1.9 + 21.5, sz * 3.4 - sx * 1.2 + 15.2, 5);
+      const band = smoothstep(0.48, 0.72, swirl + Math.sin(lat * 6.0) * 0.06);
+      cimg.data[p] = 245;
+      cimg.data[p + 1] = 248;
+      cimg.data[p + 2] = 255;
+      cimg.data[p + 3] = Math.round(band * 235);
+    }
+  }
+  sctx.putImageData(simg, 0, 0);
+  cctx.putImageData(cimg, 0, 0);
+
+  const map = new THREE.CanvasTexture(surf);
+  const cloudsMap = new THREE.CanvasTexture(cloud);
+  map.colorSpace = THREE.SRGBColorSpace;
+  cloudsMap.colorSpace = THREE.SRGBColorSpace;
+  return { map, cloudsMap };
+}
+
+// Instantiate shared calibrated PBR materials
+const goldFoilTex = createFoilTextureSet('gold', 107);
+const silverFoilTex = createFoilTextureSet('silver', 219);
+const brushedAlumTex = createBrushedAluminumTextures();
+const landerSolarTex = createSolarPanelTextures(6, 9);
+const roverSolarTex = createSolarPanelTextures(5, 7);
+const regolithTex = createRegolithTextures();
+const wheelTrackTex = createWheelTrackTextures();
+const dustSpriteTex = createDustSpriteTexture();
+const contactShadowTex = createContactShadowTexture();
+const earthTextures = createEarthTextures();
+
+const matGoldFoil = new THREE.MeshStandardMaterial({
+  map: goldFoilTex.map,
+  normalMap: goldFoilTex.normalMap,
+  normalScale: new THREE.Vector2(1.45, 1.45),
+  roughnessMap: goldFoilTex.roughnessMap,
+  roughness: 0.92,
+  metalness: 0.94,
+  envMapIntensity: 1.55
+});
+
+const matSilverFoil = new THREE.MeshStandardMaterial({
+  map: silverFoilTex.map,
+  normalMap: silverFoilTex.normalMap,
+  normalScale: new THREE.Vector2(1.3, 1.3),
+  roughnessMap: silverFoilTex.roughnessMap,
+  roughness: 0.90,
+  metalness: 0.95,
+  envMapIntensity: 1.50
+});
+
+const matAluminum = new THREE.MeshStandardMaterial({
+  map: brushedAlumTex.map,
+  normalMap: brushedAlumTex.normalMap,
+  normalScale: new THREE.Vector2(0.55, 0.55),
+  roughnessMap: brushedAlumTex.roughnessMap,
+  roughness: 0.95,
+  metalness: 0.86,
+  envMapIntensity: 1.25
+});
+
+const matDarkMetal = new THREE.MeshStandardMaterial({
+  color: 0x26292f,
+  normalMap: brushedAlumTex.normalMap,
+  normalScale: new THREE.Vector2(0.4, 0.4),
+  roughness: 0.42,
+  metalness: 0.82,
+  envMapIntensity: 1.1
+});
+
+const matEngineNozzle = new THREE.MeshStandardMaterial({
+  color: 0x383539,
+  roughness: 0.36,
+  metalness: 0.88,
+  emissive: new THREE.Color(0xff5a18),
+  emissiveIntensity: 0.0,
+  envMapIntensity: 1.2
+});
+
+const matLanderSolar = new THREE.MeshPhysicalMaterial({
+  map: landerSolarTex.map,
+  roughnessMap: landerSolarTex.roughnessMap,
+  roughness: 0.25,
+  metalness: 0.32,
+  clearcoat: 0.72,
+  clearcoatRoughness: 0.14,
+  envMapIntensity: 1.35
+});
+
+const matRoverSolar = new THREE.MeshPhysicalMaterial({
+  map: roverSolarTex.map,
+  roughnessMap: roverSolarTex.roughnessMap,
+  roughness: 0.24,
+  metalness: 0.32,
+  clearcoat: 0.75,
+  clearcoatRoughness: 0.12,
+  envMapIntensity: 1.4
+});
+
+const matOpticGlass = new THREE.MeshPhysicalMaterial({
+  color: 0x071222,
+  roughness: 0.06,
+  metalness: 0.15,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.05,
+  envMapIntensity: 2.0
+});
+
+const matWhiteCeramic = new THREE.MeshStandardMaterial({
+  color: 0xd8dce0,
+  roughness: 0.48,
+  metalness: 0.08,
+  envMapIntensity: 0.7
+});
+
+const matKaptonTape = new THREE.MeshStandardMaterial({
+  color: 0xc87414,
+  roughness: 0.28,
+  metalness: 0.75,
+  envMapIntensity: 1.3
+});
+
+// ============================================================================
+// 6. SKY: FAINT STAR FIELD & SMALL BLUE EARTH
+// ============================================================================
+function buildStarField() {
+  const count = 2100;
+  const rand = mulberry32(314159);
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+
+  const starTints = [
+    new THREE.Color(0xcad8ff),
+    new THREE.Color(0xeef2ff),
+    new THREE.Color(0xfff6e8),
+    new THREE.Color(0xffe4c4),
+    new THREE.Color(0xdbe8ff)
+  ];
+
+  for (let i = 0; i < count; i++) {
+    // Upper hemisphere + slight margin below horizon
+    const u = rand();
+    const v = rand();
+    const theta = u * Math.PI * 2;
+    const sinPhi = Math.sqrt(clamp(1 - Math.pow(v * 0.94, 2), 0, 1));
+    const y = v * 0.94 + 0.015;
+    const rad = 360 + rand() * 80;
+    const x = Math.cos(theta) * sinPhi * rad;
+    const z = Math.sin(theta) * sinPhi * rad;
+
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y * rad;
+    positions[i * 3 + 2] = z;
+
+    // Realistic faint magnitude power-law distribution (subtle against bright lunar surface)
+    const mag = Math.pow(rand(), 3.6);
+    const brightness = 0.16 + mag * 0.58;
+    const tint = starTints[(rand() * starTints.length) | 0];
+    colors[i * 3]     = tint.r * brightness;
+    colors[i * 3 + 1] = tint.g * brightness;
+    colors[i * 3 + 2] = tint.b * brightness;
+    sizes[i] = 1.05 + mag * 1.45;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) }
+    },
+    vertexShader: `
+      attribute float aSize;
+      varying vec3 vColor;
+      uniform float uPixelRatio;
+      void main() {
+        vColor = color;
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aSize * uPixelRatio;
+        gl_Position = projectionMatrix * mvPos;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5;
+        float d = length(c);
+        if (d > 0.5) discard;
+        float falloff = smoothstep(0.5, 0.04, d);
+        gl_FragColor = vec4(vColor * falloff, falloff * 0.85);
+      }
+    `,
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false
+  });
+
+  const stars = new THREE.Points(geo, mat);
+  stars.frustumCulled = false;
+  scene.add(stars);
+}
+buildStarField();
+
+function buildEarthInSky() {
+  const earthGroup = new THREE.Group();
+  earthGroup.position.copy(EARTH_DIR).multiplyScalar(EARTH_DIST);
+
+  const earthRadius = 3.95; // ~2.75 deg apparent angular diameter: small, crisp blue marble
+
+  // Custom shader for phase-accurate sunlit Earth with clouds & atmospheric scattering
+  const earthMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uSurface: { value: earthTextures.map },
+      uClouds: { value: earthTextures.cloudsMap },
+      uSunDir: { value: SUN_DIR.clone() }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
+      void main() {
+        vUv = uv;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D uSurface;
+      uniform sampler2D uClouds;
+      uniform vec3 uSunDir;
+      varying vec2 vUv;
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
+      void main() {
+        vec3 N = normalize(vWorldNormal);
+        vec3 V = normalize(cameraPosition - vWorldPos);
+        vec3 L = normalize(uSunDir);
+
+        float ndl = dot(N, L);
+        float day = smoothstep(-0.08, 0.14, ndl);
+        float diffuse = max(ndl, 0.0);
+
+        vec3 surf = texture2D(uSurface, vUv).rgb;
+        vec4 cld = texture2D(uClouds, vUv + vec2(0.08, 0.0)).rgba;
+        vec3 albedo = mix(surf, cld.rgb, cld.a * 0.92);
+
+        // Subtle solar glint on ocean
+        vec3 H = normalize(L + V);
+        float spec = pow(max(dot(N, H), 0.0), 28.0) * (1.0 - cld.a) * 0.25 * day;
+
+        // Rayleigh atmospheric limb scattering on sunlit hemisphere
+        float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.2);
+        vec3 atmoColor = vec3(0.24, 0.58, 1.0);
+        float atmoTerm = fresnel * smoothstep(-0.18, 0.28, ndl);
+
+        vec3 color = albedo * (diffuse * 1.48 + 0.015 * day) + vec3(0.85, 0.93, 1.0) * spec + atmoColor * atmoTerm * 0.95;
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `
+  });
+
+  const earthSphere = new THREE.Mesh(new THREE.SphereGeometry(earthRadius, 48, 48), earthMat);
+  earthSphere.rotation.y = 2.4;
+  earthSphere.rotation.z = 0.32;
+  earthGroup.add(earthSphere);
+
+  // Outer translucent atmospheric limb halo
+  const haloMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uSunDir: { value: SUN_DIR.clone() }
+    },
+    vertexShader: `
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uSunDir;
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
+      void main() {
+        vec3 N = normalize(vWorldNormal);
+        vec3 V = normalize(cameraPosition - vWorldPos);
+        float limb = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 4.0);
+        float sunSide = smoothstep(-0.25, 0.35, dot(N, normalize(uSunDir)));
+        vec3 col = vec3(0.28, 0.62, 1.0) * limb * sunSide * 0.72;
+        gl_FragColor = vec4(col, limb * sunSide * 0.65);
+      }
+    `,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    side: THREE.BackSide,
+    depthWrite: false
+  });
+  const haloSphere = new THREE.Mesh(new THREE.SphereGeometry(earthRadius * 1.08, 36, 36), haloMat);
+  earthGroup.add(haloSphere);
+
+  scene.add(earthGroup);
+  return earthSphere;
+}
+const earthMesh = buildEarthInSky();
+
+// ============================================================================
+// 7. ANALYTIC LUNAR SOUTH POLE TERRAIN, CRATERS & BOULDERS
+// ============================================================================
+// Deterministic catalog of lunar impact craters (placed artfully around the site)
+const CRATERS = [
+  // Hero foreground & mid-ground craters (kept clear of immediate landing footprint & rover rollout path)
+  { x: -4.8,  z:  3.2,  r: 2.4,  d: 0.48 },
+  { x:  4.6,  z:  4.4,  r: 2.1,  d: 0.42 },
+  { x: -3.2,  z:  7.8,  r: 2.8,  d: 0.56 },
+  { x:  5.8,  z: -2.6,  r: 3.1,  d: 0.62 },
+  { x: -6.2,  z: -4.4,  r: 3.6,  d: 0.72 },
+  { x:  1.4,  z: -6.8,  r: 2.9,  d: 0.55 },
+  { x: -1.9,  z:  4.1,  r: 0.75, d: 0.14 },
+  { x:  2.2,  z:  3.4,  r: 0.62, d: 0.11 },
+  { x:  2.5,  z:  6.4,  r: 1.05, d: 0.21 },
+  { x: -2.4,  z:  1.1,  r: 0.68, d: 0.12 },
+  { x:  3.0,  z:  0.6,  r: 0.82, d: 0.15 },
+  // Larger mid-far & horizon craters for authentic south-pole topography
+  { x: -15.5, z: -12.0, r: 7.5,  d: 1.45 },
+  { x:  14.0, z: -15.5, r: 8.8,  d: 1.65 },
+  { x: -18.0, z:  11.0, r: 6.8,  d: 1.30 },
+  { x:  16.5, z:  13.5, r: 7.2,  d: 1.35 },
+  { x:  -4.5, z: -22.0, r: 10.5, d: 2.10 },
+  { x:  26.0, z: -28.0, r: 14.0, d: 2.60 },
+  { x: -32.0, z: -26.0, r: 16.5, d: 3.00 },
+  { x:   8.0, z: -42.0, r: 18.0, d: 3.40 },
+  { x: -24.0, z: -48.0, r: 22.0, d: 4.10 }
+];
+
+// Add procedural small/medium craters deterministically outside the safe corridor
+(function populateExtraCraters() {
+  const rand = mulberry32(7733);
+  for (let i = 0; i < 65; i++) {
+    const angle = rand() * Math.PI * 2;
+    const dist = 5.5 + Math.pow(rand(), 1.35) * 65.0;
+    const x = Math.cos(angle) * dist;
+    const z = Math.sin(angle) * dist;
+    // Keep rover rollout corridor clear
+    if (Math.abs(x) < 2.2 && z > -1.8 && z < 7.5) continue;
+    const r = 0.45 + Math.pow(rand(), 1.8) * (dist < 18 ? 2.4 : 6.5);
+    const d = r * (0.16 + rand() * 0.07);
+    CRATERS.push({ x, z, r, d });
+  }
+})();
+
+function getTerrainHeight(x, z) {
+  const rOrigin = Math.hypot(x, z);
+
+  // Safe flat pad around landing legs (r < 1.9m) and gently level along ramp/rollout path
+  const padFlat = smoothstep(1.45, 3.4, rOrigin);
+
+  // Corridor mask along rover rollout (+Z from z = 0 to z = 6.2)
+  const inCorridorZ = smoothstep(-0.5, 0.8, z) * (1.0 - smoothstep(5.4, 7.6, z));
+  const corridorFlat = 1.0 - inCorridorZ * (1.0 - smoothstep(0.65, 2.1, Math.abs(x + 0.12)));
+
+  const reliefMask = padFlat * lerp(0.18, 1.0, corridorFlat);
+
+  // Broad lunar rolling highlands + subtle local regolith ripples
+  let h = (fbm2D(x * 0.045 + 12.4, z * 0.045 + 7.2, 4) - 0.5) * 1.45 * smoothstep(2.0, 14.0, rOrigin);
+  h += (fbm2D(x * 0.24 + 3.1, z * 0.24 + 8.7, 3) - 0.5) * 0.14 * reliefMask;
+  h += (noise2D(x * 1.15 + 5.2, z * 1.15 + 1.9) - 0.5) * 0.028 * reliefMask;
+
+  // Impact craters (parabolic bowl + raised ejecta rim)
+  for (let i = 0; i < CRATERS.length; i++) {
+    const c = CRATERS[i];
+    const dx = x - c.x;
+    const dz = z - c.z;
+    const maxR = c.r * 1.65;
+    if (Math.abs(dx) > maxR || Math.abs(dz) > maxR) continue;
+    const distSq = dx * dx + dz * dz;
+    if (distSq >= maxR * maxR) continue;
+    const q = Math.sqrt(distSq) / c.r;
+    let ch = 0;
+    if (q < 1.0) {
+      // Bowl floor with gentle flattening at very bottom + inner wall rise
+      const bowl = (q * q - 1.0);
+      const rimRise = Math.pow(q, 4) * 0.26;
+      ch = c.d * (bowl * 0.86 + rimRise);
+    } else {
+      // Smooth raised ejecta blanket decaying away from rim
+      const t = (q - 1.0) / 0.65;
+      const e = 1.0 - t;
+      ch = c.d * 0.26 * e * e * (1.0 + 0.6 * t);
+    }
+    h += ch * reliefMask;
+  }
+
+  // Dramatic distant south-pole crater rim ridges on the horizon
+  if (rOrigin > 26) {
+    const rimDist = smoothstep(26, 72, rOrigin);
+    const angle = Math.atan2(z, x);
+    const ridgeWave = fbm2D(Math.cos(angle) * 2.6 + 5.0, Math.sin(angle) * 2.6 + 9.0, 4);
+    const ridgePeak = Math.pow(ridgeWave, 1.4) * 7.8 * rimDist;
+    // Slight lunar curvature dropoff beyond 75m so the horizon feels stark and airless
+    const curveDrop = -Math.max(0, rOrigin - 55) * Math.max(0, rOrigin - 55) * 0.0014;
+    h += ridgePeak + curveDrop;
+  }
+
+  return h;
+}
+
+function getTerrainNormal(x, z) {
+  const eps = 0.06;
+  const hL = getTerrainHeight(x - eps, z);
+  const hR = getTerrainHeight(x + eps, z);
+  const hD = getTerrainHeight(x, z - eps);
+  const hU = getTerrainHeight(x, z + eps);
+  return new THREE.Vector3(hL - hR, 2 * eps, hD - hU).normalize();
+}
+
+function buildLunarTerrain() {
+  // Radial non-uniform polar grid: ultra-dense around landing & rover zone, sweeping out to 125m horizon
+  const rings = 135;
+  const segs = 160;
+  const maxRadius = 122;
+
+  const verts = [];
+  const uvs = [];
+  const indices = [];
+
+  // Center vertex
+  verts.push(0, getTerrainHeight(0, 0), 0);
+  uvs.push(0, 0);
+
+  for (let rIdx = 1; rIdx <= rings; rIdx++) {
+    const t = rIdx / rings;
+    // Cubic-blended radial spacing: ~0.08m resolution near center, expanding smoothly toward horizon
+    const radius = maxRadius * (0.09 * t + 0.25 * t * t + 0.66 * t * t * t);
+    for (let s = 0; s < segs; s++) {
+      const ang = (s / segs) * Math.PI * 2;
+      const x = Math.cos(ang) * radius;
+      const z = Math.sin(ang) * radius;
+      const y = getTerrainHeight(x, z);
+      verts.push(x, y, z);
+      uvs.push(x * 0.14, z * 0.14);
+    }
+  }
+
+  // Center fan
+  for (let s = 0; s < segs; s++) {
+    const next = (s + 1) % segs;
+    indices.push(0, 1 + next, 1 + s);
+  }
+  // Concentric rings
+  for (let rIdx = 1; rIdx < rings; rIdx++) {
+    const rowA = 1 + (rIdx - 1) * segs;
+    const rowB = 1 + rIdx * segs;
+    for (let s = 0; s < segs; s++) {
+      const next = (s + 1) % segs;
+      const a0 = rowA + s;
+      const a1 = rowA + next;
+      const b0 = rowB + s;
+      const b1 = rowB + next;
+      indices.push(a0, a1, b1);
+      indices.push(a0, b1, b0);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: regolithTex.map,
+    normalMap: regolithTex.normalMap,
+    normalScale: new THREE.Vector2(1.05, 1.05),
+    roughnessMap: regolithTex.roughnessMap,
+    roughness: 0.98,
+    metalness: 0.0,
+    envMapIntensity: 0.12
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  mesh.castShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+buildLunarTerrain();
+
+// Angular Lunar Rocks & Boulders (InstancedMesh)
+function buildLunarRocks() {
+  const rockMat = new THREE.MeshStandardMaterial({
+    map: regolithTex.map,
+    normalMap: regolithTex.normalMap,
+    normalScale: new THREE.Vector2(1.4, 1.4),
+    color: 0xb8bcc2,
+    roughness: 0.94,
+    metalness: 0.02,
+    envMapIntensity: 0.15
+  });
+
+  function makeRockGeo(seed, detail) {
+    const rand = mulberry32(seed);
+    const geo = new THREE.IcosahedronGeometry(1.0, detail);
+    const pos = geo.attributes.position;
+    const v = new THREE.Vector3();
+    // Random cleavage planes for angular fractured lunar basalt/anorthosite
+    const planes = [];
+    for (let p = 0; p < 5; p++) {
+      planes.push({
+        n: new THREE.Vector3(rand() - 0.5, rand() - 0.5, rand() - 0.5).normalize(),
+        d: 0.55 + rand() * 0.35
+      });
+    }
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      const n = fbm2D(v.x * 2.1 + seed, v.z * 2.1 + v.y * 1.7, 3);
+      let r = 0.72 + n * 0.42;
+      for (const pl of planes) {
+        const proj = v.dot(pl.n);
+        if (proj > pl.d) {
+          r *= 1.0 - (proj - pl.d) * 0.42;
+        }
+      }
+      v.multiplyScalar(r);
+      v.y *= 0.68; // Slightly flattened resting profile
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  const geos = [makeRockGeo(11, 2), makeRockGeo(29, 2), makeRockGeo(53, 2)];
+  const counts = [140, 140, 220];
+  const rand = mulberry32(4242);
+  const dummy = new THREE.Object3D();
+  const color = new THREE.Color();
+
+  geos.forEach((geo, gIdx) => {
+    const count = counts[gIdx];
+    const inst = new THREE.InstancedMesh(geo, rockMat, count);
+    inst.castShadow = true;
+    inst.receiveShadow = true;
+
+    let placed = 0;
+    let tries = 0;
+    while (placed < count && tries < count * 8) {
+      tries++;
+      const ang = rand() * Math.PI * 2;
+      const dist = 2.4 + Math.pow(rand(), 1.55) * 34.0;
+      const x = Math.cos(ang) * dist;
+      const z = Math.sin(ang) * dist;
+
+      // Exclude landing zone and Pragyan rollout path
+      if (Math.hypot(x, z) < 2.25) continue;
+      if (Math.abs(x + 0.12) < 1.35 && z > -0.8 && z < 6.4) continue;
+
+      const baseScale = gIdx === 2
+        ? (0.04 + Math.pow(rand(), 2.4) * 0.14)
+        : (0.07 + Math.pow(rand(), 2.2) * (dist < 8 ? 0.24 : 0.62));
+
+      const y = getTerrainHeight(x, z);
+      dummy.position.set(x, y - baseScale * 0.18, z);
+      dummy.rotation.set(rand() * 0.5, rand() * Math.PI * 2, rand() * 0.5);
+      dummy.scale.set(
+        baseScale * (0.75 + rand() * 0.6),
+        baseScale * (0.65 + rand() * 0.5),
+        baseScale * (0.75 + rand() * 0.6)
+      );
+      dummy.updateMatrix();
+      inst.setMatrixAt(placed, dummy.matrix);
+
+      const shade = 0.72 + rand() * 0.36;
+      color.setRGB(shade, shade * 0.99, shade * 0.98);
+      inst.setColorAt(placed, color);
+      placed++;
+    }
+    inst.count = placed;
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    scene.add(inst);
+  });
+}
+buildLunarRocks();
+
+// ============================================================================
+// 8. SOFT CONTACT SHADOWS (UNDER LANDER, 4 FOOTPADS & ROVER)
+// ============================================================================
+function createContactShadowMesh(radius) {
+  const mat = new THREE.MeshBasicMaterial({
+    map: contactShadowTex,
+    transparent: true,
+    opacity: 0.0,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(radius * 2, radius * 2), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.008;
+  scene.add(mesh);
+  return mesh;
+}
+
+const landerContactShadow = createContactShadowMesh(1.95);
+const footContactShadows = [0, 1, 2, 3].map(() => createContactShadowMesh(0.42));
+const roverContactShadow = createContactShadowMesh(0.68);
+
+// ============================================================================
+// 9. PROCEDURAL VIKRAM LANDER (FULL ANALYTIC GEOMETRY + KINEMATICS)
+// ============================================================================
+const CHASSIS_UNCOMPRESSED_Y = 0.78;
+const CHASSIS_STATIC_COMP = 0.06; // Rest chassis bottom at y = 0.72 m
+const RAMP_HINGE_LOCAL_Y = 0.04;
+const RAMP_HINGE_LOCAL_Z = 0.87;
+const RAMP_SEG_LEN = 0.92;
+const RAMP_TOTAL_LEN = RAMP_SEG_LEN * 2;
+const RAMP_WIDTH = 0.86;
+// Exact slope angle so ramp foot sits flush on regolith at static rest:
+const RAMP_HINGE_REST_WORLD_Y = (CHASSIS_UNCOMPRESSED_Y - CHASSIS_STATIC_COMP) + RAMP_HINGE_LOCAL_Y; // 0.76 m
+const RAMP_SLOPE_ANGLE = Math.asin((RAMP_HINGE_REST_WORLD_Y - 0.014) / RAMP_TOTAL_LEN); // ~23.9 deg
+
+// Helper: orient a unit-length cylinder along Y between two 3D points in parent space
+const _tmpDir = new THREE.Vector3();
+const _tmpMid = new THREE.Vector3();
+const _upAxis = new THREE.Vector3(0, 1, 0);
+function placeStrutBetween(mesh, pA, pB, radiusScale = 1.0) {
+  _tmpDir.subVectors(pB, pA);
+  const len = _tmpDir.length();
+  if (len < 1e-5) return;
+  _tmpMid.addVectors(pA, pB).multiplyScalar(0.5);
+  mesh.position.copy(_tmpMid);
+  mesh.quaternion.setFromUnitVectors(_upAxis, _tmpDir.divideScalar(len));
+  mesh.scale.set(radiusScale, len, radiusScale);
+}
+
+// Helper: create faceted octagonal prism (chamfered square profile matching real Vikram)
+function createOctagonalProfile(halfSpan, chamfer) {
+  const s = new THREE.Shape();
+  const a = halfSpan;
+  const b = halfSpan - chamfer;
+  s.moveTo(-b, -a);
+  s.lineTo( b, -a);
+  s.lineTo( a, -b);
+  s.lineTo( a,  b);
+  s.lineTo( b,  a);
+  s.lineTo(-b,  a);
+  s.lineTo(-a,  b);
+  s.lineTo(-a, -b);
+  s.closePath();
+  return s;
+}
+
+function buildVikramLander() {
+  const root = new THREE.Group();
+  const chassis = new THREE.Group();
+  chassis.position.y = CHASSIS_UNCOMPRESSED_Y;
+  root.add(chassis);
+
+  // ---- A. MAIN CHASSIS BUS (GOLD KAPTON MLI + SILVER THERMAL PANELS + BAY CUTOUT) ----
+  // Build chassis from lower deck, upper deck, side walls, and recessed rover bay on +Z face
+  const H = 1.04;
+  const halfSpan = 0.85;
+  const chamfer = 0.28;
+
+  // Main upper-rear core body (solid faceted octagonal bus from z = -0.85 to z = +0.85, minus front rover bay)
+  // Note: Shape (x, y) rotated by -PI/2 around X maps +y -> -z and -y -> +z!
+  // 1) Rear half-bus (z from -halfSpan to +0.04 => shape y from -0.04 to +halfSpan)
+  const rearShape = new THREE.Shape();
+  const b = halfSpan - chamfer;
+  rearShape.moveTo(-halfSpan, -0.04);
+  rearShape.lineTo( halfSpan, -0.04);
+  rearShape.lineTo( halfSpan,  b);
+  rearShape.lineTo( b,         halfSpan);
+  rearShape.lineTo(-b,         halfSpan);
+  rearShape.lineTo(-halfSpan,  b);
+  rearShape.closePath();
+  const rearGeo = new THREE.ExtrudeGeometry(rearShape, {
+    depth: H,
+    bevelEnabled: true,
+    bevelThickness: 0.025,
+    bevelSize: 0.02,
+    bevelSegments: 2
+  });
+  rearGeo.rotateX(-Math.PI / 2);
+  scaleBoxUVs(rearGeo, 0.85);
+  const rearBus = new THREE.Mesh(rearGeo, matGoldFoil);
+  rearBus.castShadow = true;
+  rearBus.receiveShadow = true;
+  chassis.add(rearBus);
+
+  // 2) Front Left & Right cheek modules framing the open recessed rover garage bay (+Z face)
+  // z from +0.02 to +halfSpan => shape y from -halfSpan to -0.02
+  [-1, 1].forEach(side => {
+    const cheekShape = new THREE.Shape();
+    const xInner = 0.455 * side;
+    const xOuter = halfSpan * side;
+    const xCham = b * side;
+    if (side > 0) {
+      cheekShape.moveTo(xInner, -halfSpan);
+      cheekShape.lineTo(xCham,  -halfSpan);
+      cheekShape.lineTo(xOuter, -b);
+      cheekShape.lineTo(xOuter, -0.02);
+      cheekShape.lineTo(xInner, -0.02);
+    } else {
+      cheekShape.moveTo(xOuter, -0.02);
+      cheekShape.lineTo(xOuter, -b);
+      cheekShape.lineTo(xCham,  -halfSpan);
+      cheekShape.lineTo(xInner, -halfSpan);
+      cheekShape.lineTo(xInner, -0.02);
+    }
+    cheekShape.closePath();
+    const cGeo = new THREE.ExtrudeGeometry(cheekShape, {
+      depth: H,
+      bevelEnabled: true,
+      bevelThickness: 0.02,
+      bevelSize: 0.015,
+      bevelSegments: 2
+    });
+    cGeo.rotateX(-Math.PI / 2);
+    scaleBoxUVs(cGeo, 0.85);
+    const cheek = new THREE.Mesh(cGeo, matGoldFoil);
+    cheek.castShadow = true;
+    cheek.receiveShadow = true;
+    chassis.add(cheek);
+  });
+
+  // 3) Rover bay roof header (closes top of +Z bay above y = 0.85)
+  const bayRoof = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.21, 0.86), matGoldFoil);
+  bayRoof.position.set(0, H - 0.095, 0.44);
+  bayRoof.castShadow = true;
+  bayRoof.receiveShadow = true;
+  chassis.add(bayRoof);
+
+  // 4) Rover bay floor plate (smooth metallic ramp-aligned deck at y = 0.04)
+  const bayFloor = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.045, 0.86), matAluminum);
+  bayFloor.position.set(0, 0.02, 0.44);
+  bayFloor.castShadow = true;
+  bayFloor.receiveShadow = true;
+  chassis.add(bayFloor);
+
+  // Interior guide rails, dark metallic hangar walls & silver bulkhead inside rover garage
+  [-0.31, 0.31].forEach(rx => {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.025, 0.80), matDarkMetal);
+    rail.position.set(rx, 0.052, 0.43);
+    chassis.add(rail);
+  });
+  const bayBackWall = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 0.80), matDarkMetal);
+  bayBackWall.position.set(0, 0.44, 0.068);
+  chassis.add(bayBackWall);
+  const bayBackFoil = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.62), matSilverFoil);
+  bayBackFoil.position.set(0, 0.44, 0.072);
+  chassis.add(bayBackFoil);
+  [-0.432, 0.432].forEach(wx => {
+    const sideLiner = new THREE.Mesh(new THREE.PlaneGeometry(0.78, 0.80), matDarkMetal);
+    sideLiner.position.set(wx, 0.44, 0.45);
+    sideLiner.rotation.y = wx < 0 ? Math.PI / 2 : -Math.PI / 2;
+    chassis.add(sideLiner);
+  });
+  // Dark aluminum bay perimeter frame trim around the +Z opening
+  [-0.445, 0.445].forEach(fx => {
+    const trimV = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.82, 0.035), matDarkMetal);
+    trimV.position.set(fx, 0.45, 0.865);
+    chassis.add(trimV);
+  });
+  const trimTop = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.028, 0.035), matDarkMetal);
+  trimTop.position.set(0, 0.845, 0.865);
+  chassis.add(trimTop);
+
+  // 5) Distinct Silver Aluminized Mylar Thermal Blanket Panels (authentic Vikram gold + silver contrast!)
+  // Top deck silver thermal core plate + octagonal perimeter frame
+  const topDeckShape = createOctagonalProfile(0.82, 0.26);
+  const topDeckGeo = new THREE.ExtrudeGeometry(topDeckShape, { depth: 0.04, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 1 });
+  topDeckGeo.rotateX(-Math.PI / 2);
+  scaleBoxUVs(topDeckGeo, 0.9);
+  const topDeck = new THREE.Mesh(topDeckGeo, matSilverFoil);
+  topDeck.position.y = H + 0.01;
+  topDeck.castShadow = true;
+  topDeck.receiveShadow = true;
+  chassis.add(topDeck);
+
+  // Silver Mylar thermal radiator blankets on the 4 corner chamfered panels
+  const chamferAngles = [Math.PI * 0.25, Math.PI * 0.75, Math.PI * 1.25, Math.PI * 1.75];
+  chamferAngles.forEach((ang, idx) => {
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.76, 0.035), idx % 2 === 0 ? matSilverFoil : matGoldFoil);
+    const dist = 1.005;
+    panel.position.set(Math.cos(ang) * dist, H * 0.52, Math.sin(ang) * dist);
+    panel.rotation.y = -ang + Math.PI / 2;
+    panel.castShadow = true;
+    panel.receiveShadow = true;
+    chassis.add(panel);
+
+    // Corner structural aluminum vertical rib + Kapton tape edge trim
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.042, H + 0.04, 0.045), matAluminum);
+    rib.position.set(Math.cos(ang) * (dist + 0.01), H * 0.5, Math.sin(ang) * (dist + 0.01));
+    rib.rotation.y = -ang + Math.PI / 2;
+    chassis.add(rib);
+  });
+
+  // Lower Propulsion Skirt / Silver Thermal Shield Ring (beneath main deck)
+  const skirtShape = createOctagonalProfile(0.76, 0.24);
+  const skirtGeo = new THREE.ExtrudeGeometry(skirtShape, { depth: 0.14, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.015, bevelSegments: 1 });
+  skirtGeo.rotateX(-Math.PI / 2);
+  scaleBoxUVs(skirtGeo, 0.9);
+  const lowerSkirt = new THREE.Mesh(skirtGeo, matSilverFoil);
+  lowerSkirt.position.y = -0.14;
+  lowerSkirt.castShadow = true;
+  lowerSkirt.receiveShadow = true;
+  chassis.add(lowerSkirt);
+
+  // Subtle Indian Tricolor metallic fairing plate on the front-right cheek (+X, +Z) — pure geometry, no text
+  const flagGroup = new THREE.Group();
+  flagGroup.position.set(0.65, 0.72, 0.875);
+  const flagBack = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.15, 0.008), matAluminum);
+  flagGroup.add(flagBack);
+  const stripeH = 0.042;
+  const saffron = new THREE.Mesh(new THREE.BoxGeometry(0.195, stripeH, 0.01), new THREE.MeshStandardMaterial({ color: 0xe66c1a, roughness: 0.36, metalness: 0.35 }));
+  saffron.position.y = stripeH;
+  const whiteStripe = new THREE.Mesh(new THREE.BoxGeometry(0.195, stripeH, 0.01), new THREE.MeshStandardMaterial({ color: 0xe8ecf0, roughness: 0.42, metalness: 0.15 }));
+  const green = new THREE.Mesh(new THREE.BoxGeometry(0.195, stripeH, 0.01), new THREE.MeshStandardMaterial({ color: 0x157a34, roughness: 0.36, metalness: 0.35 }));
+  green.position.y = -stripeH;
+  const chakra = new THREE.Mesh(new THREE.TorusGeometry(0.014, 0.0025, 8, 18), new THREE.MeshStandardMaterial({ color: 0x102878, roughness: 0.3, metalness: 0.5 }));
+  chakra.position.z = 0.006;
+  flagGroup.add(saffron, whiteStripe, green, chakra);
+  chassis.add(flagGroup);
+
+  // ---- B. SOLAR PANEL ARRAYS (MOUNTED ON -X, +X, AND -Z FACES LIKE REAL CHANDRAYAAN-3) ----
+  function addSideSolarPanel(px, py, pz, rotY, width, height) {
+    const g = new THREE.Group();
+    g.position.set(px, py, pz);
+    g.rotation.y = rotY;
+
+    // Brushed aluminum perimeter frame
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(width + 0.055, height + 0.055, 0.032), matAluminum);
+    frame.castShadow = true;
+    frame.receiveShadow = true;
+    g.add(frame);
+
+    // Photovoltaic cell array plate
+    const cells = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.036), matLanderSolar);
+    cells.position.z = 0.003;
+    cells.receiveShadow = true;
+    g.add(cells);
+
+    // 4 aluminum mounting standoff brackets
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sy]) => {
+      const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.02, 0.045, 8), matAluminum);
+      bracket.rotation.x = Math.PI / 2;
+      bracket.position.set(sx * (width * 0.42), sy * (height * 0.42), -0.025);
+      g.add(bracket);
+    });
+
+    chassis.add(g);
+  }
+  // Prominent side solar arrays (left -X faces the low sun brilliantly; right +X and rear -Z wrap the bus)
+  addSideSolarPanel(-0.895, 0.54, -0.02, -Math.PI / 2, 1.06, 0.86);
+  addSideSolarPanel( 0.895, 0.54, -0.02,  Math.PI / 2, 1.06, 0.86);
+  addSideSolarPanel( 0.0,   0.54, -0.895, Math.PI,     1.06, 0.86);
+
+  // ---- C. FOUR 800N MAIN THROTTLEABLE ENGINES + VACUUM PLUMES ----
+  const nozzleProfile = [
+    new THREE.Vector2(0.055, 0.0),
+    new THREE.Vector2(0.046, -0.045), // throat
+    new THREE.Vector2(0.072, -0.11),
+    new THREE.Vector2(0.105, -0.20),
+    new THREE.Vector2(0.132, -0.30),
+    new THREE.Vector2(0.146, -0.37)   // exit lip
+  ];
+  const nozzleGeo = new THREE.LatheGeometry(nozzleProfile, 28);
+
+  const plumeShaderMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uThrottle: { value: 0 }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main() {
+        vUv = uv;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vViewDir = normalize(cameraPosition - wp.xyz);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform float uThrottle;
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main() {
+        // vUv.y = 1 at nozzle exit, 0 at far expanded plume edge
+        float along = 1.0 - vUv.y;
+        float core = exp(-along * 4.2);
+        // Stronger edge-softening so vacuum cone never shows hard silhouette edges
+        float rimFade = pow(abs(dot(normalize(vNormal), normalize(vViewDir))), 1.35);
+        float tipFade = smoothstep(1.0, 0.35, along);
+
+        // Subtle high-frequency combustion shimmer
+        float flicker = 0.92 + 0.08 * sin(uTime * 54.0 + along * 14.0) * cos(uTime * 37.0 + vUv.x * 12.56);
+
+        // Vacuum rocket exhaust color: hot white-gold near nozzle -> soft translucent amber/pale-violet vacuum flare
+        vec3 hotCore = vec3(1.0, 0.94, 0.82);
+        vec3 midPlume = vec3(1.0, 0.66, 0.32);
+        vec3 outerVacuum = vec3(0.72, 0.70, 0.86);
+        vec3 col = mix(midPlume, hotCore, smoothstep(0.0, 0.38, core));
+        col = mix(outerVacuum, col, smoothstep(0.0, 0.55, 1.0 - along));
+
+        float alpha = pow(1.0 - along, 2.35) * tipFade * rimFade * uThrottle * flicker * 0.58;
+        alpha += exp(-along * 11.0) * rimFade * uThrottle * 0.52;
+        gl_FragColor = vec4(col * (1.1 + core * 1.25), clamp(alpha, 0.0, 0.85));
+      }
+    `,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+
+  const plumeMeshes = [];
+  const engineOffsets = [
+    [-0.30, -0.30],
+    [ 0.30, -0.30],
+    [-0.30,  0.30],
+    [ 0.30,  0.30]
+  ];
+
+  // Wide expanding vacuum exhaust bell geometry
+  const plumeOuterGeo = new THREE.CylinderGeometry(0.135, 0.92, 2.35, 24, 1, true);
+  plumeOuterGeo.translate(0, -1.175, 0);
+  const plumeInnerGeo = new THREE.CylinderGeometry(0.09, 0.36, 1.15, 20, 1, true);
+  plumeInnerGeo.translate(0, -0.575, 0);
+
+  engineOffsets.forEach(([ex, ez]) => {
+    const engGroup = new THREE.Group();
+    engGroup.position.set(ex, -0.10, ez);
+
+    // Nozzle bell
+    const bell = new THREE.Mesh(nozzleGeo, matEngineNozzle);
+    bell.castShadow = true;
+    engGroup.add(bell);
+
+    // Nozzle stiffening rings
+    [-0.14, -0.25, -0.35].forEach((ry, i) => {
+      const rRad = 0.086 + i * 0.029;
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(rRad, 0.008, 8, 24), matDarkMetal);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = ry;
+      engGroup.add(ring);
+    });
+
+    // Vacuum thruster plumes (inner bright core + outer wide translucent expansion cone)
+    const pOuter = new THREE.Mesh(plumeOuterGeo, plumeShaderMat);
+    pOuter.position.y = -0.35;
+    const pInner = new THREE.Mesh(plumeInnerGeo, plumeShaderMat);
+    pInner.position.y = -0.34;
+    engGroup.add(pOuter, pInner);
+    plumeMeshes.push(pOuter, pInner);
+
+    chassis.add(engGroup);
+  });
+
+  // ---- D. CORNER AOCS ATTITUDE THRUSTER PODS (8 MICRO-NOZZLES) ----
+  const aocsPuffs = [];
+  const aocsPuffGeo = new THREE.CylinderGeometry(0.014, 0.095, 0.36, 12, 1, true);
+  aocsPuffGeo.translate(0, 0.18, 0);
+  function makeAocsPuffMat() {
+    return new THREE.ShaderMaterial({
+      uniforms: { uOpacity: { value: 0.0 } },
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vN;
+        varying vec3 vV;
+        void main() {
+          vUv = uv;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vN = normalize(mat3(modelMatrix) * normal);
+          vV = normalize(cameraPosition - wp.xyz);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: `
+        uniform float uOpacity;
+        varying vec2 vUv;
+        varying vec3 vN;
+        varying vec3 vV;
+        void main() {
+          float along = vUv.y; // 0 at nozzle, 1 at far tip
+          float edge = pow(abs(dot(normalize(vN), normalize(vV))), 1.5);
+          float fade = pow(1.0 - along, 2.4) * smoothstep(0.0, 0.12, along) * edge;
+          gl_FragColor = vec4(vec3(0.86, 0.92, 1.0), fade * uOpacity);
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+  }
+
+  chamferAngles.forEach((ang, idx) => {
+    const pod = new THREE.Group();
+    pod.position.set(Math.cos(ang) * 1.03, 0.86, Math.sin(ang) * 1.03);
+    pod.rotation.y = -ang;
+
+    const housing = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.11, 0.14), matDarkMetal);
+    pod.add(housing);
+
+    // Pair of miniature canted RCS nozzles
+    [-0.04, 0.04].forEach(nz => {
+      const rcs = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.065, 10, 1, true), matAluminum);
+      rcs.position.set(0.055, 0, nz);
+      rcs.rotation.z = -Math.PI / 2;
+      pod.add(rcs);
+    });
+
+    const puff = new THREE.Mesh(aocsPuffGeo, makeAocsPuffMat());
+    puff.position.set(0.08, 0, 0);
+    puff.rotation.z = -Math.PI / 2;
+    pod.add(puff);
+    aocsPuffs.push(puff);
+    chassis.add(pod);
+  });
+
+  // ---- E. TOP DECK PAYLOADS, ANTENNAS & SCIENTIFIC INSTRUMENTS ----
+  // 1) Parabolic X-Band High-Gain Dish Antenna (mounted on rear-left top deck)
+  const dishGroup = new THREE.Group();
+  dishGroup.position.set(-0.42, H + 0.05, -0.36);
+
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.032, 0.34, 12), matAluminum);
+  mast.position.y = 0.17;
+  mast.castShadow = true;
+  dishGroup.add(mast);
+
+  const gimbalHead = new THREE.Group();
+  gimbalHead.position.y = 0.36;
+  // Aim parabolic dish roughly toward Earth!
+  gimbalHead.lookAt(EARTH_DIR.clone().multiplyScalar(10));
+
+  const dishPts = [];
+  for (let i = 0; i <= 10; i++) {
+    const r = (i / 10) * 0.31;
+    const z = (r * r) * 0.95;
+    dishPts.push(new THREE.Vector2(r, z));
+  }
+  const dishGeo = new THREE.LatheGeometry(dishPts, 28);
+  dishGeo.rotateX(Math.PI / 2);
+  const dishMesh = new THREE.Mesh(dishGeo, matWhiteCeramic);
+  dishMesh.castShadow = true;
+  gimbalHead.add(dishMesh);
+
+  // Feed horn & tripod struts
+  const feedHorn = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.014, 0.12, 10), matAluminum);
+  feedHorn.rotation.x = Math.PI / 2;
+  feedHorn.position.z = 0.19;
+  gimbalHead.add(feedHorn);
+  for (let k = 0; k < 3; k++) {
+    const a = (k / 3) * Math.PI * 2;
+    const s = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.28, 6), matAluminum);
+    placeStrutBetween(
+      s,
+      new THREE.Vector3(Math.cos(a) * 0.25, Math.sin(a) * 0.25, 0.06),
+      new THREE.Vector3(0, 0, 0.21)
+    );
+    gimbalHead.add(s);
+  }
+  dishGroup.add(gimbalHead);
+  chassis.add(dishGroup);
+
+  // 2) S-Band Helical / Omni Whip Antennas
+  const omniMast = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.018, 0.42, 10), matAluminum);
+  omniMast.position.set(0.46, H + 0.25, -0.44);
+  omniMast.castShadow = true;
+  chassis.add(omniMast);
+  const omniTip = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.09, 12), matWhiteCeramic);
+  omniTip.position.set(0.46, H + 0.46, -0.44);
+  chassis.add(omniTip);
+
+  // 3) NASA Laser Retroreflector Array (LRA) — gold anodized dome with optical corner cubes
+  const lraBase = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.075, 0.035, 16), matGoldFoil);
+  lraBase.position.set(0.18, H + 0.065, 0.34);
+  chassis.add(lraBase);
+  const lraDome = new THREE.Mesh(new THREE.SphereGeometry(0.052, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), matAluminum);
+  lraDome.position.set(0.18, H + 0.08, 0.34);
+  chassis.add(lraDome);
+
+  // 4) Top Deck Avionics / Propellant Tank Dome Bulges (covered in gold/silver MLI)
+  const tankDome = new THREE.Mesh(new THREE.SphereGeometry(0.32, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.46), matGoldFoil);
+  tankDome.position.set(0.02, H + 0.02, -0.08);
+  tankDome.castShadow = true;
+  chassis.add(tankDome);
+
+  // 5) RAMBHA-LP Langmuir Probe Boom (on top-right corner with gold sensor sphere)
+  const lpArm = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.012, 0.55, 8), matAluminum);
+  lpArm.position.set(0.54, H + 0.18, 0.34);
+  lpArm.rotation.z = -0.58;
+  lpArm.castShadow = true;
+  chassis.add(lpArm);
+  const lpSphere = new THREE.Mesh(new THREE.SphereGeometry(0.038, 14, 14), matGoldFoil);
+  lpSphere.position.set(0.70, H + 0.41, 0.34);
+  chassis.add(lpSphere);
+
+  // 6) ChaSTE Thermal Probe Housing on front-left flank
+  const chasteHousing = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.052, 0.52, 14), matSilverFoil);
+  chasteHousing.position.set(-0.62, 0.42, 0.90);
+  chasteHousing.castShadow = true;
+  chassis.add(chasteHousing);
+
+  // 7) LHDAC / NavCam Optical Sensor Turrets (front-left and front-right brow)
+  [-0.58, 0.58].forEach(cx => {
+    const camBox = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.10, 0.11), matDarkMetal);
+    camBox.position.set(cx, 0.94, 0.87);
+    const lensBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.036, 0.05, 16), matAluminum);
+    lensBarrel.rotation.x = Math.PI / 2;
+    lensBarrel.position.set(cx, 0.94, 0.935);
+    const lensGlass = new THREE.Mesh(new THREE.SphereGeometry(0.026, 12, 10), matOpticGlass);
+    lensGlass.scale.set(1, 1, 0.4);
+    lensGlass.position.set(cx, 0.94, 0.955);
+    chassis.add(camBox, lensBarrel, lensGlass);
+  });
+
+  // ---- F. FOUR ARTICULATED TELESCOPIC LANDING LEGS (EXACT ANALYTIC IK) ----
+  const legs = [];
+  const unitCylGeo = new THREE.CylinderGeometry(1, 1, 1, 12);
+
+  chamferAngles.forEach((ang, idx) => {
+    const cosA = Math.cos(ang);
+    const sinA = Math.sin(ang);
+    const tanX = -sinA;
+    const tanZ =  cosA;
+
+    // Footpad sits solidly at root-local y = 0 (tracks ground contact with zero drift)
+    const footRadius = 1.56;
+    const footPos = new THREE.Vector3(cosA * footRadius, 0.0, sinA * footRadius);
+
+    const footGroup = new THREE.Group();
+    footGroup.position.copy(footPos);
+
+    // Wide dished saucer footpad (crushable aluminum)
+    const padProfile = [
+      new THREE.Vector2(0.0,   0.008),
+      new THREE.Vector2(0.11,  0.004),
+      new THREE.Vector2(0.155, 0.022),
+      new THREE.Vector2(0.175, 0.055),
+      new THREE.Vector2(0.165, 0.062),
+      new THREE.Vector2(0.135, 0.032),
+      new THREE.Vector2(0.045, 0.045),
+      new THREE.Vector2(0.0,   0.055)
+    ];
+    const padMesh = new THREE.Mesh(new THREE.LatheGeometry(padProfile, 24), matAluminum);
+    padMesh.castShadow = true;
+    padMesh.receiveShadow = true;
+    footGroup.add(padMesh);
+
+    // Ball-joint ankle collar
+    const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.048, 12, 10), matDarkMetal);
+    ankle.position.y = 0.065;
+    footGroup.add(ankle);
+
+    // Radial stiffening ribs on top of footpad
+    for (let r = 0; r < 6; r++) {
+      const ra = (r / 6) * Math.PI * 2;
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.018, 0.012), matDarkMetal);
+      rib.position.set(Math.cos(ra) * 0.085, 0.038, Math.sin(ra) * 0.085);
+      rib.rotation.y = -ra;
+      footGroup.add(rib);
+    }
+
+    // Touchdown contact sensor probe whisker (sits cleanly above footpad rim)
+    const probe = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.003, 0.13, 6), matAluminum);
+    probe.position.set(cosA * 0.155, 0.115, sinA * 0.155);
+    probe.rotation.z = -cosA * 0.22;
+    probe.rotation.x = sinA * 0.22;
+    footGroup.add(probe);
+
+    root.add(footGroup);
+
+    // Strut meshes (all in root space so they bridge chassis anchors to footpad cleanly!)
+    const upperBarrel = new THREE.Mesh(unitCylGeo, matSilverFoil); // Telescopic shock outer barrel
+    const lowerPiston = new THREE.Mesh(unitCylGeo, matAluminum);   // Sliding inner piston rod
+    const vBraceL = new THREE.Mesh(unitCylGeo, matAluminum);       // Upper-side A-frame brace L
+    const vBraceR = new THREE.Mesh(unitCylGeo, matAluminum);       // Upper-side A-frame brace R
+    const dragBraceL = new THREE.Mesh(unitCylGeo, matAluminum);    // Lower diagonal brace L
+    const dragBraceR = new THREE.Mesh(unitCylGeo, matAluminum);    // Lower diagonal brace R
+    const midCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.075, 14), matDarkMetal);
+
+    [upperBarrel, lowerPiston, vBraceL, vBraceR, dragBraceL, dragBraceR, midCollar].forEach(m => {
+      m.castShadow = true;
+      m.receiveShadow = true;
+      root.add(m);
+    });
+
+    // Anchor definitions relative to chassis origin (in chassis local coords)
+    const upperMainLocal = new THREE.Vector3(cosA * 1.00, 0.90, sinA * 1.00);
+    const upperSideLLocal = new THREE.Vector3(cosA * 0.92 + tanX * 0.34, 0.78, sinA * 0.92 + tanZ * 0.34);
+    const upperSideRLocal = new THREE.Vector3(cosA * 0.92 - tanX * 0.34, 0.78, sinA * 0.92 - tanZ * 0.34);
+    const lowerSideLLocal = new THREE.Vector3(cosA * 0.88 + tanX * 0.28, 0.05, sinA * 0.88 + tanZ * 0.28);
+    const lowerSideRLocal = new THREE.Vector3(cosA * 0.88 - tanX * 0.28, 0.05, sinA * 0.88 - tanZ * 0.28);
+
+    // Clevis mounting lugs attached to chassis
+    [upperMainLocal, upperSideLLocal, upperSideRLocal, lowerSideLLocal, lowerSideRLocal].forEach(pt => {
+      const lug = new THREE.Mesh(new THREE.SphereGeometry(0.032, 10, 8), matDarkMetal);
+      lug.position.copy(pt);
+      chassis.add(lug);
+    });
+
+    legs.push({
+      footPos,
+      anklePos: footPos.clone().add(new THREE.Vector3(0, 0.068, 0)),
+      upperMainLocal,
+      upperSideLLocal,
+      upperSideRLocal,
+      lowerSideLLocal,
+      lowerSideRLocal,
+      upperBarrel,
+      lowerPiston,
+      vBraceL,
+      vBraceR,
+      dragBraceL,
+      dragBraceR,
+      midCollar
+    });
+  });
+
+  const _pTop = new THREE.Vector3();
+  const _pCollar = new THREE.Vector3();
+  const _pSideL = new THREE.Vector3();
+  const _pSideR = new THREE.Vector3();
+  const _pLowL = new THREE.Vector3();
+  const _pLowR = new THREE.Vector3();
+  const _dirTmp = new THREE.Vector3();
+
+  function updateLegs(compression) {
+    const cy = CHASSIS_UNCOMPRESSED_Y - compression;
+    chassis.position.y = cy;
+
+    for (let i = 0; i < legs.length; i++) {
+      const L = legs[i];
+      _pTop.copy(L.upperMainLocal); _pTop.y += cy;
+      _pSideL.copy(L.upperSideLLocal); _pSideL.y += cy;
+      _pSideR.copy(L.upperSideRLocal); _pSideR.y += cy;
+      _pLowL.copy(L.lowerSideLLocal); _pLowL.y += cy;
+      _pLowR.copy(L.lowerSideRLocal); _pLowR.y += cy;
+
+      // Primary telescopic leg axis from upper main mount to ankle ball-joint
+      _dirTmp.subVectors(L.anklePos, _pTop);
+      const totalLen = _dirTmp.length();
+      _dirTmp.divideScalar(totalLen);
+
+      // Fixed-length outer upper shock barrel (0.64m); inner piston slides inside it!
+      const barrelLen = 0.64;
+      _pCollar.copy(_pTop).addScaledVector(_dirTmp, barrelLen);
+
+      placeStrutBetween(L.upperBarrel, _pTop, _pCollar, 0.038);
+      placeStrutBetween(L.lowerPiston, _pCollar, L.anklePos, 0.024);
+
+      L.midCollar.position.copy(_pCollar);
+      L.midCollar.quaternion.setFromUnitVectors(_upAxis, _dirTmp);
+
+      // Secondary stabilizing V-braces & lower drag struts track exact clevis joints
+      placeStrutBetween(L.vBraceL, _pSideL, _pCollar, 0.017);
+      placeStrutBetween(L.vBraceR, _pSideR, _pCollar, 0.017);
+      placeStrutBetween(L.dragBraceL, _pLowL, _pCollar, 0.015);
+      placeStrutBetween(L.dragBraceR, _pLowR, _pCollar, 0.015);
+    }
+  }
+  updateLegs(0);
+
+  // ---- G. TWO-STAGE UNFOLDING ROVER DEPLOYMENT RAMP ----
+  const rampHinge1 = new THREE.Group();
+  rampHinge1.position.set(0, RAMP_HINGE_LOCAL_Y, RAMP_HINGE_LOCAL_Z);
+  chassis.add(rampHinge1);
+
+  function buildRampSegment(len, isLower) {
+    const seg = new THREE.Group();
+    const deckThick = 0.024;
+    // Main aluminum ramp deck (extends along +Y in stowed vertical pose, inner rover-rolling face on -Z!)
+    // Let's double check rotation direction:
+    // When stowed: rampHinge1.rotation.x = 0 -> segment extends along +Y (from y=0 to y=len).
+    // When deployed: rampHinge1.rotation.x = +(Math.PI/2 + RAMP_SLOPE_ANGLE) (~113.9 deg):
+    //   Local +Y rotates to (0, -sin(slope), +cos(slope)) -> pointing forward (+Z) and downward (-Y)!
+    //   Local -Z rotates to (0, +cos(slope), +sin(slope)) -> pointing UPWARD!
+    //   Local +Z rotates to (0, -cos(slope), -sin(slope)) -> pointing DOWNWARD (outer stowed face)!
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(RAMP_WIDTH, len, deckThick), matAluminum);
+    deck.position.set(0, len * 0.5, 0);
+    deck.castShadow = true;
+    deck.receiveShadow = true;
+    seg.add(deck);
+
+    // Outer stowed face (+Z side) clad in gold Kapton MLI so closed bay matches Vikram's hull!
+    const foilBack = new THREE.Mesh(new THREE.BoxGeometry(RAMP_WIDTH - 0.03, len - 0.03, 0.008), isLower ? matSilverFoil : matGoldFoil);
+    foilBack.position.set(0, len * 0.5, deckThick * 0.5 + 0.004);
+    foilBack.castShadow = true;
+    foilBack.receiveShadow = true;
+    seg.add(foilBack);
+
+    // Side guard flanges on the rover rolling face (-Z side)
+    [-RAMP_WIDTH * 0.5 + 0.018, RAMP_WIDTH * 0.5 - 0.018].forEach(rx => {
+      const flange = new THREE.Mesh(new THREE.BoxGeometry(0.032, len, 0.048), matAluminum);
+      flange.position.set(rx, len * 0.5, -0.022);
+      flange.castShadow = true;
+      seg.add(flange);
+    });
+
+    // Ribbed anti-slip wheel-traction bars on the rolling face (-Z side)
+    const numRibs = 11;
+    for (let i = 1; i < numRibs; i++) {
+      const ry = (i / numRibs) * len;
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(RAMP_WIDTH - 0.08, 0.012, 0.012), matDarkMetal);
+      rib.position.set(0, ry, -deckThick * 0.5 - 0.005);
+      seg.add(rib);
+    }
+
+    // Tapered toe-lip at far end of lower segment for smooth regolith transition
+    if (isLower) {
+      const lip = new THREE.Mesh(new THREE.BoxGeometry(RAMP_WIDTH - 0.02, 0.06, 0.012), matAluminum);
+      lip.position.set(0, len + 0.025, -0.004);
+      lip.rotation.x = 0.16;
+      seg.add(lip);
+    }
+    return seg;
+  }
+
+  // Upper segment
+  const rampSeg1 = buildRampSegment(RAMP_SEG_LEN, false);
+  rampHinge1.add(rampSeg1);
+
+  // Hinge barrel knuckles at base of ramp
+  [-0.32, 0, 0.32].forEach(hx => {
+    const knuck = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.09, 10), matDarkMetal);
+    knuck.rotation.z = Math.PI / 2;
+    knuck.position.set(hx, 0, 0);
+    rampHinge1.add(knuck);
+  });
+
+  // Mid-ramp hinge for Stage 2 lower extension (folds INWARD onto rolling face of Seg 1 when stowed!)
+  const rampHinge2 = new THREE.Group();
+  rampHinge2.position.set(0, RAMP_SEG_LEN, -0.028);
+  rampHinge1.add(rampHinge2);
+
+  const rampSeg2 = buildRampSegment(RAMP_SEG_LEN, true);
+  rampHinge2.add(rampSeg2);
+
+  // Mid-hinge knuckles
+  [-0.32, 0.32].forEach(hx => {
+    const knuck = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.08, 10), matDarkMetal);
+    knuck.rotation.z = Math.PI / 2;
+    knuck.position.set(hx, 0, 0.014);
+    rampHinge2.add(knuck);
+  });
+
+  // Side tension deployment cables connecting upper bay frame to mid-ramp hinge
+  const cableL = new THREE.Mesh(unitCylGeo, matDarkMetal);
+  const cableR = new THREE.Mesh(unitCylGeo, matDarkMetal);
+  chassis.add(cableL, cableR);
+
+  const _cAnchorL = new THREE.Vector3(-0.44, 0.80, 0.86);
+  const _cAnchorR = new THREE.Vector3( 0.44, 0.80, 0.86);
+  const _cTipL = new THREE.Vector3();
+  const _cTipR = new THREE.Vector3();
+
+  function updateRamp(stage1Progress, stage2Progress) {
+    // Stage 1: swings down from 0 (vertical closed, gold Kapton foil facing +Z outward!) to +(PI/2 + RAMP_SLOPE_ANGLE)
+    const deployAngle1 = (Math.PI * 0.5 + RAMP_SLOPE_ANGLE) * stage1Progress;
+    rampHinge1.rotation.x = deployAngle1;
+
+    // Stage 2: starts folded 180 deg INWARD (-PI) tucked cleanly against Seg 1's rolling face, unfolds outward to 0!
+    rampHinge2.rotation.x = -Math.PI * (1.0 - stage2Progress);
+
+    // Update taut side cables once ramp starts opening
+    const showCables = stage1Progress > 0.03;
+    cableL.visible = showCables;
+    cableR.visible = showCables;
+    if (showCables) {
+      const midY = RAMP_HINGE_LOCAL_Y + Math.cos(deployAngle1) * (RAMP_SEG_LEN * 0.92);
+      const midZ = RAMP_HINGE_LOCAL_Z + Math.sin(deployAngle1) * (RAMP_SEG_LEN * 0.92);
+      _cTipL.set(-0.42, midY, midZ);
+      _cTipR.set( 0.42, midY, midZ);
+      placeStrutBetween(cableL, _cAnchorL, _cTipL, 0.0045);
+      placeStrutBetween(cableR, _cAnchorR, _cTipR, 0.0045);
+    }
+  }
+  updateRamp(0, 0);
+
+  scene.add(root);
+  return {
+    root,
+    chassis,
+    legs,
+    updateLegs,
+    updateRamp,
+    plumeShaderMat,
+    plumeMeshes,
+    aocsPuffs
+  };
+}
+
+function scaleBoxUVs(geo, scale) {
+  const uv = geo.attributes.uv;
+  if (!uv) return;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, uv.getX(i) * scale, uv.getY(i) * scale);
+  }
+  uv.needsUpdate = true;
+}
+
+const vikram = buildVikramLander();
+
+// ============================================================================
+// 10. PROCEDURAL PRAGYAN 6-WHEELED ROVER (ROCKER-BOGIE + SOLAR WING)
+// ============================================================================
+const ROVER_WHEEL_RADIUS = 0.115;
+const ROVER_TRACK_HALF = 0.305; // Wheel center at x = ±0.305 m (total width ~0.68 m)
+const ROVER_WHEEL_Z = [0.31, 0.0, -0.31]; // Front, Middle, Rear longitudinal wheel offsets
+
+function buildPragyanRover() {
+  const root = new THREE.Group();
+  const bodyGroup = new THREE.Group();
+  root.add(bodyGroup);
+
+  // ---- A. WARM ELECTRONICS BOX (WEB) CHASSIS (GOLD FOIL + ALUMINUM FRAME) ----
+  const webY = 0.285;
+  const chassisMain = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.21, 0.64), matGoldFoil);
+  chassisMain.position.set(0, webY, 0);
+  chassisMain.castShadow = true;
+  chassisMain.receiveShadow = true;
+  bodyGroup.add(chassisMain);
+
+  // Top & bottom brushed aluminum chassis edge plates
+  const topPlate = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.022, 0.66), matAluminum);
+  topPlate.position.set(0, webY + 0.112, 0);
+  topPlate.castShadow = true;
+  bodyGroup.add(topPlate);
+
+  const botPlate = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.02, 0.62), matSilverFoil);
+  botPlate.position.set(0, webY - 0.11, 0);
+  bodyGroup.add(botPlate);
+
+  // Side silver thermal louver panels
+  [-0.236, 0.236].forEach(sx => {
+    const louver = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.12, 0.38), matSilverFoil);
+    louver.position.set(sx, webY, 0);
+    bodyGroup.add(louver);
+  });
+
+  // Subtle front metallic tricolor badge on Pragyan's front nose
+  const nosePlate = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.11, 0.015), matAluminum);
+  nosePlate.position.set(0, webY - 0.02, 0.324);
+  bodyGroup.add(nosePlate);
+
+  // Front Stereo NavCam Pair (iconic two eyes of Pragyan!)
+  const camBar = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.055, 0.065), matDarkMetal);
+  camBar.position.set(0, webY + 0.065, 0.335);
+  camBar.castShadow = true;
+  bodyGroup.add(camBar);
+  [-0.085, 0.085].forEach(cx => {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.025, 0.04, 14), matAluminum);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(cx, webY + 0.065, 0.372);
+    const glass = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 8), matOpticGlass);
+    glass.scale.set(1, 1, 0.35);
+    glass.position.set(cx, webY + 0.065, 0.39);
+    bodyGroup.add(barrel, glass);
+  });
+
+  // Rear APXS & LIBS spectrometer instrument housing
+  const apxsBox = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.09), matDarkMetal);
+  apxsBox.position.set(0.08, webY - 0.04, -0.34);
+  const libsLens = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.04, 12), matAluminum);
+  libsLens.rotation.x = Math.PI / 2;
+  libsLens.position.set(-0.08, webY - 0.05, -0.34);
+  bodyGroup.add(apxsBox, libsLens);
+
+  // Rear communication patch/whip antenna (mounted cleanly outside the solar panel footprint)
+  const antMast = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.008, 0.24, 8), matAluminum);
+  antMast.position.set(-0.22, webY + 0.18, -0.32);
+  antMast.rotation.x = -0.18;
+  const antTip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.012, 0.06), matWhiteCeramic);
+  antTip.position.set(-0.22, webY + 0.30, -0.34);
+  bodyGroup.add(antMast, antTip);
+
+  // ---- B. HINGED PHOTOVOLTAIC SOLAR PANEL WING (FOLDS FLAT WHEN STOWED, TILTS UP TO CATCH SUN ON DEPLOY) ----
+  // Hinged along the FRONT (+Z) top edge so when it opens upward (+X rotation), the active blue silicon cell grid
+  // faces UP (+Y) and FORWARD (+Z), catching direct low-angle South Pole sunlight and facing the hero camera!
+  const solarHinge = new THREE.Group();
+  solarHinge.position.set(0.0, webY + 0.13, 0.30);
+  bodyGroup.add(solarHinge);
+
+  // Panel lies from z = -0.60 to 0 in hinge-local space (flat over chassis when rotX = 0)
+  const panelW = 0.48;
+  const panelL = 0.60;
+  const solarFrame = new THREE.Mesh(new THREE.BoxGeometry(panelW, 0.022, panelL), matAluminum);
+  solarFrame.position.set(0, 0.012, -panelL * 0.5);
+  solarFrame.castShadow = true;
+  solarFrame.receiveShadow = true;
+  solarHinge.add(solarFrame);
+
+  // Active solar cells on the TOP (+Y) face -> tilts forward-up (+Z, +Y) toward Sun & camera when opened!
+  const solarCells = new THREE.Mesh(new THREE.BoxGeometry(panelW - 0.04, 0.008, panelL - 0.04), matRoverSolar);
+  solarCells.position.set(0, 0.024, -panelL * 0.5);
+  solarCells.receiveShadow = true;
+  solarHinge.add(solarCells);
+
+  // Gold foil backing on underside of solar wing
+  const solarBack = new THREE.Mesh(new THREE.BoxGeometry(panelW - 0.04, 0.006, panelL - 0.04), matGoldFoil);
+  solarBack.position.set(0, 0.0, -panelL * 0.5);
+  solarHinge.add(solarBack);
+
+  // Hinge knuckles along front edge
+  [-0.16, 0.16].forEach(hx => {
+    const kn = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.055, 10), matDarkMetal);
+    kn.rotation.z = Math.PI / 2;
+    kn.position.set(hx, 0.008, 0);
+    solarHinge.add(kn);
+  });
+
+  // Telescopic lift actuator strut under solar wing (updated dynamically with solar hinge angle)
+  const solarStrut = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 8), matAluminum);
+  bodyGroup.add(solarStrut);
+  solarStrut.visible = false;
+
+  // ---- C. SIX CLEATED LUNAR WHEELS & ROCKER-BOGIE SUSPENSION ----
+  const wheels = []; // { side: -1|1, idx: 0|1|2, hubGroup, spinMesh, zOff }
+  const struts = []; // dynamic suspension tube references
+
+  function createLunarWheel() {
+    const wGroup = new THREE.Group();
+    const spin = new THREE.Group();
+    wGroup.add(spin);
+
+    const R = ROVER_WHEEL_RADIUS;
+    const W = 0.068;
+
+    // Outer cylindrical aluminum rim drum
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(R, R, W, 24, 1, true), matAluminum);
+    drum.rotation.z = Math.PI / 2;
+    drum.castShadow = true;
+    drum.receiveShadow = true;
+    spin.add(drum);
+
+    // Side rim rings
+    [-W * 0.48, W * 0.48].forEach(rx => {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(R - 0.006, 0.008, 8, 24), matAluminum);
+      ring.rotation.y = Math.PI / 2;
+      ring.position.x = rx;
+      spin.add(ring);
+    });
+
+    // Central drive motor hub
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, W + 0.018, 14), matDarkMetal);
+    hub.rotation.z = Math.PI / 2;
+    spin.add(hub);
+
+    // 6 radial metallic spokes
+    for (let s = 0; s < 6; s++) {
+      const a = (s / 6) * Math.PI * 2;
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.016, R * 1.85, 0.014), matAluminum);
+      spoke.rotation.x = a;
+      spin.add(spoke);
+    }
+
+    // 14 exterior chevron/grouser cleats around tread circumference
+    const numCleats = 14;
+    for (let c = 0; c < numCleats; c++) {
+      const a = (c / numCleats) * Math.PI * 2;
+      const cleat = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, 0.011, 0.012), matDarkMetal);
+      cleat.position.set(0, Math.cos(a) * (R + 0.004), Math.sin(a) * (R + 0.004));
+      cleat.rotation.x = a;
+      cleat.castShadow = true;
+      spin.add(cleat);
+    }
+
+    // Steering fork / drive axle yoke (does not spin)
+    const yoke = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.09, 10), matAluminum);
+    yoke.position.y = R + 0.04;
+    wGroup.add(yoke);
+
+    return { wGroup, spin };
+  }
+
+  const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 10);
+
+  [-1, 1].forEach(side => {
+    const xW = side * ROVER_TRACK_HALF;
+    const sideWheels = [];
+    ROVER_WHEEL_Z.forEach((zOff, idx) => {
+      const { wGroup, spin } = createLunarWheel();
+      wGroup.position.set(xW, ROVER_WHEEL_RADIUS, zOff);
+      root.add(wGroup);
+      const wObj = { side, idx, wGroup, spin, zOff, xOff: xW };
+      wheels.push(wObj);
+      sideWheels.push(wObj);
+    });
+
+    // Rocker-bogie linkage tubes (updated dynamically each frame)
+    const rockerRear = new THREE.Mesh(unitCyl, matAluminum);
+    const rockerFront = new THREE.Mesh(unitCyl, matAluminum);
+    const bogieFront = new THREE.Mesh(unitCyl, matAluminum);
+    const bogieMid = new THREE.Mesh(unitCyl, matAluminum);
+    const pivotHub = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.05, 12), matDarkMetal);
+    pivotHub.rotation.z = Math.PI / 2;
+    const bogieJoint = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 8), matDarkMetal);
+
+    [rockerRear, rockerFront, bogieFront, bogieMid, pivotHub, bogieJoint].forEach(m => {
+      m.castShadow = true;
+      root.add(m);
+    });
+
+    struts.push({
+      side,
+      xOff: xW,
+      sideWheels,
+      rockerRear,
+      rockerFront,
+      bogieFront,
+      bogieMid,
+      pivotHub,
+      bogieJoint
+    });
+  });
+
+  const _a = new THREE.Vector3();
+  const _b = new THREE.Vector3();
+  const _c = new THREE.Vector3();
+  const _d = new THREE.Vector3();
+
+  function updateSuspension(wheelLocalYs) {
+    // wheelLocalYs: array of 6 local Y offsets for wheels relative to root (order: L0,L1,L2, R0,R1,R2)
+    for (let s = 0; s < struts.length; s++) {
+      const st = struts[s];
+      const base = s * 3;
+      const yF = ROVER_WHEEL_RADIUS + wheelLocalYs[base + 0];
+      const yM = ROVER_WHEEL_RADIUS + wheelLocalYs[base + 1];
+      const yR = ROVER_WHEEL_RADIUS + wheelLocalYs[base + 2];
+
+      st.sideWheels[0].wGroup.position.y = yF;
+      st.sideWheels[1].wGroup.position.y = yM;
+      st.sideWheels[2].wGroup.position.y = yR;
+
+      const xTub = st.side * (ROVER_TRACK_HALF - 0.032);
+      // Chassis main rocker pivot
+      _a.set(st.side * 0.245, webY - 0.01, -0.06);
+      st.pivotHub.position.copy(_a);
+
+      // Bogie pivot sits above midpoint of front & mid wheels
+      const bogieY = Math.max(yF, yM) + ROVER_WHEEL_RADIUS + 0.085;
+      _b.set(xTub, bogieY, 0.155);
+      st.bogieJoint.position.copy(_b);
+
+      // Rear wheel yoke top
+      _c.set(xTub, yR + ROVER_WHEEL_RADIUS + 0.07, ROVER_WHEEL_Z[2]);
+      placeStrutBetween(st.rockerRear, _a, _c, 0.012);
+      placeStrutBetween(st.rockerFront, _a, _b, 0.013);
+
+      // Bogie legs down to front & mid wheel yokes
+      _d.set(xTub, yF + ROVER_WHEEL_RADIUS + 0.065, ROVER_WHEEL_Z[0]);
+      placeStrutBetween(st.bogieFront, _b, _d, 0.011);
+
+      _d.set(xTub, yM + ROVER_WHEEL_RADIUS + 0.065, ROVER_WHEEL_Z[1]);
+      placeStrutBetween(st.bogieMid, _b, _d, 0.011);
+    }
+  }
+  updateSuspension([0, 0, 0, 0, 0, 0]);
+
+  function updateSolarWing(open01) {
+    // Tilt solar panel forward-upward (+X rotation around front hinge) so top blue silicon grid faces direct low Sun & hero camera!
+    const angle = open01 * 0.92; // ~52.7 deg elevation
+    solarHinge.rotation.x = angle;
+    if (open01 > 0.02) {
+      solarStrut.visible = true;
+      const aBot = new THREE.Vector3(0, webY + 0.125, -0.14);
+      const distOnPanel = 0.36;
+      const aTop = new THREE.Vector3(
+        0,
+        webY + 0.13 + Math.sin(angle) * distOnPanel,
+        0.30 - Math.cos(angle) * distOnPanel
+      );
+      placeStrutBetween(solarStrut, aBot, aTop, 0.009);
+    } else {
+      solarStrut.visible = false;
+    }
+  }
+
+  scene.add(root);
+  return {
+    root,
+    bodyGroup,
+    solarHinge,
+    wheels,
+    updateSuspension,
+    updateSolarWing
+  };
+}
+const pragyan = buildPragyanRover();
+
+// ============================================================================
+// 11. DYNAMIC PARALLEL WHEEL TRACKS IN THE LUNAR REGOLITH
+// ============================================================================
+const TRACK_MAX_POINTS = 140;
+const TRACK_HALF_WIDTH = 0.072;
+
+function createWheelTrackRibbon() {
+  const maxVerts = TRACK_MAX_POINTS * 2;
+  const positions = new Float32Array(maxVerts * 3);
+  const normals = new Float32Array(maxVerts * 3);
+  const uvs = new Float32Array(maxVerts * 2);
+  const indices = [];
+  for (let i = 0; i < TRACK_MAX_POINTS - 1; i++) {
+    const a = i * 2;
+    const b = a + 1;
+    const c = a + 2;
+    const d = a + 3;
+    indices.push(a, b, d, a, d, c);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.setDrawRange(0, 0);
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: wheelTrackTex.map,
+    normalMap: wheelTrackTex.normalMap,
+    normalScale: new THREE.Vector2(1.9, 1.9),
+    alphaMap: wheelTrackTex.alphaMap,
+    transparent: true,
+    opacity: 0.94,
+    roughness: 0.96,
+    metalness: 0.0,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -3
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+
+  return { mesh, geo, positions, normals, uvs, points: [], totalDist: 0 };
+}
+
+const leftWheelTrack = createWheelTrackRibbon();
+const rightWheelTrack = createWheelTrackRibbon();
+
+function resetWheelTracks() {
+  [leftWheelTrack, rightWheelTrack].forEach(tr => {
+    tr.points.length = 0;
+    tr.totalDist = 0;
+    tr.geo.setDrawRange(0, 0);
+  });
+}
+
+function appendWheelTrackPoint(track, wx, wz, dirX, dirZ) {
+  if (track.points.length >= TRACK_MAX_POINTS) return;
+  const last = track.points[track.points.length - 1];
+  if (last) {
+    const d = Math.hypot(wx - last.x, wz - last.z);
+    if (d < 0.032) return;
+    track.totalDist += d;
+  }
+
+  const wy = getTerrainHeight(wx, wz) + 0.007;
+  const n = getTerrainNormal(wx, wz);
+  // Right perpendicular vector to wheel travel direction
+  const rx = -dirZ;
+  const rz = dirX;
+
+  const idx = track.points.length;
+  track.points.push({ x: wx, z: wz });
+
+  const v0 = idx * 2;
+  const v1 = v0 + 1;
+
+  const lx = wx - rx * TRACK_HALF_WIDTH;
+  const lz = wz - rz * TRACK_HALF_WIDTH;
+  const ly = getTerrainHeight(lx, lz) + 0.007;
+
+  const rrx = wx + rx * TRACK_HALF_WIDTH;
+  const rrz = wz + rz * TRACK_HALF_WIDTH;
+  const rry = getTerrainHeight(rrx, rrz) + 0.007;
+
+  track.positions[v0 * 3]     = lx;
+  track.positions[v0 * 3 + 1] = ly;
+  track.positions[v0 * 3 + 2] = lz;
+
+  track.positions[v1 * 3]     = rrx;
+  track.positions[v1 * 3 + 1] = rry;
+  track.positions[v1 * 3 + 2] = rrz;
+
+  track.normals[v0 * 3] = track.normals[v1 * 3] = n.x;
+  track.normals[v0 * 3 + 1] = track.normals[v1 * 3 + 1] = n.y;
+  track.normals[v0 * 3 + 2] = track.normals[v1 * 3 + 2] = n.z;
+
+  const vCoord = track.totalDist * 1.9;
+  track.uvs[v0 * 2] = 0;
+  track.uvs[v0 * 2 + 1] = vCoord;
+  track.uvs[v1 * 2] = 1;
+  track.uvs[v1 * 2 + 1] = vCoord;
+
+  track.geo.attributes.position.needsUpdate = true;
+  track.geo.attributes.normal.needsUpdate = true;
+  track.geo.attributes.uv.needsUpdate = true;
+
+  if (track.points.length >= 2) {
+    track.geo.setDrawRange(0, (track.points.length - 1) * 6);
+  }
+}
+
+// ============================================================================
+// 12. LOW-GRAVITY LUNAR DUST PLUME & BALLISTIC EJECTA SYSTEM
+// ============================================================================
+function createDustSystem() {
+  const BILLOW_COUNT = 680;
+  const GRIT_COUNT = 460;
+  const TOTAL = BILLOW_COUNT + GRIT_COUNT;
+
+  const positions = new Float32Array(TOTAL * 3);
+  const sizes = new Float32Array(TOTAL);
+  const alphas = new Float32Array(TOTAL);
+  const warmMix = new Float32Array(TOTAL);
+
+  const particles = new Array(TOTAL);
+  const rand = mulberry32(8888);
+
+  for (let i = 0; i < TOTAL; i++) {
+    const isBillow = i < BILLOW_COUNT;
+    particles[i] = {
+      isBillow,
+      alive: false,
+      age: 0,
+      life: 1,
+      x: 0, y: -20, z: 0,
+      vx: 0, vy: 0, vz: 0,
+      baseSize: isBillow ? (0.48 + rand() * 0.85) : (0.032 + rand() * 0.058),
+      growRate: isBillow ? (0.52 + rand() * 0.65) : 0.0,
+      maxAlpha: isBillow ? (0.075 + rand() * 0.095) : (0.48 + rand() * 0.32),
+      warm: 0
+    };
+    positions[i * 3 + 1] = -20;
+    sizes[i] = 0.01;
+    alphas[i] = 0;
+    warmMix[i] = 0;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
+  geo.setAttribute('aWarm', new THREE.BufferAttribute(warmMix, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: dustSpriteTex },
+      uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+      uSunDir: { value: SUN_DIR.clone() }
+    },
+    vertexShader: `
+      attribute float aSize;
+      attribute float aAlpha;
+      attribute float aWarm;
+      varying float vAlpha;
+      varying float vWarm;
+      varying float vSunLit;
+      uniform float uPixelRatio;
+      uniform vec3 uSunDir;
+      void main() {
+        vAlpha = aAlpha;
+        vWarm = aWarm;
+        // Particles slightly higher catch full low-angle sunlight; fade gracefully very near lens to avoid foreground blobs
+        vSunLit = smoothstep(-0.05, 0.35, position.y);
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        float nearFade = smoothstep(1.2, 3.8, -mvPos.z);
+        vAlpha = aAlpha * nearFade;
+        gl_PointSize = clamp((aSize * 290.0 * uPixelRatio) / max(-mvPos.z, 0.65), 1.0, 145.0);
+        gl_Position = projectionMatrix * mvPos;
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D uMap;
+      varying float vAlpha;
+      varying float vWarm;
+      varying float vSunLit;
+      void main() {
+        if (vAlpha <= 0.003) discard;
+        vec4 tex = texture2D(uMap, gl_PointCoord);
+        float a = tex.a * vAlpha;
+        if (a <= 0.003) discard;
+        // Regolith grey illuminated by crisp white sun + subtle amber thruster bounce near nozzle wash
+        vec3 dustGrey = mix(vec3(0.46, 0.47, 0.49), vec3(0.76, 0.77, 0.79), vSunLit);
+        vec3 thrusterTint = vec3(1.0, 0.72, 0.44);
+        vec3 col = mix(dustGrey, thrusterTint, vWarm * 0.48);
+        gl_FragColor = vec4(col, a);
+      }
+    `,
+    transparent: true,
+    depthWrite: false
+  });
+
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  scene.add(points);
+
+  let nextBillow = 0;
+  let nextGrit = BILLOW_COUNT;
+  let spawnRand = mulberry32(20230823); // Chandrayaan-3 landing date!
+
+  function reset() {
+    spawnRand = mulberry32(20230823);
+    nextBillow = 0;
+    nextGrit = BILLOW_COUNT;
+    for (let i = 0; i < TOTAL; i++) {
+      particles[i].alive = false;
+      positions[i * 3 + 1] = -20;
+      alphas[i] = 0;
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.aAlpha.needsUpdate = true;
+  }
+
+  function spawnPlumeWash(cx, cz, altitude, throttle, countScale, dt) {
+    // Exhaust scours lunar regolith when lander is below ~11.5m
+    const washStrength = clamp(1.0 - altitude / 11.8, 0, 1) * throttle;
+    if (washStrength <= 0.01) return;
+
+    const billowToSpawn = Math.floor(washStrength * 95 * countScale * dt + spawnRand());
+    for (let k = 0; k < billowToSpawn; k++) {
+      const p = particles[nextBillow];
+      nextBillow = (nextBillow + 1) % BILLOW_COUNT;
+      const ang = spawnRand() * Math.PI * 2;
+      const r0 = 0.25 + spawnRand() * (0.85 + altitude * 0.16);
+      const speed = (2.1 + spawnRand() * 3.8) * (0.45 + washStrength * 0.75);
+      p.alive = true;
+      p.age = 0;
+      p.life = 2.6 + spawnRand() * 3.2;
+      p.x = cx + Math.cos(ang) * r0;
+      p.z = cz + Math.sin(ang) * r0;
+      p.y = getTerrainHeight(p.x, p.z) + 0.06 + spawnRand() * 0.14;
+      p.vx = Math.cos(ang) * speed;
+      p.vz = Math.sin(ang) * speed;
+      // Low-angle radial vacuum dust sheet hugs closer to lunar regolith before settling in 1/6 g
+      p.vy = (0.28 + spawnRand() * 0.68) * (0.55 + washStrength * 0.55);
+      p.warm = clamp(washStrength * 1.1, 0, 1);
+    }
+
+    const gritToSpawn = Math.floor(washStrength * 80 * countScale * dt + spawnRand());
+    for (let k = 0; k < gritToSpawn; k++) {
+      const p = particles[nextGrit];
+      nextGrit = BILLOW_COUNT + ((nextGrit - BILLOW_COUNT + 1) % GRIT_COUNT);
+      const ang = spawnRand() * Math.PI * 2;
+      const r0 = 0.2 + spawnRand() * 1.05;
+      const speed = (2.8 + spawnRand() * 5.2) * (0.4 + washStrength * 0.8);
+      p.alive = true;
+      p.age = 0;
+      p.life = 2.0 + spawnRand() * 2.8;
+      p.x = cx + Math.cos(ang) * r0;
+      p.z = cz + Math.sin(ang) * r0;
+      p.y = getTerrainHeight(p.x, p.z) + 0.04;
+      p.vx = Math.cos(ang) * speed;
+      p.vz = Math.sin(ang) * speed;
+      p.vy = (0.75 + spawnRand() * 1.95) * (0.45 + washStrength * 0.7);
+      p.warm = clamp(washStrength * 0.85, 0, 1);
+    }
+  }
+
+  function spawnFootPuff(fx, fz, count = 12) {
+    for (let k = 0; k < count; k++) {
+      const p = particles[nextBillow];
+      nextBillow = (nextBillow + 1) % BILLOW_COUNT;
+      const ang = spawnRand() * Math.PI * 2;
+      const speed = 0.45 + spawnRand() * 0.95;
+      p.alive = true;
+      p.age = 0;
+      p.life = 2.0 + spawnRand() * 1.8;
+      p.x = fx + Math.cos(ang) * 0.16;
+      p.z = fz + Math.sin(ang) * 0.16;
+      p.y = getTerrainHeight(p.x, p.z) + 0.03;
+      p.vx = Math.cos(ang) * speed;
+      p.vz = Math.sin(ang) * speed;
+      p.vy = 0.35 + spawnRand() * 0.55;
+      p.warm = 0;
+    }
+  }
+
+  function spawnWheelDust(wx, wy, wz, speed) {
+    if (speed < 0.05 || spawnRand() > 0.38) return;
+    const p = particles[nextGrit];
+    nextGrit = BILLOW_COUNT + ((nextGrit - BILLOW_COUNT + 1) % GRIT_COUNT);
+    const ang = spawnRand() * Math.PI * 2;
+    p.alive = true;
+    p.age = 0;
+    p.life = 0.85 + spawnRand() * 0.75;
+    p.x = wx + (spawnRand() - 0.5) * 0.06;
+    p.y = wy + 0.025;
+    p.z = wz - 0.04;
+    p.vx = Math.cos(ang) * 0.14;
+    p.vz = -speed * 0.45 + Math.sin(ang) * 0.1;
+    p.vy = 0.24 + spawnRand() * 0.32;
+    p.warm = 0;
+  }
+
+  function update(dt) {
+    for (let i = 0; i < TOTAL; i++) {
+      const p = particles[i];
+      if (!p.alive) continue;
+      p.age += dt;
+      if (p.age >= p.life) {
+        p.alive = false;
+        alphas[i] = 0;
+        positions[i * 3 + 1] = -20;
+        continue;
+      }
+
+      // True lunar low-gravity ballistic fall (no atmospheric drag for grit; very gentle dispersion for dust sheets)
+      const grav = p.isBillow ? LUNAR_GRAVITY * 0.42 : LUNAR_GRAVITY;
+      p.vy -= grav * dt;
+      if (p.isBillow) {
+        // Subtle radial spreading deceleration as sheet thins out
+        const spreadDamp = Math.exp(-0.32 * dt);
+        p.vx *= spreadDamp;
+        p.vz *= spreadDamp;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+
+      // Settle cleanly onto lunar regolith surface
+      const gH = getTerrainHeight(p.x, p.z);
+      const minY = gH + (p.isBillow ? 0.08 : 0.015);
+      if (p.y < minY) {
+        p.y = minY;
+        p.vy = 0;
+        p.vx *= Math.exp(-3.5 * dt);
+        p.vz *= Math.exp(-3.5 * dt);
+      }
+
+      const tNorm = p.age / p.life;
+      const fadeIn = smoothstep(0.0, 0.08, tNorm);
+      const fadeOut = 1.0 - smoothstep(0.45, 1.0, tNorm);
+
+      positions[i * 3]     = p.x;
+      positions[i * 3 + 1] = p.y;
+      positions[i * 3 + 2] = p.z;
+      sizes[i] = p.baseSize * (1.0 + p.age * p.growRate);
+      alphas[i] = p.maxAlpha * fadeIn * fadeOut;
+      warmMix[i] = p.warm * Math.exp(-p.age * 2.2);
+    }
+
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.aSize.needsUpdate = true;
+    geo.attributes.aAlpha.needsUpdate = true;
+    geo.attributes.aWarm.needsUpdate = true;
+  }
+
+  return { reset, spawnPlumeWash, spawnFootPuff, spawnWheelDust, update };
+}
+
+const dustSystem = createDustSystem();
+
+// ============================================================================
+// 13. ROVER PATH KINEMATICS (BAY -> RAMP -> CRATERED REGOLITH)
+// ============================================================================
+const ROVER_BAY_Z = 0.30;
+const S_HINGE = RAMP_HINGE_LOCAL_Z - ROVER_BAY_Z; // 0.57 m from stowed center to top of ramp
+const S_RAMP_END = S_HINGE + RAMP_TOTAL_LEN;      // 2.41 m to bottom toe of ramp
+const RAMP_COS = Math.cos(RAMP_SLOPE_ANGLE);
+const RAMP_SIN = Math.sin(RAMP_SLOPE_ANGLE);
+const RAMP_END_Z = RAMP_HINGE_LOCAL_Z + RAMP_TOTAL_LEN * RAMP_COS; // ~2.552 m
+
+// Evaluates exact 3D contact point on bay floor, unfolded ramp, or lunar regolith for arc distance `u` and lateral offset `latX`
+function getRoverWheelGroundPoint(u, latX, chassisWorldY, outVec) {
+  const bayFloorWorldY = chassisWorldY + RAMP_HINGE_LOCAL_Y; // ~0.76 m at rest
+
+  if (u <= S_HINGE) {
+    // Inside Vikram's rover bay
+    outVec.set(latX, bayFloorWorldY, ROVER_BAY_Z + u);
+    return false; // not on regolith
+  }
+
+  if (u < S_RAMP_END) {
+    // Rolling down the two-stage ramp with gentle C1 rounding at top hinge & bottom toe
+    const dRamp = u - S_HINGE;
+    const wz = RAMP_HINGE_LOCAL_Z + dRamp * RAMP_COS;
+    let wy = bayFloorWorldY - dRamp * RAMP_SIN + 0.012;
+
+    // Smooth micro-fillet at top hinge transition
+    if (dRamp < 0.14) {
+      const k = 1.0 - dRamp / 0.14;
+      wy += k * k * 0.018;
+    }
+    // Smooth transition onto lunar terrain at very toe of ramp
+    if (dRamp > RAMP_TOTAL_LEN - 0.16) {
+      const t = (dRamp - (RAMP_TOTAL_LEN - 0.16)) / 0.16;
+      const groundY = getTerrainHeight(latX, wz);
+      wy = lerp(wy, groundY, smoothstep(0, 1, t));
+    }
+    outVec.set(latX, wy, wz);
+    return false;
+  }
+
+  // Rolling freely across the cratered lunar south-pole regolith!
+  const dGround = u - S_RAMP_END;
+  // Gentle graceful leftward curve (-X) so Pragyan presents a classic 3/4 hero angle at rest
+  const curveX = -0.34 * smoothstep(0.0, 2.8, dGround) * (dGround * 0.42);
+  const wz = RAMP_END_Z + dGround * 0.985;
+  const wx = curveX + latX;
+  const wy = getTerrainHeight(wx, wz);
+  outVec.set(wx, wy, wz);
+  return true; // on lunar regolith -> leave wheel tracks!
+}
+
+// ============================================================================
+// 14. 25-SECOND CINEMATIC CHOREOGRAPHY & CRITICALLY-DAMPED CAMERA
+// ============================================================================
+const SEQUENCE_DURATION = 25.0;
+
+// Timeline key beats (seconds)
+const T_TOUCHDOWN = 8.2;
+const T_RAMP1_START = 11.6;
+const T_RAMP1_END = 14.1;
+const T_RAMP2_START = 12.9;
+const T_RAMP2_END = 15.2;
+const T_ROVER_START = 15.6;
+const T_ROVER_END = 24.4;
+const T_SOLAR_START = 16.3;
+const T_SOLAR_END = 18.6;
+
+// State tracking across animation
+let simTime = 0.0;
+let prevRoverS = 0.0;
+let roverWheelAngle = 0.0;
+let touchdownPuffFired = false;
+let rampToePuffFired = false;
+
+// Smooth damped camera state
+const camPosCur = new THREE.Vector3();
+const camTargetCur = new THREE.Vector3();
+const camPosGoal = new THREE.Vector3();
+const camTargetGoal = new THREE.Vector3();
+let camInitialized = false;
+
+// Evaluate ideal cinematic camera trajectory for timestamp `t` (0..25s+)
+function evaluateCameraGoals(t, landerY, roverPos, outPos, outTarget) {
+  if (t < 8.4) {
+    // Act I: Slow sweeping orbit during powered descent over craters, showing plumes & Earth
+    const u = smootherstep(0.0, 8.4, t);
+    const angle = lerp(0.42, 1.18, u); // Sweeps from front-right toward side-front-right
+    const radius = lerp(11.8, 7.6, u);
+    const camY = lerp(Math.max(landerY + 1.8, 4.2), 2.15, u);
+    outPos.set(Math.sin(angle) * radius, camY, Math.cos(angle) * radius);
+    outTarget.set(
+      lerp(-0.35, 0.0, u),
+      landerY + lerp(0.55, 0.92, u),
+      lerp(-0.2, 0.35, u)
+    );
+  } else if (t < 14.8) {
+    // Act II -> Early Act III: Settle into medium-low orbit framing touchdown, settling dust, and ramp opening
+    const u = smootherstep(8.4, 14.8, t);
+    const angle = lerp(1.18, 0.68, u);
+    const radius = lerp(7.6, 5.4, u);
+    const camY = lerp(2.15, 1.38, u);
+    outPos.set(Math.sin(angle) * radius, camY, Math.cos(angle) * radius + lerp(0.0, 1.15, u));
+    outTarget.set(0.0, lerp(0.92, 0.72, u), lerp(0.35, 1.15, u));
+  } else {
+    // Act III -> Act IV: Glide alongside Pragyan rolling down ramp & onto regolith, settling LOW beside the rover!
+    const u = smootherstep(14.8, 24.8, t);
+    // Start of segment (matches t=14.8): (~3.39, 1.38, 5.34)
+    // End settled hero pose: low beside Pragyan's front-right flank looking back along wheel tracks -> Vikram -> blue Earth!
+    const startX = Math.sin(0.68) * 5.4;
+    const startZ = Math.cos(0.68) * 5.4 + 1.15;
+
+    const endX = roverPos.x + 1.72;
+    const endY = getTerrainHeight(roverPos.x + 1.72, roverPos.z + 1.38) + 0.60;
+    const endZ = roverPos.z + 1.38;
+
+    // Gentle orbital arc as camera lowers beside rover
+    const arcBulgeX = Math.sin(u * Math.PI) * 0.78;
+    const arcBulgeZ = Math.sin(u * Math.PI) * 0.35;
+
+    outPos.set(
+      lerp(startX, endX, u) + arcBulgeX,
+      lerp(1.38, endY, u),
+      lerp(startZ, endZ, u) + arcBulgeZ
+    );
+
+    // Target shifts gracefully from ramp bay to framing Pragyan + wheel tracks + Vikram + blue Earth cleanly in sky
+    outTarget.set(
+      lerp(0.0, roverPos.x - 0.08, u),
+      lerp(0.72, roverPos.y + 0.50, u),
+      lerp(1.15, roverPos.z - 1.32, u)
+    );
+
+    // Subtle poised living breath after 25s (imperceptible stillness, keeps final frame alive)
+    if (t > SEQUENCE_DURATION) {
+      const holdT = t - SEQUENCE_DURATION;
+      outPos.x += Math.sin(holdT * 0.22) * 0.045;
+      outPos.y += Math.sin(holdT * 0.18) * 0.015;
+    }
+  }
+}
+
+// Reusable vectors for per-frame rover kinematics
+const _wPt = [
+  new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(),
+  new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()
+];
+const _roverCenter = new THREE.Vector3();
+const _roverFwd = new THREE.Vector3();
+const _roverRight = new THREE.Vector3();
+const _roverUp = new THREE.Vector3();
+const _roverMat4 = new THREE.Matrix4();
+
+function updateSimulation(t, dt) {
+  // ==========================================================================
+  // A. VIKRAM DESCENT, HOVER BRAKING, TOUCHDOWN & LEG COMPRESSION
+  // ==========================================================================
+  let landerY = 0.0;
+  let landerX = 0.0;
+  let landerZ = 0.0;
+  let pitch = 0.0;
+  let roll = 0.0;
+  let throttle = 0.0;
+  let legComp = 0.0;
+
+  if (t < T_TOUCHDOWN) {
+    // Powered descent profile: 13.5m -> 0.0m with smooth lunar terminal braking curve
+    const u = t / T_TOUCHDOWN;
+    // Smooth decelerating descent (faster early, gentle ~0.85 m/s touchdown)
+    const remain = 1.0 - u;
+    landerY = 13.5 * Math.pow(remain, 2.05) + 0.55 * remain * (1.0 - Math.pow(u, 3));
+    if (u > 0.98) landerY *= (1.0 - smoothstep(0.98, 1.0, u));
+
+    // Gentle lateral terminal correction converging to (0, 0)
+    const latDecay = Math.pow(1.0 - smoothstep(0.0, 0.82, u), 2.0);
+    landerX = -1.25 * latDecay;
+    landerZ = -0.78 * latDecay;
+
+    // Slight attitude trim during descent, leveling cleanly before touchdown
+    pitch = 0.055 * latDecay + Math.sin(t * 1.9) * 0.009 * (1.0 - u);
+    roll  = -0.068 * latDecay + Math.cos(t * 1.6) * 0.009 * (1.0 - u);
+
+    // Engine throttle modulation: high braking -> hover trim -> cutoff at touchdown
+    throttle = 0.72 + 0.28 * Math.sin(u * Math.PI * 0.85);
+    if (t > T_TOUCHDOWN - 0.18) {
+      throttle *= (1.0 - smoothstep(T_TOUCHDOWN - 0.18, T_TOUCHDOWN, t));
+    }
+    legComp = 0.0;
+  } else {
+    // Post-touchdown: solidly planted at (0, 0, 0) with damped telescopic leg compression!
+    const dtLand = t - T_TOUCHDOWN;
+    landerY = 0.0;
+    landerX = 0.0;
+    landerZ = 0.0;
+
+    // Rapid engine cutoff tail-off
+    throttle = Math.exp(-dtLand * 11.0) * 0.45;
+    if (throttle < 0.01) throttle = 0.0;
+
+    // Physically damped shock-absorber compression stroke:
+    // Strikes downward to ~0.165m peak compression at +0.26s, rebounds smoothly, settles at CHASSIS_STATIC_COMP (0.06m)
+    const impactStroke = Math.sin(Math.min(dtLand * 6.8, Math.PI * 3.5)) * Math.exp(-dtLand * 3.1) * 0.125;
+    const staticEase = smoothstep(0.0, 0.22, dtLand) * CHASSIS_STATIC_COMP;
+    legComp = clamp(staticEase + impactStroke, 0.0, 0.18);
+
+    // Subtle post-impact chassis pitch/roll rock damping out quickly
+    const wobble = Math.exp(-dtLand * 3.6);
+    pitch = Math.sin(dtLand * 7.2) * 0.016 * wobble;
+    roll  = Math.cos(dtLand * 6.4) * 0.013 * wobble;
+
+    // Single crisp touchdown dust puff around all 4 footpads
+    if (!touchdownPuffFired) {
+      touchdownPuffFired = true;
+      vikram.legs.forEach(L => {
+        dustSystem.spawnFootPuff(L.footPos.x, L.footPos.z, 14);
+      });
+    }
+  }
+
+  vikram.root.position.set(landerX, landerY, landerZ);
+  vikram.chassis.rotation.set(pitch, 0, roll);
+  vikram.updateLegs(legComp);
+
+  // Thruster plumes, nozzle residual thermal glow & ground illumination light
+  vikram.plumeShaderMat.uniforms.uTime.value = t;
+  vikram.plumeShaderMat.uniforms.uThrottle.value = throttle;
+  vikram.plumeMeshes.forEach(m => { m.visible = throttle > 0.008; });
+
+  // Nozzles glow hot amber-orange during burn and cool gradually over 3.5s after MECO
+  const nozzleHeat = t < T_TOUCHDOWN
+    ? 0.95
+    : 0.95 * Math.exp(-(t - T_TOUCHDOWN) * 0.85);
+  matEngineNozzle.emissiveIntensity = nozzleHeat * 1.45;
+
+  // Dynamic ground light under engine nozzles
+  thrusterLight.position.set(landerX, Math.max(landerY + 0.35, 0.55), landerZ);
+  thrusterLight.intensity = throttle * 7.5 * clamp(1.2 - landerY / 16.0, 0.15, 1.2);
+
+  // Brief realistic AOCS attitude control micro-puffs during descent stabilization
+  vikram.aocsPuffs.forEach((puff, idx) => {
+    const pulse1 = idx % 2 === 0 ? Math.exp(-Math.pow((t - 2.3) * 5.0, 2)) : 0;
+    const pulse2 = idx % 2 === 1 ? Math.exp(-Math.pow((t - 5.1) * 5.5, 2)) : 0;
+    const op = (pulse1 + pulse2) * 0.24;
+    puff.material.uniforms.uOpacity.value = op;
+    puff.visible = op > 0.008;
+  });
+
+  // Spawn thruster-scoured low-gravity lunar dust during descent
+  if (throttle > 0.04 && landerY < 11.8) {
+    dustSystem.spawnPlumeWash(landerX, landerZ, landerY, throttle, 1.0, dt);
+  }
+
+  // ==========================================================================
+  // B. SOFT CONTACT SHADOWS UNDER LANDER & 4 FOOTPADS
+  // ==========================================================================
+  const altFactor = 1.0 - smoothstep(0.0, 9.5, landerY);
+  landerContactShadow.position.set(landerX, getTerrainHeight(landerX, landerZ) + 0.008, landerZ);
+  const shadowScale = lerp(2.1, 1.05, altFactor);
+  landerContactShadow.scale.set(shadowScale, shadowScale, 1);
+  landerContactShadow.material.opacity = 0.62 * Math.pow(altFactor, 1.8);
+
+  const footFactor = 1.0 - smoothstep(0.0, 2.2, landerY);
+  vikram.legs.forEach((L, idx) => {
+    const fx = landerX + L.footPos.x;
+    const fz = landerZ + L.footPos.z;
+    const fs = footContactShadows[idx];
+    fs.position.set(fx, getTerrainHeight(fx, fz) + 0.009, fz);
+    const sc = lerp(1.6, 0.92, footFactor);
+    fs.scale.set(sc, sc, 1);
+    fs.material.opacity = 0.72 * Math.pow(footFactor, 2.0);
+  });
+
+  // ==========================================================================
+  // C. TWO-STAGE RAMP UNFOLDING
+  // ==========================================================================
+  const ramp1 = smootherstep(T_RAMP1_START, T_RAMP1_END, t);
+  const ramp2 = smootherstep(T_RAMP2_START, T_RAMP2_END, t);
+  vikram.updateRamp(ramp1, ramp2);
+
+  // Subtle dust puff right as lower ramp toe contacts the lunar regolith
+  if (ramp2 > 0.985 && !rampToePuffFired) {
+    rampToePuffFired = true;
+    dustSystem.spawnFootPuff(-0.32, RAMP_END_Z, 7);
+    dustSystem.spawnFootPuff( 0.32, RAMP_END_Z, 7);
+  }
+
+  // ==========================================================================
+  // D. PRAGYAN ROVER EGRESS, SOLAR WING DEPLOYMENT, ROCKER-BOGIE & TRACKS
+  // ==========================================================================
+  // Smooth S-curve rover travel distance `s` (0 m stowed inside bay -> 4.95 m out on lunar regolith)
+  const roverU = smootherstep(T_ROVER_START, T_ROVER_END, t);
+  const roverS = roverU * 4.95;
+  const ds = Math.max(0, roverS - prevRoverS);
+  const roverSpeed = dt > 1e-4 ? ds / dt : 0;
+  prevRoverS = roverS;
+
+  const chassisWorldY = landerY + vikram.chassis.position.y;
+
+  if (t < T_ROVER_START) {
+    // Stowed snugly inside Vikram's bay (moves rigidly with Vikram during descent & leg compression!)
+    pragyan.root.position.set(
+      landerX,
+      chassisWorldY + RAMP_HINGE_LOCAL_Y,
+      landerZ + ROVER_BAY_Z
+    );
+    pragyan.root.rotation.set(pitch, 0, roll);
+    pragyan.updateSolarWing(0); // Folded flat on top inside bay
+    pragyan.updateSuspension([0, 0, 0, 0, 0, 0]);
+    roverContactShadow.material.opacity = 0;
+  } else {
+    // Evaluate all 6 wheel contact points along bay -> ramp -> lunar regolith
+    let leftOnRegolith = false;
+    let rightOnRegolith = false;
+
+    for (let sIdx = 0; sIdx < 2; sIdx++) {
+      const latX = (sIdx === 0 ? -1 : 1) * ROVER_TRACK_HALF;
+      for (let wIdx = 0; wIdx < 3; wIdx++) {
+        const uWheel = roverS + ROVER_WHEEL_Z[wIdx];
+        const onReg = getRoverWheelGroundPoint(uWheel, latX, chassisWorldY, _wPt[sIdx * 3 + wIdx]);
+        if (onReg && wIdx === 1) {
+          if (sIdx === 0) leftOnRegolith = true;
+          else rightOnRegolith = true;
+        }
+      }
+    }
+
+    // Compute chassis center & orientation frame from the 6 wheel ground contacts
+    const pLF = _wPt[0], pLM = _wPt[1], pLR = _wPt[2];
+    const pRF = _wPt[3], pRM = _wPt[4], pRR = _wPt[5];
+
+    _roverCenter.set(
+      (pLF.x + pLM.x + pLR.x + pRF.x + pRM.x + pRR.x) / 6,
+      (pLF.y + pLM.y + pLR.y + pRF.y + pRM.y + pRR.y) / 6,
+      (pLF.z + pLM.z + pLR.z + pRF.z + pRM.z + pRR.z) / 6
+    );
+
+    // Forward axis from rear-pair midpoint to front-pair midpoint
+    _roverFwd.set(
+      (pLF.x + pRF.x) * 0.5 - (pLR.x + pRR.x) * 0.5,
+      (pLF.y + pRF.y) * 0.5 - (pLR.y + pRR.y) * 0.5,
+      (pLF.z + pRF.z) * 0.5 - (pLR.z + pRR.z) * 0.5
+    ).normalize();
+
+    // Right axis from left-side average to right-side average
+    _roverRight.set(
+      (pRF.x + pRM.x + pRR.x - pLF.x - pLM.x - pLR.x) / 3,
+      (pRF.y + pRM.y + pRR.y - pLF.y - pLM.y - pLR.y) / 3,
+      (pRF.z + pRM.z + pRR.z - pLF.z - pLM.z - pLR.z) / 3
+    ).normalize();
+
+    // Orthonormal up & right vectors
+    _roverUp.crossVectors(_roverFwd, _roverRight).normalize();
+    _roverRight.crossVectors(_roverUp, _roverFwd).normalize();
+
+    // Three.js basis: +X = right (wait: in rover local coords, +Z is forward, +Y is up, +X is right -> cross(Y, Z) = X!)
+    // Let's verify handedness: cross(Up, Fwd) points LEFT (-X) if Fwd=+Z, Up=+Y? Wait: (0,1,0) x (0,0,1) = (1,0,0) = +X!
+    // Yes! Right-hand rule: Y x Z = +X! Let's make sure X points to the right (+X side of rover):
+    // Actually when facing +Z (out of bay), +X is to the rover's LEFT if viewed from behind, or RIGHT in world +X!
+    // Since pRF has latX = +0.305 and pLF has latX = -0.305, _roverRight = pR - pL points along +X!
+    // And cross(Y, Z) = (0,1,0) x (0,0,1) = (+1,0,0) = +X!
+    // So cross(_roverUp, _roverFwd) = +X, and cross(_roverFwd, +X) = +Y! Wait: (0,0,1) x (1,0,0) = (0,1,0) = +Y!
+    // Check: _roverUp = cross(_roverFwd, _roverRight) = (0,0,1) x (1,0,0) = (0,1,0) = +Y! Exact!
+    _roverMat4.makeBasis(_roverRight, _roverUp, _roverFwd);
+    pragyan.root.position.copy(_roverCenter);
+    pragyan.root.quaternion.setFromRotationMatrix(_roverMat4);
+
+    // Compute per-wheel local vertical compliance for rocker-bogie articulation
+    const wheelLocalYs = [0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < 6; i++) {
+      const dx = _wPt[i].x - _roverCenter.x;
+      const dy = _wPt[i].y - _roverCenter.y;
+      const dz = _wPt[i].z - _roverCenter.z;
+      const localY = dx * _roverUp.x + dy * _roverUp.y + dz * _roverUp.z;
+      wheelLocalYs[i] = clamp(localY, -0.06, 0.06);
+    }
+    pragyan.updateSuspension(wheelLocalYs);
+
+    // Spin all 6 wheels accurately at exact ground-contact rolling rate
+    roverWheelAngle += ds / ROVER_WHEEL_RADIUS;
+    for (let i = 0; i < pragyan.wheels.length; i++) {
+      pragyan.wheels[i].spin.rotation.x = roverWheelAngle;
+    }
+
+    // Unfold Pragyan's hinged solar panel wing toward the low South Pole sun once clear of bay roof
+    const solarOpen = smootherstep(T_SOLAR_START, T_SOLAR_END, t);
+    pragyan.updateSolarWing(solarOpen);
+
+    // Imprint crisp parallel wheel tracks into the regolith once wheels roll off the ramp!
+    if (leftOnRegolith && ds > 0.0005) {
+      appendWheelTrackPoint(leftWheelTrack, pLM.x, pLM.z, _roverFwd.x, _roverFwd.z);
+      dustSystem.spawnWheelDust(pLR.x, pLR.y, pLR.z, roverSpeed);
+    }
+    if (rightOnRegolith && ds > 0.0005) {
+      appendWheelTrackPoint(rightWheelTrack, pRM.x, pRM.z, _roverFwd.x, _roverFwd.z);
+      dustSystem.spawnWheelDust(pRR.x, pRR.y, pRR.z, roverSpeed);
+    }
+
+    // Soft contact shadow beneath Pragyan once it touches the regolith
+    const onGroundBlend = smoothstep(S_RAMP_END - 0.25, S_RAMP_END + 0.35, roverS);
+    roverContactShadow.position.set(_roverCenter.x, getTerrainHeight(_roverCenter.x, _roverCenter.z) + 0.009, _roverCenter.z);
+    roverContactShadow.material.opacity = 0.56 * onGroundBlend;
+  }
+
+  // ==========================================================================
+  // E. UPDATE LOW-GRAVITY DUST & EARTH ROTATION
+  // ==========================================================================
+  dustSystem.update(dt);
+  earthMesh.rotation.y = 2.42 + t * 0.0025;
+
+  // ==========================================================================
+  // F. SLOW CRITICALLY-DAMPED CINEMATIC CAMERA
+  // ==========================================================================
+  evaluateCameraGoals(t, landerY, pragyan.root.position, camPosGoal, camTargetGoal);
+
+  if (!camInitialized) {
+    camPosCur.copy(camPosGoal);
+    camTargetCur.copy(camTargetGoal);
+    camInitialized = true;
+  } else {
+    // Exponential damping for silky weighted cinema camera motion
+    const posAlpha = 1.0 - Math.exp(-2.35 * dt);
+    const tgtAlpha = 1.0 - Math.exp(-2.85 * dt);
+    camPosCur.lerp(camPosGoal, posAlpha);
+    camTargetCur.lerp(camTargetGoal, tgtAlpha);
+  }
+
+  camera.position.copy(camPosCur);
+  camera.lookAt(camTargetCur);
+}
+
+// ============================================================================
+// 15. POST-PROCESSING (SUBTLE OPTICAL BLOOM + ACES FILMIC OUTPUT)
+// ============================================================================
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.26, // subtle optical bloom strength
+  0.42, // radius
+  0.90  // high threshold: only bright sun glints off foil, thruster cores & Earth limb bloom
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// ============================================================================
+// 16. RESIZE HANDLER, SILENT REPLAY HOTKEY & ANIMATION LOOP
+// ============================================================================
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+});
+
+// Silent replay shortcut (R key) with zero UI
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') {
+    simTime = 0;
+    prevRoverS = 0;
+    roverWheelAngle = 0;
+    touchdownPuffFired = false;
+    rampToePuffFired = false;
+    camInitialized = false;
+    resetWheelTracks();
+    dustSystem.reset();
+  }
+});
+
+// Initialize frame 0 immediately
+updateSimulation(0, 1 / 60);
+
+let lastTime = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const rawDt = (now - lastTime) * 0.001;
+  lastTime = now;
+  const dt = clamp(rawDt, 0.001, 0.05);
+
+  simTime += dt;
+  updateSimulation(simTime, dt);
+  composer.render();
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
