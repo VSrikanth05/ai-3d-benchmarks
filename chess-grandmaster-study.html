@@ -1,0 +1,3596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Grandmaster's Study — Photorealistic 3D Chess</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #07060a;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #efe7d8;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+
+    /* Minimal Luxury HUD */
+    .hud {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      transition: opacity 0.35s ease;
+    }
+    .hud.hud-hidden .hud-panel:not(.hud-unhide-wrap) {
+      opacity: 0;
+      pointer-events: none !important;
+      transform: translateY(6px);
+    }
+    .hud-panel {
+      pointer-events: auto;
+      background: rgba(13, 11, 15, 0.74);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid rgba(214, 178, 108, 0.22);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 240, 205, 0.06);
+      border-radius: 12px;
+      transition: opacity 0.3s ease, transform 0.3s ease, border-color 0.2s ease;
+    }
+
+    /* Top-left Header & Status */
+    .hud-top-left {
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      padding: 12px 16px;
+      min-width: 248px;
+      max-width: 310px;
+    }
+    .brand-title {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: #f3e4c3;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-sub {
+      font-size: 11px;
+      color: rgba(235, 223, 200, 0.58);
+      margin-top: 2px;
+      letter-spacing: 0.02em;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid rgba(214, 178, 108, 0.14);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .turn-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      transition: background 0.25s, box-shadow 0.25s;
+    }
+    .turn-dot.white {
+      background: radial-gradient(circle at 35% 30%, #fffdf7, #dfd2b6);
+      box-shadow: 0 0 8px rgba(255, 238, 198, 0.5);
+    }
+    .turn-dot.black {
+      background: radial-gradient(circle at 35% 30%, #444b5e, #0d0f15);
+      box-shadow: 0 0 8px rgba(105, 165, 255, 0.45);
+    }
+    .status-text {
+      flex: 1;
+      color: #f0e6d2;
+    }
+    .status-badge {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      display: none;
+    }
+    .status-badge.check {
+      display: inline-block;
+      background: rgba(230, 52, 62, 0.22);
+      border: 1px solid rgba(255, 76, 86, 0.65);
+      color: #ff8c94;
+      box-shadow: 0 0 12px rgba(255, 50, 65, 0.35);
+    }
+    .status-badge.mate {
+      display: inline-block;
+      background: rgba(218, 165, 65, 0.25);
+      border: 1px solid rgba(242, 196, 98, 0.7);
+      color: #ffd982;
+    }
+
+    /* Top-right Camera Presets */
+    .hud-top-right {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px;
+    }
+    .cam-btn, .ctrl-btn, .pill-btn {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: rgba(238, 228, 208, 0.78);
+      font-family: inherit;
+      font-size: 11.5px;
+      font-weight: 500;
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+    }
+    .cam-btn:hover, .ctrl-btn:hover, .pill-btn:hover {
+      background: rgba(218, 180, 108, 0.12);
+      color: #fff6e5;
+      border-color: rgba(218, 180, 108, 0.25);
+    }
+    .cam-btn.active, .ctrl-btn.active, .pill-btn.active {
+      background: rgba(214, 172, 92, 0.22);
+      color: #ffe4a8;
+      border-color: rgba(232, 190, 110, 0.55);
+      box-shadow: 0 0 14px rgba(214, 172, 92, 0.16);
+    }
+    .hud-divider {
+      width: 1px;
+      height: 18px;
+      background: rgba(214, 178, 108, 0.18);
+      margin: 0 2px;
+    }
+
+    /* Right Panel: Game Selector & Move History */
+    .hud-right-drawer {
+      position: absolute;
+      top: 72px;
+      right: 18px;
+      width: 244px;
+      max-height: calc(100vh - 168px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .drawer-section {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(214, 178, 108, 0.14);
+    }
+    .section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: rgba(218, 186, 126, 0.68);
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .game-select {
+      width: 100%;
+      background: rgba(25, 21, 28, 0.88);
+      color: #f4ebd8;
+      border: 1px solid rgba(214, 178, 108, 0.28);
+      border-radius: 7px;
+      padding: 6px 8px;
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+      cursor: pointer;
+    }
+    .game-select:focus {
+      border-color: rgba(234, 194, 118, 0.65);
+    }
+    .game-meta {
+      font-size: 10.5px;
+      color: rgba(232, 220, 198, 0.54);
+      margin-top: 5px;
+      line-height: 1.35;
+    }
+    .moves-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 10px 10px;
+      min-height: 120px;
+      max-height: 290px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(214, 178, 108, 0.3) transparent;
+    }
+    .moves-wrap::-webkit-scrollbar { width: 5px; }
+    .moves-wrap::-webkit-scrollbar-thumb {
+      background: rgba(214, 178, 108, 0.3);
+      border-radius: 4px;
+    }
+    .move-row {
+      display: grid;
+      grid-template-columns: 28px 1fr 1fr;
+      gap: 4px;
+      font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+      font-size: 11.5px;
+      padding: 2px 0;
+      align-items: center;
+    }
+    .move-num {
+      color: rgba(218, 188, 130, 0.48);
+      text-align: right;
+      padding-right: 4px;
+    }
+    .move-cell {
+      padding: 3px 6px;
+      border-radius: 5px;
+      color: rgba(242, 234, 218, 0.85);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .move-cell:hover {
+      background: rgba(214, 178, 108, 0.14);
+    }
+    .move-cell.current {
+      background: rgba(218, 174, 88, 0.28);
+      color: #ffe7b0;
+      font-weight: 600;
+    }
+    .move-empty {
+      text-align: center;
+      padding: 22px 8px;
+      font-size: 11.5px;
+      color: rgba(235, 222, 198, 0.42);
+      font-style: italic;
+    }
+
+    /* Bottom-Center Playback & Options Bar */
+    .hud-bottom-bar {
+      position: absolute;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 10px;
+    }
+    .ctrl-btn.primary {
+      background: linear-gradient(135deg, rgba(224, 178, 92, 0.3), rgba(182, 130, 50, 0.26));
+      border-color: rgba(234, 192, 112, 0.55);
+      color: #ffebc0;
+      padding: 6px 13px;
+      font-weight: 600;
+    }
+    .ctrl-btn.primary:hover {
+      background: linear-gradient(135deg, rgba(234, 188, 102, 0.42), rgba(196, 142, 58, 0.36));
+    }
+    .ctrl-btn:disabled {
+      opacity: 0.36;
+      cursor: default;
+      pointer-events: none;
+    }
+    .hint-pill {
+      position: absolute;
+      bottom: 66px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10.5px;
+      color: rgba(240, 228, 205, 0.56);
+      background: rgba(12, 10, 14, 0.52);
+      border: 1px solid rgba(214, 178, 108, 0.14);
+      padding: 3px 11px;
+      border-radius: 999px;
+      pointer-events: none;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      transition: opacity 0.6s ease;
+    }
+    .hint-pill.faded {
+      opacity: 0;
+    }
+    .hud-unhide-wrap {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      padding: 4px;
+      display: none;
+    }
+    .hud.hud-hidden .hud-unhide-wrap {
+      display: block;
+    }
+    .hud.hud-hidden .hint-pill {
+      opacity: 0;
+    }
+
+    @media (max-width: 820px) {
+      .hud-right-drawer { display: none; }
+      .hud-top-left { min-width: 195px; padding: 9px 12px; }
+      .hint-pill { display: none; }
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="hud" id="hud">
+    <!-- Top Left: Title & Game Status -->
+    <div class="hud-panel hud-top-left">
+      <div class="brand-title">
+        <span>♔</span>
+        <span>Grandmaster's Study</span>
+      </div>
+      <div class="brand-sub" id="gameSubtitle">The Opera Game · Paris, 1858</div>
+      <div class="status-row">
+        <span class="turn-dot white" id="turnDot"></span>
+        <span class="status-text" id="statusText">White to move</span>
+        <span class="status-badge" id="statusBadge"></span>
+      </div>
+    </div>
+
+    <!-- Top Right: Camera Presets -->
+    <div class="hud-panel hud-top-right">
+      <button class="cam-btn active" data-cam="white" title="White player perspective">White POV</button>
+      <button class="cam-btn" data-cam="black" title="Black player perspective">Black POV</button>
+      <button class="cam-btn" data-cam="top" title="Overhead tactical view">Top-Down</button>
+      <button class="cam-btn" data-cam="orbit" title="Slow cinematic orbit">Cinematic</button>
+      <span class="hud-divider"></span>
+      <button class="cam-btn" id="btnHideHud" title="Hide interface (H)">Hide</button>
+    </div>
+
+    <!-- Unhide button when HUD hidden -->
+    <div class="hud-panel hud-unhide-wrap">
+      <button class="cam-btn" id="btnShowHud" title="Show interface (H)">Show HUD</button>
+    </div>
+
+    <!-- Right Drawer: Famous Games & Move History -->
+    <div class="hud-panel hud-right-drawer">
+      <div class="drawer-section">
+        <div class="section-label">
+          <span>Match / Mode</span>
+          <span id="moveCounter">0 / 33</span>
+        </div>
+        <select class="game-select" id="gameSelect">
+          <option value="opera">The Opera Game (Morphy, 1858)</option>
+          <option value="immortal">The Immortal Game (Anderssen, 1851)</option>
+          <option value="evergreen">The Evergreen Game (Anderssen, 1852)</option>
+          <option value="ai">Interactive · Play vs AI</option>
+          <option value="free">Interactive · 2-Player Free Play</option>
+        </select>
+        <div class="game-meta" id="gameMeta">Paul Morphy vs. Duke Karl &amp; Count Isouard — classic queen sacrifice mate.</div>
+      </div>
+      <div class="section-label" style="padding: 8px 12px 2px; margin: 0;">
+        <span>Notation</span>
+        <span style="font-size:9.5px; opacity:0.75;">SAN</span>
+      </div>
+      <div class="moves-wrap" id="movesList">
+        <div class="move-empty">Match beginning...</div>
+      </div>
+    </div>
+
+    <!-- Subtle interaction tip -->
+    <div class="hint-pill" id="hintPill">Click or drag any piece to play · Drag scene to orbit · Scroll to zoom</div>
+
+    <!-- Bottom Center: Playback & FX Controls -->
+    <div class="hud-panel hud-bottom-bar">
+      <button class="ctrl-btn" id="btnReset" title="Reset board">↺ Reset</button>
+      <button class="ctrl-btn" id="btnPrev" title="Step backward">◀</button>
+      <button class="ctrl-btn primary" id="btnPlayPause" title="Play / Pause automated match">❚❚ Pause</button>
+      <button class="ctrl-btn" id="btnNext" title="Step forward">▶</button>
+      <span class="hud-divider"></span>
+      <button class="ctrl-btn" id="btnSpeed" title="Animation playback speed">1.0×</button>
+      <button class="ctrl-btn active" id="btnCaptureMode" title="Toggle captured piece effect">✦ Embers</button>
+    </div>
+  </div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ============================================================================
+// 1. DETERMINISTIC PRNG & NOISE UTILITIES
+// ============================================================================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hash2i(ix, iy, seed = 0) {
+  let n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 1442695041);
+  n = (n ^ (n >>> 13)) | 0;
+  n = Math.imul(n, 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function tileNoise2D(x, y, px, py, seed = 0) {
+  const gx = ((x % px) + px) % px;
+  const gy = ((y % py) + py) % py;
+  const x0 = Math.floor(gx), y0 = Math.floor(gy);
+  const x1 = (x0 + 1) % px, y1 = (y0 + 1) % py;
+  const fx = gx - x0, fy = gy - y0;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hash2i(x0, y0, seed), b = hash2i(x1, y0, seed);
+  const c = hash2i(x0, y1, seed), d = hash2i(x1, y1, seed);
+  return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
+}
+
+function tileFbm(u, v, freq, octaves, seed = 0) {
+  let sum = 0, amp = 0.5, norm = 0, f = freq;
+  for (let i = 0; i < octaves; i++) {
+    sum += tileNoise2D(u * f, v * f, f, f, seed + i * 31) * amp;
+    norm += amp;
+    amp *= 0.5;
+    f *= 2;
+  }
+  return sum / norm;
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function easeInOutCubic(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+function easeInOutQuint(t) { return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2; }
+
+// ============================================================================
+// 2. PROCEDURAL PBR TEXTURE GENERATORS
+// ============================================================================
+function createCreamMarbleTextures(size = 512) {
+  const diffCanvas = document.createElement('canvas');
+  const roughCanvas = document.createElement('canvas');
+  const bumpCanvas = document.createElement('canvas');
+  diffCanvas.width = roughCanvas.width = bumpCanvas.width = size;
+  diffCanvas.height = roughCanvas.height = bumpCanvas.height = size;
+
+  const dCtx = diffCanvas.getContext('2d');
+  const rCtx = roughCanvas.getContext('2d');
+  const bCtx = bumpCanvas.getContext('2d');
+  const dImg = dCtx.createImageData(size, size);
+  const rImg = rCtx.createImageData(size, size);
+  const bImg = bCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const warp1 = tileFbm(u, v, 4, 4, 101);
+      const warp2 = tileFbm(u + 0.37, v + 0.61, 8, 4, 211);
+      const cloud = tileFbm(u, v, 3, 4, 307);
+
+      // Soft multi-scale marble veining
+      const t1 = (u * 2.0 + v * 1.4 + warp1 * 1.65 + warp2 * 0.45) * Math.PI * 2;
+      const veinPrimary = Math.pow(1.0 - Math.abs(Math.sin(t1)), 9.0);
+      const t2 = (u * 3.0 - v * 2.2 + warp2 * 1.9) * Math.PI * 2;
+      const veinFine = Math.pow(1.0 - Math.abs(Math.sin(t2)), 14.0);
+      const veinGold = Math.pow(1.0 - Math.abs(Math.sin(t1 + 0.45)), 18.0) * 0.6;
+
+      const baseR = 239 + (cloud - 0.5) * 14;
+      const baseG = 229 + (cloud - 0.5) * 14;
+      const baseB = 208 + (cloud - 0.5) * 16;
+
+      let r = baseR - veinPrimary * 48 - veinFine * 26 + veinGold * 10;
+      let g = baseG - veinPrimary * 52 - veinFine * 28 - veinGold * 6;
+      let b = baseB - veinPrimary * 56 - veinFine * 30 - veinGold * 28;
+
+      const idx = (y * size + x) * 4;
+      dImg.data[idx] = clamp(r, 0, 255);
+      dImg.data[idx + 1] = clamp(g, 0, 255);
+      dImg.data[idx + 2] = clamp(b, 0, 255);
+      dImg.data[idx + 3] = 255;
+
+      // Polished stone with very slight roughness rise inside mineral veins
+      const rough = clamp(28 + veinPrimary * 34 + veinFine * 22 + (warp2 - 0.5) * 14, 14, 96);
+      rImg.data[idx] = rImg.data[idx + 1] = rImg.data[idx + 2] = rough;
+      rImg.data[idx + 3] = 255;
+
+      const bump = clamp(128 - veinPrimary * 24 - veinFine * 14 + (cloud - 0.5) * 8, 0, 255);
+      bImg.data[idx] = bImg.data[idx + 1] = bImg.data[idx + 2] = bump;
+      bImg.data[idx + 3] = 255;
+    }
+  }
+  dCtx.putImageData(dImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+  bCtx.putImageData(bImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(diffCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  map.anisotropy = 8;
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping;
+
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = bumpMap.wrapT = THREE.RepeatWrapping;
+
+  return { map, roughnessMap, bumpMap };
+}
+
+function createWoodTextures(options) {
+  const {
+    size = 512,
+    seed = 500,
+    lightRGB = [108, 62, 32],
+    darkRGB = [40, 20, 10],
+    ringScale = 14,
+    grainStretch = 6,
+    baseRough = 52,
+    poreStrength = 0.25
+  } = options;
+
+  const diffCanvas = document.createElement('canvas');
+  const roughCanvas = document.createElement('canvas');
+  const bumpCanvas = document.createElement('canvas');
+  diffCanvas.width = roughCanvas.width = bumpCanvas.width = size;
+  diffCanvas.height = roughCanvas.height = bumpCanvas.height = size;
+
+  const dCtx = diffCanvas.getContext('2d');
+  const rCtx = roughCanvas.getContext('2d');
+  const bCtx = bumpCanvas.getContext('2d');
+  const dImg = dCtx.createImageData(size, size);
+  const rImg = rCtx.createImageData(size, size);
+  const bImg = bCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const flow = tileFbm(u, v, 3, 4, seed);
+      const fine = tileFbm(u * 2, v * 0.5, 8, 3, seed + 47);
+      const streak = tileNoise2D(u * 64, v * 12, 64, 12, seed + 93);
+
+      // Cathedral wood ring wave
+      const ringCoord = (u * ringScale + flow * 4.2 + Math.sin(v * Math.PI * 2 + flow * 3.0) * 0.65);
+      const ring = 0.5 + 0.5 * Math.sin(ringCoord * Math.PI * 2);
+      const sharpRing = Math.pow(ring, 0.65);
+
+      // Micro wood pores stretched along v
+      const poreNoise = tileNoise2D(u * 96, v * (96 / grainStretch), 96, Math.round(96 / grainStretch), seed + 173);
+      const pore = poreNoise < 0.14 ? (0.14 - poreNoise) / 0.14 : 0;
+
+      const mix = clamp(sharpRing * 0.72 + fine * 0.22 + (streak - 0.5) * 0.12, 0, 1);
+      const r = lerp(darkRGB[0], lightRGB[0], mix) * (1 - pore * poreStrength);
+      const g = lerp(darkRGB[1], lightRGB[1], mix) * (1 - pore * poreStrength);
+      const b = lerp(darkRGB[2], lightRGB[2], mix) * (1 - pore * poreStrength);
+
+      const idx = (y * size + x) * 4;
+      dImg.data[idx] = clamp(r, 0, 255);
+      dImg.data[idx + 1] = clamp(g, 0, 255);
+      dImg.data[idx + 2] = clamp(b, 0, 255);
+      dImg.data[idx + 3] = 255;
+
+      const rough = clamp(baseRough + (1 - sharpRing) * 26 + pore * 55 + (streak - 0.5) * 14, 16, 175);
+      rImg.data[idx] = rImg.data[idx + 1] = rImg.data[idx + 2] = rough;
+      rImg.data[idx + 3] = 255;
+
+      const bump = clamp(128 + (sharpRing - 0.5) * 28 - pore * 65 + (streak - 0.5) * 12, 0, 255);
+      bImg.data[idx] = bImg.data[idx + 1] = bImg.data[idx + 2] = bump;
+      bImg.data[idx + 3] = 255;
+    }
+  }
+  dCtx.putImageData(dImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+  bCtx.putImageData(bImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(diffCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  map.anisotropy = 8;
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping;
+
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = bumpMap.wrapT = THREE.RepeatWrapping;
+
+  return { map, roughnessMap, bumpMap };
+}
+
+function createPieceSurfaceTextures(isWhite) {
+  const size = 256;
+  const diffCanvas = document.createElement('canvas');
+  const bumpCanvas = document.createElement('canvas');
+  diffCanvas.width = bumpCanvas.width = size;
+  diffCanvas.height = bumpCanvas.height = size;
+  const dCtx = diffCanvas.getContext('2d');
+  const bCtx = bumpCanvas.getContext('2d');
+  const dImg = dCtx.createImageData(size, size);
+  const bImg = bCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const n1 = tileFbm(u, v, 6, 3, isWhite ? 901 : 1201);
+      const band = Math.sin((u * 4 + v * 2 + n1 * 1.4) * Math.PI * 2) * 0.5 + 0.5;
+      const idx = (y * size + x) * 4;
+      if (isWhite) {
+        // Subtle warm aged ivory Schreger micro-striation
+        const tone = lerp(231, 246, band * 0.45 + n1 * 0.55);
+        dImg.data[idx] = clamp(tone + 3, 0, 255);
+        dImg.data[idx + 1] = clamp(tone - 3, 0, 255);
+        dImg.data[idx + 2] = clamp(tone - 18, 0, 255);
+      } else {
+        // Glossy deep obsidian stone/ebony micro-variation
+        const tone = lerp(13, 25, band * 0.4 + n1 * 0.6);
+        dImg.data[idx] = clamp(tone, 0, 255);
+        dImg.data[idx + 1] = clamp(tone + 1, 0, 255);
+        dImg.data[idx + 2] = clamp(tone + 6, 0, 255);
+      }
+      dImg.data[idx + 3] = 255;
+      const bVal = clamp(128 + (n1 - 0.5) * 18 + (band - 0.5) * 8, 0, 255);
+      bImg.data[idx] = bImg.data[idx + 1] = bImg.data[idx + 2] = bVal;
+      bImg.data[idx + 3] = 255;
+    }
+  }
+  dCtx.putImageData(dImg, 0, 0);
+  bCtx.putImageData(bImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(diffCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = bumpMap.wrapT = THREE.RepeatWrapping;
+  return { map, bumpMap };
+}
+
+function createFeltTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const rand = mulberry32(777);
+  for (let i = 0; i < size * size; i++) {
+    const n = (rand() - 0.5) * 26;
+    const idx = i * 4;
+    img.data[idx] = clamp(18 + n * 0.5, 0, 255);
+    img.data[idx + 1] = clamp(56 + n, 0, 255);
+    img.data[idx + 2] = clamp(34 + n * 0.6, 0, 255);
+    img.data[idx + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4, 4);
+  return tex;
+}
+
+function createCoordinateStripTexture(labels) {
+  const w = 2048, h = 192;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+
+  // Subtle metallic brushed brass gradient fill
+  const grad = ctx.createLinearGradient(0, 32, 0, h - 32);
+  grad.addColorStop(0.0, '#f3d997');
+  grad.addColorStop(0.48, '#d4ac5c');
+  grad.addColorStop(1.0, '#9f7935');
+
+  ctx.fillStyle = grad;
+  ctx.font = '600 94px Georgia, "Times New Roman", serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 2;
+
+  const cellW = w / 8;
+  for (let i = 0; i < 8; i++) {
+    ctx.fillText(labels[i], cellW * (i + 0.5), h * 0.52);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+function createSoftGlowSprite() {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  grad.addColorStop(0.28, 'rgba(255, 244, 220, 0.72)');
+  grad.addColorStop(0.65, 'rgba(255, 224, 175, 0.16)');
+  grad.addColorStop(1.0, 'rgba(255, 210, 150, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  return tex;
+}
+
+// ============================================================================
+// 3. COMPLETE CHESS ENGINE + FAMOUS HISTORICAL GAMES + TACTICAL AI
+// ============================================================================
+const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const PIECE_VALUES = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+
+const FAMOUS_GAMES = {
+  opera: {
+    name: 'The Opera Game (1858)',
+    subtitle: 'The Opera Game · Paris, 1858',
+    meta: 'Paul Morphy vs. Duke Karl & Count Isouard — rapid development culminating in a sparkling queen sacrifice.',
+    moves: [
+      'e4', 'e5', 'Nf3', 'd6', 'd4', 'Bg4', 'dxe5', 'Bxf3', 'Qxf3', 'dxe5',
+      'Bc4', 'Nf6', 'Qb3', 'Qe7', 'Nc3', 'c6', 'Bg5', 'b5', 'Nxb5', 'cxb5',
+      'Bxb5+', 'Nbd7', 'O-O-O', 'Rd8', 'Rxd7', 'Rxd7', 'Rd1', 'Qe6', 'Bxd7+', 'Nxd7',
+      'Qb8+', 'Nxb8', 'Rd8#'
+    ]
+  },
+  immortal: {
+    name: 'The Immortal Game (1851)',
+    subtitle: 'The Immortal Game · London, 1851',
+    meta: 'Adolf Anderssen vs. Lionel Kieseritzky — sacrificing both rooks, a bishop, and the queen for checkmate.',
+    moves: [
+      'e4', 'e5', 'f4', 'exf4', 'Bc4', 'Qh4+', 'Kf1', 'b5', 'Bxb5', 'Nf6',
+      'Nf3', 'Qh6', 'd3', 'Nh5', 'Nh4', 'Qg5', 'Nf5', 'c6', 'g4', 'Nf6',
+      'Rg1', 'cxb5', 'h4', 'Qg6', 'h5', 'Qg5', 'Qf3', 'Ng8', 'Bxf4', 'Qf6',
+      'Nc3', 'Bc5', 'Nd5', 'Qxb2', 'Bd6', 'Bxg1', 'e5', 'Qxa1+', 'Ke2', 'Na6',
+      'Nxg7+', 'Kd8', 'Qf6+', 'Nxf6', 'Be7#'
+    ]
+  },
+  evergreen: {
+    name: 'The Evergreen Game (1852)',
+    subtitle: 'The Evergreen Game · Berlin, 1852',
+    meta: 'Adolf Anderssen vs. Jean Dufresne — daring Evans Gambit attack ending in an unforgettable bishop mate.',
+    moves: [
+      'e4', 'e5', 'Nf3', 'Nc6', 'Bc4', 'Bc5', 'b4', 'Bxb4', 'c3', 'Ba5',
+      'd4', 'exd4', 'O-O', 'd3', 'Qb3', 'Qf6', 'e5', 'Qg6', 'Re1', 'Nge7',
+      'Ba3', 'b5', 'Qxb5', 'Rb8', 'Qa4', 'Bb6', 'Nbd2', 'Bb7', 'Ne4', 'Qf5',
+      'Bxd3', 'Qh5', 'Nf6+', 'gxf6', 'exf6', 'Rg8', 'Rad1', 'Qxf3', 'Rxe7+', 'Nxe7',
+      'Qxd7+', 'Kxd7', 'Bf5+', 'Ke8', 'Bd7+', 'Kf8', 'Bxe7#'
+    ]
+  },
+  ai: {
+    name: 'Play vs AI',
+    subtitle: 'Interactive Match · White vs. Study AI',
+    meta: 'Play White by clicking or dragging pieces; the study AI responds thoughtfully as Obsidian Black.',
+    moves: null
+  },
+  free: {
+    name: '2-Player Free Play',
+    subtitle: 'Interactive Study · Free Play',
+    meta: 'Play both White and Black freely on the board with full legal-move guidance and check detection.',
+    moves: null
+  }
+};
+
+class ChessEngine {
+  constructor() {
+    this.reset();
+  }
+
+  reset() {
+    this.board = Array.from({ length: 8 }, () => Array(8).fill(null));
+    const back = ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'];
+    let uid = 1;
+    for (let f = 0; f < 8; f++) {
+      this.board[0][f] = { id: uid++, color: 'w', type: back[f] };
+      this.board[1][f] = { id: uid++, color: 'w', type: 'p' };
+      this.board[6][f] = { id: uid++, color: 'b', type: 'p' };
+      this.board[7][f] = { id: uid++, color: 'b', type: back[f] };
+    }
+    this.turn = 'w';
+    this.castling = { wK: true, wQ: true, bK: true, bQ: true };
+    this.enPassant = null; // { r, f }
+    this.history = [];
+    this.nextId = uid;
+  }
+
+  cloneState() {
+    return {
+      board: this.board.map(row => row.map(p => (p ? { ...p } : null))),
+      turn: this.turn,
+      castling: { ...this.castling },
+      enPassant: this.enPassant ? { ...this.enPassant } : null
+    };
+  }
+
+  restoreState(s) {
+    this.board = s.board.map(row => row.map(p => (p ? { ...p } : null)));
+    this.turn = s.turn;
+    this.castling = { ...s.castling };
+    this.enPassant = s.enPassant ? { ...s.enPassant } : null;
+  }
+
+  inBounds(r, f) { return r >= 0 && r < 8 && f >= 0 && f < 8; }
+
+  findKing(color) {
+    for (let r = 0; r < 8; r++) {
+      for (let f = 0; f < 8; f++) {
+        const p = this.board[r][f];
+        if (p && p.color === color && p.type === 'k') return { r, f };
+      }
+    }
+    return null;
+  }
+
+  isSquareAttacked(tr, tf, byColor) {
+    // Pawns
+    const pDir = byColor === 'w' ? -1 : 1;
+    for (const df of [-1, 1]) {
+      const pr = tr + pDir, pf = tf + df;
+      if (this.inBounds(pr, pf)) {
+        const p = this.board[pr][pf];
+        if (p && p.color === byColor && p.type === 'p') return true;
+      }
+    }
+    // Knights
+    const kn = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+    for (const [dr, df] of kn) {
+      const nr = tr + dr, nf = tf + df;
+      if (this.inBounds(nr, nf)) {
+        const p = this.board[nr][nf];
+        if (p && p.color === byColor && p.type === 'n') return true;
+      }
+    }
+    // King
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let df = -1; df <= 1; df++) {
+        if (dr === 0 && df === 0) continue;
+        const kr = tr + dr, kf = tf + df;
+        if (this.inBounds(kr, kf)) {
+          const p = this.board[kr][kf];
+          if (p && p.color === byColor && p.type === 'k') return true;
+        }
+      }
+    }
+    // Diagonals (Bishop / Queen)
+    for (const [dr, df] of [[-1,-1],[-1,1],[1,-1],[1,1]]) {
+      let r = tr + dr, f = tf + df;
+      while (this.inBounds(r, f)) {
+        const p = this.board[r][f];
+        if (p) {
+          if (p.color === byColor && (p.type === 'b' || p.type === 'q')) return true;
+          break;
+        }
+        r += dr; f += df;
+      }
+    }
+    // Orthogonals (Rook / Queen)
+    for (const [dr, df] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+      let r = tr + dr, f = tf + df;
+      while (this.inBounds(r, f)) {
+        const p = this.board[r][f];
+        if (p) {
+          if (p.color === byColor && (p.type === 'r' || p.type === 'q')) return true;
+          break;
+        }
+        r += dr; f += df;
+      }
+    }
+    return false;
+  }
+
+  isInCheck(color) {
+    const k = this.findKing(color);
+    if (!k) return false;
+    return this.isSquareAttacked(k.r, k.f, color === 'w' ? 'b' : 'w');
+  }
+
+  generatePseudoMoves(color) {
+    const moves = [];
+    const opp = color === 'w' ? 'b' : 'w';
+    for (let r = 0; r < 8; r++) {
+      for (let f = 0; f < 8; f++) {
+        const p = this.board[r][f];
+        if (!p || p.color !== color) continue;
+        if (p.type === 'p') {
+          const dir = color === 'w' ? 1 : -1;
+          const startRank = color === 'w' ? 1 : 6;
+          const promoRank = color === 'w' ? 7 : 0;
+          const r1 = r + dir;
+          if (this.inBounds(r1, f) && !this.board[r1][f]) {
+            if (r1 === promoRank) {
+              moves.push({ from: { r, f }, to: { r: r1, f }, piece: p, promotion: 'q' });
+            } else {
+              moves.push({ from: { r, f }, to: { r: r1, f }, piece: p });
+              const r2 = r + 2 * dir;
+              if (r === startRank && !this.board[r2][f]) {
+                moves.push({ from: { r, f }, to: { r: r2, f }, piece: p, doublePush: true });
+              }
+            }
+          }
+          for (const df of [-1, 1]) {
+            const cf = f + df;
+            if (!this.inBounds(r1, cf)) continue;
+            const target = this.board[r1][cf];
+            if (target && target.color === opp) {
+              if (r1 === promoRank) {
+                moves.push({ from: { r, f }, to: { r: r1, f: cf }, piece: p, captured: target, promotion: 'q' });
+              } else {
+                moves.push({ from: { r, f }, to: { r: r1, f: cf }, piece: p, captured: target });
+              }
+            } else if (this.enPassant && this.enPassant.r === r1 && this.enPassant.f === cf) {
+              const epCap = this.board[r][cf];
+              if (epCap && epCap.color === opp && epCap.type === 'p') {
+                moves.push({
+                  from: { r, f }, to: { r: r1, f: cf }, piece: p,
+                  captured: epCap, enPassant: true, capturedPos: { r, f: cf }
+                });
+              }
+            }
+          }
+        } else if (p.type === 'n') {
+          for (const [dr, df] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+            const nr = r + dr, nf = f + df;
+            if (!this.inBounds(nr, nf)) continue;
+            const t = this.board[nr][nf];
+            if (!t || t.color === opp) {
+              moves.push({ from: { r, f }, to: { r: nr, f: nf }, piece: p, captured: t || null });
+            }
+          }
+        } else if (p.type === 'b' || p.type === 'r' || p.type === 'q') {
+          const dirs = [];
+          if (p.type === 'b' || p.type === 'q') dirs.push([-1,-1],[-1,1],[1,-1],[1,1]);
+          if (p.type === 'r' || p.type === 'q') dirs.push([-1,0],[1,0],[0,-1],[0,1]);
+          for (const [dr, df] of dirs) {
+            let nr = r + dr, nf = f + df;
+            while (this.inBounds(nr, nf)) {
+              const t = this.board[nr][nf];
+              if (!t) {
+                moves.push({ from: { r, f }, to: { r: nr, f: nf }, piece: p });
+              } else {
+                if (t.color === opp) {
+                  moves.push({ from: { r, f }, to: { r: nr, f: nf }, piece: p, captured: t });
+                }
+                break;
+              }
+              nr += dr; nf += df;
+            }
+          }
+        } else if (p.type === 'k') {
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let df = -1; df <= 1; df++) {
+              if (dr === 0 && df === 0) continue;
+              const nr = r + dr, nf = f + df;
+              if (!this.inBounds(nr, nf)) continue;
+              const t = this.board[nr][nf];
+              if (!t || t.color === opp) {
+                moves.push({ from: { r, f }, to: { r: nr, f: nf }, piece: p, captured: t || null });
+              }
+            }
+          }
+          // Castling
+          const homeRank = color === 'w' ? 0 : 7;
+          if (r === homeRank && f === 4 && !this.isSquareAttacked(homeRank, 4, opp)) {
+            const canK = color === 'w' ? this.castling.wK : this.castling.bK;
+            const canQ = color === 'w' ? this.castling.wQ : this.castling.bQ;
+            if (canK && !this.board[homeRank][5] && !this.board[homeRank][6]) {
+              const rook = this.board[homeRank][7];
+              if (rook && rook.color === color && rook.type === 'r' &&
+                  !this.isSquareAttacked(homeRank, 5, opp) && !this.isSquareAttacked(homeRank, 6, opp)) {
+                moves.push({
+                  from: { r: homeRank, f: 4 }, to: { r: homeRank, f: 6 }, piece: p,
+                  castle: 'K', rookFrom: { r: homeRank, f: 7 }, rookTo: { r: homeRank, f: 5 }, rookPiece: rook
+                });
+              }
+            }
+            if (canQ && !this.board[homeRank][3] && !this.board[homeRank][2] && !this.board[homeRank][1]) {
+              const rook = this.board[homeRank][0];
+              if (rook && rook.color === color && rook.type === 'r' &&
+                  !this.isSquareAttacked(homeRank, 3, opp) && !this.isSquareAttacked(homeRank, 2, opp)) {
+                moves.push({
+                  from: { r: homeRank, f: 4 }, to: { r: homeRank, f: 2 }, piece: p,
+                  castle: 'Q', rookFrom: { r: homeRank, f: 0 }, rookTo: { r: homeRank, f: 3 }, rookPiece: rook
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+    return moves;
+  }
+
+  applyMoveRaw(m) {
+    const p = this.board[m.from.r][m.from.f];
+    this.board[m.from.r][m.from.f] = null;
+    if (m.enPassant) {
+      this.board[m.capturedPos.r][m.capturedPos.f] = null;
+    }
+    if (m.castle) {
+      const rook = this.board[m.rookFrom.r][m.rookFrom.f];
+      this.board[m.rookFrom.r][m.rookFrom.f] = null;
+      this.board[m.rookTo.r][m.rookTo.f] = rook;
+    }
+    const moved = m.promotion ? { ...p, type: m.promotion } : p;
+    this.board[m.to.r][m.to.f] = moved;
+
+    // Castling rights
+    if (p.type === 'k') {
+      if (p.color === 'w') { this.castling.wK = false; this.castling.wQ = false; }
+      else { this.castling.bK = false; this.castling.bQ = false; }
+    }
+    if (m.from.r === 0 && m.from.f === 0) this.castling.wQ = false;
+    if (m.from.r === 0 && m.from.f === 7) this.castling.wK = false;
+    if (m.from.r === 7 && m.from.f === 0) this.castling.bQ = false;
+    if (m.from.r === 7 && m.from.f === 7) this.castling.bK = false;
+    if (m.to.r === 0 && m.to.f === 0) this.castling.wQ = false;
+    if (m.to.r === 0 && m.to.f === 7) this.castling.wK = false;
+    if (m.to.r === 7 && m.to.f === 0) this.castling.bQ = false;
+    if (m.to.r === 7 && m.to.f === 7) this.castling.bK = false;
+
+    this.enPassant = m.doublePush ? { r: (m.from.r + m.to.r) / 2, f: m.from.f } : null;
+    this.turn = this.turn === 'w' ? 'b' : 'w';
+  }
+
+  getLegalMoves(color = this.turn) {
+    const pseudo = this.generatePseudoMoves(color);
+    const legal = [];
+    for (const m of pseudo) {
+      const snap = this.cloneState();
+      this.applyMoveRaw(m);
+      if (!this.isInCheck(color)) legal.push(m);
+      this.restoreState(snap);
+    }
+    return legal;
+  }
+
+  getLegalMovesFrom(r, f) {
+    return this.getLegalMoves(this.turn).filter(m => m.from.r === r && m.from.f === f);
+  }
+
+  formatSAN(move, allLegal) {
+    if (move.castle === 'K') return 'O-O';
+    if (move.castle === 'Q') return 'O-O-O';
+    const p = move.piece;
+    let s = '';
+    if (p.type !== 'p') {
+      s += p.type.toUpperCase();
+      const ambig = allLegal.filter(other =>
+        !(other.from.r === move.from.r && other.from.f === move.from.f) &&
+        other.piece.type === p.type &&
+        other.to.r === move.to.r &&
+        other.to.f === move.to.f
+      );
+      if (ambig.length > 0) {
+        const sameFile = ambig.some(o => o.from.f === move.from.f);
+        const sameRank = ambig.some(o => o.from.r === move.from.r);
+        if (!sameFile) s += FILES[move.from.f];
+        else if (!sameRank) s += (move.from.r + 1);
+        else s += FILES[move.from.f] + (move.from.r + 1);
+      }
+    } else if (move.captured) {
+      s += FILES[move.from.f];
+    }
+    if (move.captured) s += 'x';
+    s += FILES[move.to.f] + (move.to.r + 1);
+    if (move.promotion) s += '=' + move.promotion.toUpperCase();
+    return s;
+  }
+
+  makeMove(move) {
+    const allLegal = this.getLegalMoves(this.turn);
+    let san = this.formatSAN(move, allLegal);
+    const prevSnap = this.cloneState();
+    this.applyMoveRaw(move);
+
+    const oppMoves = this.getLegalMoves(this.turn);
+    const inCheck = this.isInCheck(this.turn);
+    if (inCheck) {
+      san += oppMoves.length === 0 ? '#' : '+';
+    }
+    const record = {
+      ...move,
+      san,
+      prevSnap,
+      inCheck,
+      checkmate: inCheck && oppMoves.length === 0,
+      stalemate: !inCheck && oppMoves.length === 0
+    };
+    this.history.push(record);
+    return record;
+  }
+
+  parseSAN(sanStr) {
+    const clean = sanStr.replace(/[+#?!]/g, '').trim();
+    const legal = this.getLegalMoves(this.turn);
+    if (clean === 'O-O' || clean === '0-0') return legal.find(m => m.castle === 'K') || null;
+    if (clean === 'O-O-O' || clean === '0-0-0') return legal.find(m => m.castle === 'Q') || null;
+
+    let promo = null;
+    let body = clean;
+    const eqIdx = body.indexOf('=');
+    if (eqIdx !== -1) {
+      promo = body[eqIdx + 1].toLowerCase();
+      body = body.slice(0, eqIdx);
+    }
+
+    const toFile = FILES.indexOf(body[body.length - 2]);
+    const toRank = parseInt(body[body.length - 1], 10) - 1;
+    let prefix = body.slice(0, body.length - 2).replace('x', '');
+    let pieceType = 'p';
+    if (prefix.length > 0 && prefix[0] >= 'A' && prefix[0] <= 'Z') {
+      pieceType = prefix[0].toLowerCase();
+      prefix = prefix.slice(1);
+    }
+
+    let disFile = -1, disRank = -1;
+    for (const ch of prefix) {
+      if (ch >= 'a' && ch <= 'h') disFile = FILES.indexOf(ch);
+      else if (ch >= '1' && ch <= '8') disRank = parseInt(ch, 10) - 1;
+    }
+
+    return legal.find(m =>
+      m.piece.type === pieceType &&
+      m.to.r === toRank &&
+      m.to.f === toFile &&
+      (disFile === -1 || m.from.f === disFile) &&
+      (disRank === -1 || m.from.r === disRank) &&
+      (!promo || m.promotion === promo)
+    ) || null;
+  }
+
+  getGameStatus() {
+    const legal = this.getLegalMoves(this.turn);
+    const inCheck = this.isInCheck(this.turn);
+    if (legal.length === 0) {
+      return inCheck
+        ? { state: 'checkmate', winner: this.turn === 'w' ? 'b' : 'w', inCheck: true }
+        : { state: 'stalemate', winner: null, inCheck: false };
+    }
+    return { state: 'playing', winner: null, inCheck };
+  }
+
+  // Lightweight 2-ply minimax with positional center bonus for Play vs AI
+  chooseAIMove() {
+    const legal = this.getLegalMoves(this.turn);
+    if (legal.length === 0) return null;
+    const aiColor = this.turn;
+    const evalBoard = () => {
+      let score = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let f = 0; f < 8; f++) {
+          const p = this.board[r][f];
+          if (!p) continue;
+          const centerDist = Math.abs(3.5 - f) + Math.abs(3.5 - r);
+          let posBonus = (3.5 - centerDist * 0.5) * (p.type === 'p' ? 5 : p.type === 'n' ? 9 : p.type === 'b' ? 6 : 2);
+          if (p.type === 'p') posBonus += (p.color === 'w' ? r : (7 - r)) * 6;
+          const val = PIECE_VALUES[p.type] + posBonus;
+          score += p.color === aiColor ? val : -val;
+        }
+      }
+      return score;
+    };
+
+    let bestScore = -Infinity;
+    let bestMoves = [];
+    for (const m of legal) {
+      const snap = this.cloneState();
+      this.applyMoveRaw(m);
+      const replies = this.getLegalMoves(this.turn);
+      let score;
+      if (replies.length === 0) {
+        score = this.isInCheck(this.turn) ? 99999 : 0;
+      } else {
+        let worstReply = Infinity;
+        for (const rMove of replies) {
+          const snap2 = this.cloneState();
+          this.applyMoveRaw(rMove);
+          const s2 = evalBoard();
+          if (s2 < worstReply) worstReply = s2;
+          this.restoreState(snap2);
+        }
+        score = worstReply;
+      }
+      this.restoreState(snap);
+      if (score > bestScore + 0.5) {
+        bestScore = score;
+        bestMoves = [m];
+      } else if (Math.abs(score - bestScore) <= 0.5) {
+        bestMoves.push(m);
+      }
+    }
+    return bestMoves[Math.floor(Math.random() * bestMoves.length)];
+  }
+}
+
+// ============================================================================
+// 4. THREE.JS RENDERER, SCENE, INTERIOR HDRI & POST-PROCESSING
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.12;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07060a);
+scene.fog = new THREE.FogExp2(0x08070c, 0.022);
+
+const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 120);
+camera.position.set(0, 7.6, 10.6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.target.set(0, 0.45, 0.1);
+controls.minDistance = 4.6;
+controls.maxDistance = 21.0;
+controls.maxPolarAngle = Math.PI * 0.465;
+controls.minPolarAngle = 0.06;
+
+// Post-processing: RenderPass -> Subtle UnrealBloomPass -> OutputPass
+const composer = new EffectComposer(renderer);
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.42, // subtle bloom strength
+  0.48, // radius
+  0.88  // high threshold so only active rings & golden embers bloom
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// Procedural Interior Study HDRI Environment Map (PMREM)
+function buildInteriorStudyHDRI() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  const envScene = new THREE.Scene();
+  envScene.background = new THREE.Color(0x08070b);
+
+  // Dark panelled library room enclosure
+  const roomGeo = new THREE.BoxGeometry(28, 16, 28);
+  const roomMat = new THREE.MeshBasicMaterial({ color: 0x16100d, side: THREE.BackSide });
+  envScene.add(new THREE.Mesh(roomGeo, roomMat));
+
+  // Overhead warm shaded study pendant lamp (bright HDR disk for top clearcoat glints)
+  const lampPanel = new THREE.Mesh(
+    new THREE.CircleGeometry(3.4, 32),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(5.8, 4.4, 2.7) })
+  );
+  lampPanel.position.set(0, 7.5, 0);
+  lampPanel.rotation.x = Math.PI / 2;
+  envScene.add(lampPanel);
+
+  // Soft warm diffuser halo around overhead lamp
+  const haloPanel = new THREE.Mesh(
+    new THREE.RingGeometry(3.4, 7.5, 32),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(1.4, 0.95, 0.52), side: THREE.DoubleSide })
+  );
+  haloPanel.position.set(0, 7.4, 0);
+  haloPanel.rotation.x = Math.PI / 2;
+  envScene.add(haloPanel);
+
+  // Cool blue twilight study window on the left-back side (creates cool rim speculars)
+  const windowPanel = new THREE.Mesh(
+    new THREE.PlaneGeometry(7.5, 9.0),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.85, 1.55, 3.1) })
+  );
+  windowPanel.position.set(-13.2, 2.6, -2.5);
+  windowPanel.rotation.y = Math.PI / 2;
+  envScene.add(windowPanel);
+
+  // Subtle window muntins for authentic architectural reflection break-up
+  const muntinMat = new THREE.MeshBasicMaterial({ color: 0x0b0a0e });
+  const mV = new THREE.Mesh(new THREE.BoxGeometry(0.25, 9.2, 0.35), muntinMat);
+  mV.position.set(-13.0, 2.6, -2.5);
+  envScene.add(mV);
+  const mH = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.35, 7.6), muntinMat);
+  mH.position.set(-13.0, 2.8, -2.5);
+  envScene.add(mH);
+
+  // Warm amber fireplace / wall sconce glow on opposite right wall
+  const sconce = new THREE.Mesh(
+    new THREE.PlaneGeometry(5.2, 4.4),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 1.45, 0.6) })
+  );
+  sconce.position.set(13.2, 1.4, 3.5);
+  sconce.rotation.y = -Math.PI / 2;
+  envScene.add(sconce);
+
+  // Soft secondary warm bounce strip in front-right
+  const warmFill = new THREE.Mesh(
+    new THREE.PlaneGeometry(8, 3),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(1.1, 0.85, 0.58) })
+  );
+  warmFill.position.set(4.5, 4.2, 13.0);
+  warmFill.rotation.y = Math.PI;
+  envScene.add(warmFill);
+
+  const envRT = pmrem.fromScene(envScene, 0.035);
+  pmrem.dispose();
+  return envRT.texture;
+}
+
+scene.environment = buildInteriorStudyHDRI();
+scene.environmentIntensity = 0.95;
+
+// ============================================================================
+// 5. LIGHTING: WARM OVERHEAD SPOTLIGHT + COOL BLUE RIM LIGHT
+// ============================================================================
+// Warm moody overhead SpotLight casting soft-edged PCFSoftShadowMap shadows
+const mainSpot = new THREE.SpotLight(0xffdfb5, 115, 36, Math.PI * 0.27, 0.72, 1.45);
+mainSpot.position.set(1.8, 12.6, 2.2);
+mainSpot.target.position.set(0, 0.3, 0);
+mainSpot.castShadow = true;
+mainSpot.shadow.mapSize.set(2048, 2048);
+mainSpot.shadow.camera.near = 4.0;
+mainSpot.shadow.camera.far = 26.0;
+mainSpot.shadow.bias = -0.00035;
+mainSpot.shadow.normalBias = 0.022;
+mainSpot.shadow.radius = 3.2;
+scene.add(mainSpot);
+scene.add(mainSpot.target);
+
+// Cool, faint blue rim light from the side to kiss obsidian & ivory edges
+const blueRim = new THREE.DirectionalLight(0x6ba8ff, 1.35);
+blueRim.position.set(-11.0, 5.2, -5.5);
+scene.add(blueRim);
+
+// Gentle warm bounce fill from front-right so shadow faces retain sculpted clarity
+const warmBounce = new THREE.PointLight(0xffbe7a, 6.5, 22, 1.8);
+warmBounce.position.set(7.5, 3.6, 6.8);
+scene.add(warmBounce);
+
+// Subtle dark-study ambient hemisphere
+const hemiLight = new THREE.HemisphereLight(0x30364a, 0x1a110b, 0.34);
+scene.add(hemiLight);
+
+// Faint volumetric light cone under the overhead lamp for atmospheric depth
+const beamGeo = new THREE.ConeGeometry(7.2, 14.5, 40, 1, true);
+const beamMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
+  uniforms: {
+    uColor: { value: new THREE.Color(0xffd79e) },
+    uOpacity: { value: 0.028 }
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vViewPos;
+    void main() {
+      vUv = uv;
+      vNormal = normalize(normalMatrix * normal);
+      vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+      vViewPos = -mvPos.xyz;
+      gl_Position = projectionMatrix * mvPos;
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vViewPos;
+    void main() {
+      float fresnel = pow(abs(dot(normalize(vNormal), normalize(vViewPos))), 1.8);
+      float verticalFade = smoothstep(0.0, 0.35, vUv.y) * smoothstep(1.0, 0.55, vUv.y);
+      float alpha = fresnel * verticalFade * uOpacity;
+      gl_FragColor = vec4(uColor, alpha);
+    }
+  `
+});
+const lightBeam = new THREE.Mesh(beamGeo, beamMat);
+lightBeam.position.set(1.0, 7.1, 1.2);
+lightBeam.rotation.z = 0.12;
+lightBeam.rotation.x = -0.14;
+scene.add(lightBeam);
+
+// ============================================================================
+// 6. STUDY TABLE, INLAID CHESSBOARD, METALLIC COORDINATES & SIDE TRAYS
+// ============================================================================
+const SQ = 1.0;
+const BOARD_TOP_Y = 0.36;
+
+// Procedural textures
+const marbleTex = createCreamMarbleTextures(512);
+const walnutTex = createWoodTextures({
+  size: 512, seed: 412,
+  lightRGB: [116, 68, 34], darkRGB: [44, 21, 9],
+  ringScale: 10, grainStretch: 6, baseRough: 50, poreStrength: 0.28
+});
+const mahoganyTex = createWoodTextures({
+  size: 512, seed: 823,
+  lightRGB: [98, 36, 20], darkRGB: [38, 12, 7],
+  ringScale: 14, grainStretch: 8, baseRough: 44, poreStrength: 0.22
+});
+const tableWoodTex = createWoodTextures({
+  size: 512, seed: 1129,
+  lightRGB: [52, 31, 19], darkRGB: [19, 11, 7],
+  ringScale: 16, grainStretch: 10, baseRough: 68, poreStrength: 0.32
+});
+tableWoodTex.map.repeat.set(3, 2);
+tableWoodTex.roughnessMap.repeat.set(3, 2);
+tableWoodTex.bumpMap.repeat.set(3, 2);
+
+const feltTex = createFeltTexture();
+
+// --- Dark Wooden Study Table ---
+const tableGroup = new THREE.Group();
+const tableMat = new THREE.MeshPhysicalMaterial({
+  map: tableWoodTex.map,
+  roughnessMap: tableWoodTex.roughnessMap,
+  bumpMap: tableWoodTex.bumpMap,
+  bumpScale: 0.014,
+  roughness: 0.42,
+  metalness: 0.02,
+  clearcoat: 0.48,
+  clearcoatRoughness: 0.24
+});
+const tableTop = new THREE.Mesh(new THREE.BoxGeometry(28, 0.7, 20), tableMat);
+tableTop.position.set(0, -0.35, 0);
+tableTop.receiveShadow = true;
+tableGroup.add(tableTop);
+
+// Subtle carved bevel edge trim along study table perimeter
+const tableTrimMat = new THREE.MeshPhysicalMaterial({
+  map: mahoganyTex.map,
+  roughness: 0.34,
+  clearcoat: 0.55,
+  color: 0x3b1e12
+});
+const tableApron = new THREE.Mesh(new THREE.BoxGeometry(26.6, 1.4, 18.6), tableTrimMat);
+tableApron.position.set(0, -1.4, 0);
+tableGroup.add(tableApron);
+
+// Subtle inlaid leather desk blotter border line on table
+const brassInlayMat = new THREE.MeshStandardMaterial({
+  color: 0xd6b062,
+  metalness: 0.92,
+  roughness: 0.26
+});
+scene.add(tableGroup);
+
+// --- Chessboard Group ---
+const boardGroup = new THREE.Group();
+scene.add(boardGroup);
+
+// Green felt pad under chessboard
+const feltMat = new THREE.MeshStandardMaterial({
+  map: feltTex,
+  roughness: 0.94,
+  metalness: 0.0,
+  bumpMap: feltTex,
+  bumpScale: 0.008
+});
+const baseFelt = new THREE.Mesh(new THREE.BoxGeometry(9.72, 0.03, 9.72), feltMat);
+baseFelt.position.y = 0.015;
+baseFelt.receiveShadow = true;
+boardGroup.add(baseFelt);
+
+// Mahogany lower plinth & stepped bevelled frame
+const mahoganyMat = new THREE.MeshPhysicalMaterial({
+  map: mahoganyTex.map,
+  roughnessMap: mahoganyTex.roughnessMap,
+  bumpMap: mahoganyTex.bumpMap,
+  bumpScale: 0.01,
+  roughness: 0.26,
+  metalness: 0.02,
+  clearcoat: 0.82,
+  clearcoatRoughness: 0.12
+});
+
+// Solid core bed underneath inlaid squares
+const coreBed = new THREE.Mesh(new THREE.BoxGeometry(9.64, 0.26, 9.64), mahoganyMat);
+coreBed.position.y = 0.16;
+coreBed.castShadow = true;
+coreBed.receiveShadow = true;
+boardGroup.add(coreBed);
+
+// Bevelled Mahogany Border built with a precision bevelled outer frame Shape
+function createBevelledBoardFrame() {
+  const outer = 4.92;
+  const inner = 4.04;
+  const shape = new THREE.Shape();
+  shape.moveTo(-outer, -outer);
+  shape.lineTo(outer, -outer);
+  shape.lineTo(outer, outer);
+  shape.lineTo(-outer, outer);
+  shape.closePath();
+
+  const hole = new THREE.Path();
+  hole.moveTo(-inner, -inner);
+  hole.lineTo(-inner, inner);
+  hole.lineTo(inner, inner);
+  hole.lineTo(inner, -inner);
+  hole.closePath();
+  shape.holes.push(hole);
+
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: 0.22,
+    bevelEnabled: true,
+    bevelThickness: 0.075,
+    bevelSize: 0.075,
+    bevelSegments: 4
+  });
+  geo.rotateX(-Math.PI / 2);
+
+  // Normalize planar UVs for clean mahogany grain
+  const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    uv.setXY(i, (pos.getX(i) + 5) * 0.18, (pos.getZ(i) + 5) * 0.18);
+  }
+  const mesh = new THREE.Mesh(geo, mahoganyMat);
+  mesh.position.y = 0.07;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+boardGroup.add(createBevelledBoardFrame());
+
+// Fine brushed brass inlay border separating playing squares from mahogany rim
+function createBrassTrimLoop(halfSize, width, height, yPos) {
+  const g = new THREE.Group();
+  const s1 = new THREE.Mesh(new THREE.BoxGeometry(halfSize * 2 + width, height, width), brassInlayMat);
+  s1.position.set(0, yPos, halfSize);
+  const s2 = s1.clone();
+  s2.position.set(0, yPos, -halfSize);
+  const s3 = new THREE.Mesh(new THREE.BoxGeometry(width, height, halfSize * 2 - width), brassInlayMat);
+  s3.position.set(halfSize, yPos, 0);
+  const s4 = s3.clone();
+  s4.position.set(-halfSize, yPos, 0);
+  [s1, s2, s3, s4].forEach(m => { m.receiveShadow = true; g.add(m); });
+  return g;
+}
+boardGroup.add(createBrassTrimLoop(4.02, 0.042, 0.012, BOARD_TOP_Y + 0.002));
+boardGroup.add(createBrassTrimLoop(4.84, 0.025, 0.01, BOARD_TOP_Y + 0.001));
+
+// Subtle metallic algebraic coordinates (A-H, 1-8) inlaid along all 4 mahogany borders
+function addMetallicCoordinates() {
+  const filesForward = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  const filesReverse = ['H', 'G', 'F', 'E', 'D', 'C', 'B', 'A'];
+  const ranksLeft = ['8', '7', '6', '5', '4', '3', '2', '1'];
+  const ranksRight = ['1', '2', '3', '4', '5', '6', '7', '8'];
+
+  const makeMat = (labels) => new THREE.MeshStandardMaterial({
+    map: createCoordinateStripTexture(labels),
+    transparent: true,
+    metalness: 0.88,
+    roughness: 0.28,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1
+  });
+
+  const stripGeo = new THREE.PlaneGeometry(8.0, 0.52);
+  const y = BOARD_TOP_Y + 0.008;
+  const dist = 4.44;
+
+  // Front (White POV: A..H left-to-right)
+  const front = new THREE.Mesh(stripGeo, makeMat(filesForward));
+  front.rotation.x = -Math.PI / 2;
+  front.position.set(0, y, dist);
+  boardGroup.add(front);
+
+  // Back (Black POV: H..A from White's left, so A..H from Black's POV)
+  const back = new THREE.Mesh(stripGeo, makeMat(filesReverse));
+  back.rotation.x = -Math.PI / 2;
+  back.rotation.z = Math.PI;
+  back.position.set(0, y, -dist);
+  boardGroup.add(back);
+
+  // Left edge (a-file side: 8 at -z .. 1 at +z)
+  const left = new THREE.Mesh(stripGeo, makeMat(ranksLeft));
+  left.rotation.x = -Math.PI / 2;
+  left.rotation.z = Math.PI / 2;
+  left.position.set(-dist, y, 0);
+  boardGroup.add(left);
+
+  // Right edge (h-file side: readable from Black/side)
+  const right = new THREE.Mesh(stripGeo, makeMat(ranksRight));
+  right.rotation.x = -Math.PI / 2;
+  right.rotation.z = -Math.PI / 2;
+  right.position.set(dist, y, 0);
+  boardGroup.add(right);
+}
+addMetallicCoordinates();
+
+// 8x8 Inlaid Squares (Alternating Polished Cream Marble & Rich Walnut Wood)
+const squareMeshes = [];
+const squareRand = mulberry32(2026);
+
+const creamMarbleMat = new THREE.MeshPhysicalMaterial({
+  map: marbleTex.map,
+  roughnessMap: marbleTex.roughnessMap,
+  bumpMap: marbleTex.bumpMap,
+  bumpScale: 0.004,
+  roughness: 0.16,
+  metalness: 0.0,
+  clearcoat: 0.94,
+  clearcoatRoughness: 0.07,
+  reflectivity: 0.92
+});
+
+const walnutWoodMat = new THREE.MeshPhysicalMaterial({
+  map: walnutTex.map,
+  roughnessMap: walnutTex.roughnessMap,
+  bumpMap: walnutTex.bumpMap,
+  bumpScale: 0.009,
+  roughness: 0.25,
+  metalness: 0.0,
+  clearcoat: 0.78,
+  clearcoatRoughness: 0.11,
+  reflectivity: 0.85
+});
+
+function squareToWorld(r, f) {
+  return new THREE.Vector3((f - 3.5) * SQ, BOARD_TOP_Y, (3.5 - r) * SQ);
+}
+
+function worldToSquare(x, z) {
+  const f = Math.floor(x / SQ + 4.0);
+  const r = Math.floor(4.0 - z / SQ);
+  if (r < 0 || r > 7 || f < 0 || f > 7) return null;
+  return { r, f };
+}
+
+// Build individually UV-shifted chamfered square tiles so no repetition is ever visible
+const baseTileShape = new THREE.Shape();
+const th = 0.486;
+baseTileShape.moveTo(-th, -th);
+baseTileShape.lineTo(th, -th);
+baseTileShape.lineTo(th, th);
+baseTileShape.lineTo(-th, th);
+baseTileShape.closePath();
+
+for (let r = 0; r < 8; r++) {
+  for (let f = 0; f < 8; f++) {
+    const isLight = (r + f) % 2 === 1;
+    const tileGeo = new THREE.ExtrudeGeometry(baseTileShape, {
+      depth: 0.075,
+      bevelEnabled: true,
+      bevelThickness: 0.011,
+      bevelSize: 0.011,
+      bevelSegments: 2
+    });
+    tileGeo.rotateX(-Math.PI / 2);
+
+    // Randomize UV slice & quarter rotation per square for organic marble/wood inlay
+    const uvAttr = tileGeo.attributes.uv;
+    const offU = squareRand() * 0.7;
+    const offV = squareRand() * 0.7;
+    const rotQ = Math.floor(squareRand() * 4);
+    const scaleUV = isLight ? 0.42 : 0.48;
+    for (let i = 0; i < uvAttr.count; i++) {
+      let u = uvAttr.getX(i) * scaleUV;
+      let v = uvAttr.getY(i) * scaleUV;
+      if (rotQ === 1) { const t = u; u = -v; v = t; }
+      else if (rotQ === 2) { u = -u; v = -v; }
+      else if (rotQ === 3) { const t = u; u = v; v = -t; }
+      uvAttr.setXY(i, u + offU, v + offV);
+    }
+
+    const tile = new THREE.Mesh(tileGeo, isLight ? creamMarbleMat : walnutWoodMat);
+    const pos = squareToWorld(r, f);
+    tile.position.set(pos.x, BOARD_TOP_Y - 0.086, pos.z);
+    tile.receiveShadow = true;
+    tile.userData = { isSquare: true, r, f };
+    boardGroup.add(tile);
+    squareMeshes.push(tile);
+  }
+}
+
+// --- Finely Crafted Captured Piece Trays Beside the Board ---
+function createCaptureTray(xPos) {
+  const tray = new THREE.Group();
+  const w = 1.92, l = 7.8, h = 0.24, wall = 0.14;
+
+  // Outer bevelled mahogany tray shell
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(w, 0.08, l), mahoganyMat);
+  floor.position.y = 0.04;
+  floor.castShadow = true;
+  floor.receiveShadow = true;
+  tray.add(floor);
+
+  // Recessed velvet/baize felt lining
+  const lining = new THREE.Mesh(new THREE.BoxGeometry(w - wall * 2, 0.03, l - wall * 2), feltMat);
+  lining.position.y = 0.095;
+  lining.receiveShadow = true;
+  tray.add(lining);
+
+  // 4 raised walls
+  const longGeo = new THREE.BoxGeometry(wall, h, l);
+  const shortGeo = new THREE.BoxGeometry(w - wall * 2, h, wall);
+  const wL = new THREE.Mesh(longGeo, mahoganyMat);
+  wL.position.set(-(w - wall) / 2, h / 2, 0);
+  const wR = new THREE.Mesh(longGeo, mahoganyMat);
+  wR.position.set((w - wall) / 2, h / 2, 0);
+  const wF = new THREE.Mesh(shortGeo, mahoganyMat);
+  wF.position.set(0, h / 2, (l - wall) / 2);
+  const wB = new THREE.Mesh(shortGeo, mahoganyMat);
+  wB.position.set(0, h / 2, -(l - wall) / 2);
+  [wL, wR, wF, wB].forEach(m => { m.castShadow = true; m.receiveShadow = true; tray.add(m); });
+
+  // Subtle brass corner accent pins
+  const pinGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.015, 12);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const pin = new THREE.Mesh(pinGeo, brassInlayMat);
+      pin.position.set(sx * (w / 2 - wall * 0.5), h + 0.005, sz * (l / 2 - wall * 0.5));
+      tray.add(pin);
+    }
+  }
+
+  tray.position.set(xPos, 0, 0);
+  scene.add(tray);
+  return tray;
+}
+
+createCaptureTray(-6.32); // Left tray: White pieces captured by Black
+createCaptureTray(6.32);  // Right tray: Black pieces captured by White
+
+function getTraySlotPosition(capturedColor, slotIdx) {
+  // White captured pieces go to left tray (-6.32); Black captured pieces go to right tray (+6.32)
+  const trayX = capturedColor === 'w' ? -6.32 : 6.32;
+  const col = slotIdx % 2;
+  const row = Math.floor(slotIdx / 2);
+  const x = trayX + (col === 0 ? -0.40 : 0.40);
+  const z = -3.15 + row * 0.88;
+  return new THREE.Vector3(x, 0.11, z);
+}
+
+// --- Atmospheric Study Desk Prop: Classic Analog Mechanical Chess Clock ---
+function createStudyChessClock() {
+  const clock = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.35, 1.15, 0.72), mahoganyMat);
+  body.position.y = 0.575;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  clock.add(body);
+
+  // Brass top rocker plungers
+  const plungerGeo = new THREE.CylinderGeometry(0.16, 0.17, 0.18, 20);
+  const pL = new THREE.Mesh(plungerGeo, brassInlayMat);
+  pL.position.set(-0.56, 1.22, 0);
+  pL.castShadow = true;
+  const pR = new THREE.Mesh(plungerGeo, brassInlayMat);
+  pR.position.set(0.56, 1.18, 0);
+  pR.castShadow = true;
+  clock.add(pL, pR);
+
+  // Two ivory clock dials with brass bezels
+  const dialCanvas = document.createElement('canvas');
+  dialCanvas.width = dialCanvas.height = 256;
+  const ctx = dialCanvas.getContext('2d');
+  ctx.fillStyle = '#f3ead5';
+  ctx.beginPath();
+  ctx.arc(128, 128, 124, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#33281e';
+  ctx.lineWidth = 4;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(128 + Math.cos(a) * 96, 128 + Math.sin(a) * 96);
+    ctx.lineTo(128 + Math.cos(a) * 112, 128 + Math.sin(a) * 112);
+    ctx.stroke();
+  }
+  // Red flag & hands
+  ctx.fillStyle = '#b92622';
+  ctx.fillRect(118, 24, 9, 28);
+  ctx.strokeStyle = '#151210';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(128, 128); ctx.lineTo(128, 52);
+  ctx.moveTo(128, 128); ctx.lineTo(174, 152);
+  ctx.stroke();
+  const dialTex = new THREE.CanvasTexture(dialCanvas);
+  dialTex.colorSpace = THREE.SRGBColorSpace;
+  const dialMat = new THREE.MeshPhysicalMaterial({
+    map: dialTex, roughness: 0.22, clearcoat: 0.9, clearcoatRoughness: 0.08
+  });
+
+  const bezelGeo = new THREE.TorusGeometry(0.41, 0.032, 12, 32);
+  const faceGeo = new THREE.CircleGeometry(0.40, 32);
+  for (const dx of [-0.56, 0.56]) {
+    const face = new THREE.Mesh(faceGeo, dialMat);
+    face.position.set(dx, 0.58, 0.365);
+    const bezel = new THREE.Mesh(bezelGeo, brassInlayMat);
+    bezel.position.set(dx, 0.58, 0.368);
+    clock.add(face, bezel);
+  }
+
+  clock.position.set(-6.4, 0, -5.2);
+  clock.rotation.y = 0.52;
+  scene.add(clock);
+  return { clock, pL, pR };
+}
+const chessClock = createStudyChessClock();
+
+// ============================================================================
+// 7. CLASSIC STAUNTON CHESS PIECES (LATHE + CARVED SILHOUETTES + CLEARCOAT)
+// ============================================================================
+const whitePieceTex = createPieceSurfaceTextures(true);
+const blackPieceTex = createPieceSurfaceTextures(false);
+
+const whitePieceMat = new THREE.MeshPhysicalMaterial({
+  color: 0xf7f0df,
+  map: whitePieceTex.map,
+  bumpMap: whitePieceTex.bumpMap,
+  bumpScale: 0.0025,
+  roughness: 0.16,
+  metalness: 0.0,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.065,
+  reflectivity: 0.95,
+  envMapIntensity: 1.15
+});
+
+const blackPieceMat = new THREE.MeshPhysicalMaterial({
+  color: 0x161922,
+  map: blackPieceTex.map,
+  bumpMap: blackPieceTex.bumpMap,
+  bumpScale: 0.002,
+  roughness: 0.11,
+  metalness: 0.05,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.045,
+  reflectivity: 1.0,
+  envMapIntensity: 1.55
+});
+
+function makeLathe(pts, segs = 44) {
+  const vecs = pts.map(([r, y]) => new THREE.Vector2(Math.max(0.0005, r), y));
+  const geo = new THREE.LatheGeometry(vecs, segs);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function normalizeGeometry(geo) {
+  const g = geo.index ? geo.toNonIndexed() : geo.clone();
+  if (!g.attributes.normal) g.computeVertexNormals();
+  if (!g.attributes.uv) {
+    const count = g.attributes.position.count;
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
+  }
+  return g;
+}
+
+function buildPawnGeometry() {
+  const body = makeLathe([
+    [0.001, 0.025],
+    [0.315, 0.025],
+    [0.32, 0.075],
+    [0.295, 0.11],
+    [0.305, 0.145],
+    [0.265, 0.19],
+    [0.21, 0.25],
+    [0.155, 0.38],
+    [0.125, 0.56],
+    [0.118, 0.65],
+    [0.185, 0.69],
+    [0.19, 0.725],
+    [0.125, 0.755],
+    [0.155, 0.80],
+    [0.195, 0.87],
+    [0.198, 0.94],
+    [0.165, 1.015],
+    [0.095, 1.065],
+    [0.001, 1.08]
+  ], 48);
+  return body;
+}
+
+function buildRookGeometry() {
+  const parts = [];
+  // Turned tower pedestal & parapet cup
+  const tower = makeLathe([
+    [0.001, 0.025],
+    [0.345, 0.025],
+    [0.35, 0.08],
+    [0.32, 0.12],
+    [0.33, 0.16],
+    [0.285, 0.215],
+    [0.245, 0.275],
+    [0.215, 0.45],
+    [0.19, 0.72],
+    [0.185, 0.88],
+    [0.245, 0.94],
+    [0.275, 1.00],
+    [0.28, 1.09],
+    [0.195, 1.09],
+    [0.195, 1.02],
+    [0.001, 1.02]
+  ], 48);
+  parts.push(normalizeGeometry(tower));
+
+  // 6 sculpted crenellated battlements (merlons) around the parapet
+  const merlonCount = 6;
+  const arcSpan = (Math.PI * 2 / merlonCount) * 0.60;
+  const rOut = 0.282, rIn = 0.192, hMerlon = 0.185;
+  for (let i = 0; i < merlonCount; i++) {
+    const a0 = (i / merlonCount) * Math.PI * 2;
+    const a1 = a0 + arcSpan;
+    const shape = new THREE.Shape();
+    shape.absarc(0, 0, rOut, a0, a1, false);
+    shape.absarc(0, 0, rIn, a1, a0, true);
+    shape.closePath();
+
+    const mGeo = new THREE.ExtrudeGeometry(shape, {
+      depth: hMerlon - 0.02,
+      bevelEnabled: true,
+      bevelThickness: 0.014,
+      bevelSize: 0.009,
+      bevelSegments: 2,
+      curveSegments: 8
+    });
+    mGeo.rotateX(-Math.PI / 2);
+    mGeo.translate(0, 1.085, 0);
+    parts.push(normalizeGeometry(mGeo));
+  }
+  return mergeGeometries(parts, false);
+}
+
+function buildBishopGeometry() {
+  const parts = [];
+  // Base & turned slender stem up to collar
+  const stem = makeLathe([
+    [0.001, 0.025],
+    [0.355, 0.025],
+    [0.36, 0.08],
+    [0.33, 0.125],
+    [0.34, 0.165],
+    [0.285, 0.22],
+    [0.22, 0.30],
+    [0.165, 0.50],
+    [0.135, 0.74],
+    [0.13, 0.85],
+    [0.215, 0.895],
+    [0.22, 0.935],
+    [0.155, 0.965],
+    [0.175, 0.995],
+    [0.135, 1.02]
+  ], 48);
+  parts.push(normalizeGeometry(stem));
+
+  // Sculpted mitre head with a REAL carved diagonal bishop notch (vertex-carved watertight lathe)
+  const mitreProfile = [
+    [0.135, 1.015],
+    [0.185, 1.07],
+    [0.225, 1.15],
+    [0.232, 1.23],
+    [0.215, 1.31],
+    [0.175, 1.38],
+    [0.118, 1.44],
+    [0.055, 1.485],
+    [0.001, 1.50]
+  ];
+  const mitreGeo = makeLathe(mitreProfile, 64);
+  const pos = mitreGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    // Diagonal notch plane slicing into the +x / -z side of the mitre
+    if (x > -0.02 && y > 1.12 && y < 1.46) {
+      const planeDist = Math.abs((y - 1.29) - (x - 0.08) * 0.92);
+      const notchHalfWidth = 0.048;
+      if (planeDist < notchHalfWidth) {
+        const t = 1.0 - planeDist / notchHalfWidth;
+        const depthFactor = Math.pow(t, 1.35) * clamp((x + 0.02) / 0.20, 0, 1);
+        const radial = Math.hypot(x, z);
+        if (radial > 0.03) {
+          const shrink = 1.0 - depthFactor * 0.72;
+          x *= shrink;
+          z *= shrink;
+        }
+        pos.setXYZ(i, x, y, z);
+      }
+    }
+  }
+  mitreGeo.computeVertexNormals();
+  parts.push(normalizeGeometry(mitreGeo));
+
+  // Classic finial orb on top of mitre
+  const orb = new THREE.SphereGeometry(0.062, 24, 18);
+  orb.translate(0, 1.545, 0);
+  parts.push(normalizeGeometry(orb));
+
+  return mergeGeometries(parts, false);
+}
+
+function buildKnightGeometry() {
+  const parts = [];
+
+  // Turned Staunton pedestal & collar
+  const pedestal = makeLathe([
+    [0.001, 0.025],
+    [0.36, 0.025],
+    [0.365, 0.085],
+    [0.335, 0.13],
+    [0.345, 0.17],
+    [0.295, 0.225],
+    [0.25, 0.29],
+    [0.255, 0.35],
+    [0.22, 0.39],
+    [0.21, 0.43],
+    [0.001, 0.43]
+  ], 48);
+  parts.push(normalizeGeometry(pedestal));
+
+  // Sculpted Staunton Horse Head Profile (facing -Z in local space; profile drawn in YZ plane then rotated)
+  // Shape coordinates: sx = forward (+sx -> -z after rotateY(Math.PI/2)), sy = up (+y)
+  const horseShape = new THREE.Shape();
+  horseShape.moveTo(-0.18, 0.40);      // Back of neck base
+  horseShape.bezierCurveTo(-0.24, 0.62, -0.26, 0.90, -0.18, 1.15); // Arched back of mane
+  horseShape.bezierCurveTo(-0.12, 1.30, -0.02, 1.38, 0.06, 1.36);  // Poll / crown
+  horseShape.bezierCurveTo(0.14, 1.33, 0.20, 1.24, 0.26, 1.12);    // Forehead slope
+  horseShape.bezierCurveTo(0.32, 1.02, 0.35, 0.93, 0.32, 0.86);    // Snout / nose bridge
+  horseShape.bezierCurveTo(0.29, 0.80, 0.23, 0.80, 0.19, 0.84);    // Muzzle / nostril lip
+  horseShape.bezierCurveTo(0.15, 0.88, 0.11, 0.89, 0.07, 0.87);    // Chin / lower jaw
+  horseShape.bezierCurveTo(0.05, 0.82, 0.12, 0.72, 0.17, 0.61);    // Throat tuck -> proud chest
+  horseShape.bezierCurveTo(0.21, 0.52, 0.21, 0.44, 0.17, 0.40);    // Chest base
+  horseShape.closePath();
+
+  const headGeo = new THREE.ExtrudeGeometry(horseShape, {
+    depth: 0.13,
+    bevelEnabled: true,
+    bevelThickness: 0.088,
+    bevelSize: 0.058,
+    bevelSegments: 6,
+    curveSegments: 24
+  });
+  // Center thickness along Z before rotating so profile faces -Z
+  headGeo.translate(0, 0, -0.065);
+  headGeo.rotateY(Math.PI / 2); // +sx becomes -z (facing forward toward Black for White!)
+  parts.push(normalizeGeometry(headGeo));
+
+  // Tapered muzzle sculpting for authentic 3D equine cheek-to-nose proportion
+  const cheekGeo = new THREE.SphereGeometry(0.125, 22, 16);
+  cheekGeo.scale(1.18, 1.05, 1.15);
+  cheekGeo.translate(0, 1.03, -0.04);
+  parts.push(normalizeGeometry(cheekGeo));
+
+  const chestGeo = new THREE.SphereGeometry(0.175, 22, 16);
+  chestGeo.scale(1.06, 1.18, 1.02);
+  chestGeo.translate(0, 0.58, -0.03);
+  parts.push(normalizeGeometry(chestGeo));
+
+  // Carved pointed ears (left & right, angled slightly back and out)
+  const earBaseGeo = new THREE.ConeGeometry(0.048, 0.18, 12);
+  for (const side of [-1, 1]) {
+    const ear = earBaseGeo.clone();
+    ear.scale(0.75, 1.0, 1.15);
+    ear.rotateX(-0.22);
+    ear.rotateZ(-side * 0.26);
+    ear.translate(side * 0.075, 1.40, 0.01);
+    parts.push(normalizeGeometry(ear));
+  }
+
+  // Carved notched Staunton mane ridge segments along the back neck arc
+  const manePts = [
+    [0.24, 0.56, 0.10],
+    [0.27, 0.72, 0.11],
+    [0.275, 0.88, 0.105],
+    [0.25, 1.04, 0.10],
+    [0.20, 1.19, 0.09],
+    [0.12, 1.31, 0.075]
+  ];
+  for (const [mz, my, sc] of manePts) {
+    const ridge = new THREE.SphereGeometry(sc, 14, 12);
+    ridge.scale(0.55, 0.92, 1.18);
+    ridge.translate(0, my, mz);
+    parts.push(normalizeGeometry(ridge));
+  }
+
+  // Subtle brow ridges catching specular light on both sides of the head
+  for (const side of [-1, 1]) {
+    const brow = new THREE.SphereGeometry(0.045, 12, 10);
+    brow.scale(0.65, 0.75, 1.3);
+    brow.translate(side * 0.105, 1.14, -0.14);
+    parts.push(normalizeGeometry(brow));
+  }
+
+  return mergeGeometries(parts, false);
+}
+
+function buildQueenGeometry() {
+  const parts = [];
+  const body = makeLathe([
+    [0.001, 0.025],
+    [0.375, 0.025],
+    [0.38, 0.09],
+    [0.345, 0.135],
+    [0.358, 0.18],
+    [0.30, 0.24],
+    [0.235, 0.34],
+    [0.18, 0.58],
+    [0.148, 0.88],
+    [0.142, 1.06],
+    [0.238, 1.11],
+    [0.245, 1.155],
+    [0.165, 1.19],
+    [0.195, 1.225],
+    [0.162, 1.26],
+    [0.205, 1.38],
+    [0.268, 1.52],
+    [0.245, 1.565],
+    [0.19, 1.535],
+    [0.165, 1.61],
+    [0.105, 1.675],
+    [0.001, 1.70]
+  ], 52);
+  parts.push(normalizeGeometry(body));
+
+  // 8 sculpted coronet points with delicate pearl finials
+  const ptsCount = 8;
+  for (let i = 0; i < ptsCount; i++) {
+    const a = (i / ptsCount) * Math.PI * 2;
+    const spike = new THREE.ConeGeometry(0.052, 0.15, 12);
+    spike.translate(0, 0.075, 0);
+    spike.rotateZ(-0.18);
+    spike.rotateY(a);
+    spike.translate(Math.cos(a) * 0.235, 1.52, -Math.sin(a) * 0.235);
+    parts.push(normalizeGeometry(spike));
+
+    const pearl = new THREE.SphereGeometry(0.032, 14, 10);
+    pearl.translate(Math.cos(a) * 0.262, 1.675, -Math.sin(a) * 0.262);
+    parts.push(normalizeGeometry(pearl));
+  }
+
+  // Central crown orb finial
+  const finial = new THREE.SphereGeometry(0.068, 24, 18);
+  finial.translate(0, 1.76, 0);
+  parts.push(normalizeGeometry(finial));
+
+  return mergeGeometries(parts, false);
+}
+
+function buildKingGeometry() {
+  const parts = [];
+  const body = makeLathe([
+    [0.001, 0.025],
+    [0.395, 0.025],
+    [0.40, 0.095],
+    [0.365, 0.145],
+    [0.378, 0.195],
+    [0.315, 0.26],
+    [0.248, 0.37],
+    [0.192, 0.64],
+    [0.158, 0.96],
+    [0.152, 1.15],
+    [0.255, 1.20],
+    [0.262, 1.25],
+    [0.175, 1.285],
+    [0.205, 1.325],
+    [0.172, 1.365],
+    [0.215, 1.48],
+    [0.278, 1.62],
+    [0.265, 1.675],
+    [0.21, 1.715],
+    [0.12, 1.75],
+    [0.055, 1.77],
+    [0.001, 1.775]
+  ], 52);
+  parts.push(normalizeGeometry(body));
+
+  // Finial pedestal neck
+  const neck = new THREE.CylinderGeometry(0.045, 0.068, 0.065, 20);
+  neck.translate(0, 1.795, 0);
+  parts.push(normalizeGeometry(neck));
+
+  // Crisp 3D bevelled Staunton Cross Pattée finial
+  const crossShape = new THREE.Shape();
+  const a = 0.032, b = 0.058, hTop = 0.24, hMid = 0.145, wArm = 0.115;
+  crossShape.moveTo(-a, 0);
+  crossShape.lineTo(a, 0);
+  crossShape.lineTo(a * 0.85, hMid - a);
+  crossShape.lineTo(wArm, hMid - b * 0.82);
+  crossShape.lineTo(wArm, hMid + b * 0.82);
+  crossShape.lineTo(a * 0.85, hMid + a);
+  crossShape.lineTo(b * 0.92, hTop);
+  crossShape.lineTo(-b * 0.92, hTop);
+  crossShape.lineTo(-a * 0.85, hMid + a);
+  crossShape.lineTo(-wArm, hMid + b * 0.82);
+  crossShape.lineTo(-wArm, hMid - b * 0.82);
+  crossShape.lineTo(-a * 0.85, hMid - a);
+  crossShape.closePath();
+
+  const crossGeo = new THREE.ExtrudeGeometry(crossShape, {
+    depth: 0.044,
+    bevelEnabled: true,
+    bevelThickness: 0.012,
+    bevelSize: 0.008,
+    bevelSegments: 2
+  });
+  crossGeo.translate(0, 1.815, -0.022);
+  parts.push(normalizeGeometry(crossGeo));
+
+  return mergeGeometries(parts, false);
+}
+
+const PIECE_GEOMETRIES = {
+  p: buildPawnGeometry(),
+  r: buildRookGeometry(),
+  n: buildKnightGeometry(),
+  b: buildBishopGeometry(),
+  q: buildQueenGeometry(),
+  k: buildKingGeometry()
+};
+
+const BASE_RADII = { p: 0.312, r: 0.342, n: 0.355, b: 0.352, q: 0.372, k: 0.392 };
+
+function createPieceMesh(pieceData) {
+  const group = new THREE.Group();
+  const baseMat = pieceData.color === 'w' ? whitePieceMat : blackPieceMat;
+  // Clone material per piece only on demand (for ember dissolution); share material normally for performance
+  const body = new THREE.Mesh(PIECE_GEOMETRIES[pieceData.type], baseMat);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  body.userData = { pieceId: pieceData.id };
+  group.add(body);
+
+  // Subtle green felt weighted base pad
+  const pad = new THREE.Mesh(
+    new THREE.CylinderGeometry(BASE_RADII[pieceData.type], BASE_RADII[pieceData.type] * 0.98, 0.026, 32),
+    feltMat
+  );
+  pad.position.y = 0.013;
+  pad.receiveShadow = true;
+  pad.userData = { pieceId: pieceData.id };
+  group.add(pad);
+
+  // Orient knights & bishop mitre notches facing the opponent
+  if (pieceData.color === 'b') {
+    group.rotation.y = Math.PI;
+  }
+
+  group.userData = {
+    pieceId: pieceData.id,
+    color: pieceData.color,
+    type: pieceData.type,
+    bodyMesh: body,
+    baseMat
+  };
+  return group;
+}
+
+// ============================================================================
+// 8. GLOWING EMISSIVE BOARD RINGS (CUSTOM SHADERS FOR UNREAL BLOOM)
+// ============================================================================
+const highlightGroup = new THREE.Group();
+scene.add(highlightGroup);
+
+function createEmissiveRingMaterial(colorHex, intensity, style = 0) {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uColor: { value: new THREE.Color(colorHex) },
+      uIntensity: { value: intensity },
+      uTime: { value: 0 },
+      uStyle: { value: style } // 0: selected, 1: quiet target, 2: capture target, 3: check, 4: lastMove, 5: hover
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uIntensity;
+      uniform float uTime;
+      uniform float uStyle;
+      varying vec2 vUv;
+
+      void main() {
+        vec2 p = vUv * 2.0 - 1.0;
+        float dist = length(p);
+        float angle = atan(p.y, p.x);
+        float alpha = 0.0;
+
+        if (uStyle < 0.5) {
+          // Selected piece: warm glowing double ring
+          float r1 = smoothstep(0.06, 0.0, abs(dist - 0.78));
+          float r2 = smoothstep(0.14, 0.0, abs(dist - 0.78)) * 0.45;
+          float inner = smoothstep(0.75, 0.25, dist) * 0.18;
+          float pulse = 0.88 + 0.12 * sin(uTime * 3.2);
+          alpha = (r1 + r2 + inner) * pulse;
+        } else if (uStyle < 1.5) {
+          // Legal quiet destination: soft ring + luminous center pip
+          float ring = smoothstep(0.055, 0.0, abs(dist - 0.56)) * 0.85;
+          float halo = smoothstep(0.16, 0.0, abs(dist - 0.56)) * 0.28;
+          float dot = smoothstep(0.20, 0.08, dist) * 0.82;
+          float pulse = 0.86 + 0.14 * sin(uTime * 2.8);
+          alpha = (ring + halo + dot) * pulse;
+        } else if (uStyle < 2.5) {
+          // Capture destination: segmented rotating target ring
+          float ring = smoothstep(0.065, 0.0, abs(dist - 0.80));
+          float halo = smoothstep(0.18, 0.0, abs(dist - 0.80)) * 0.42;
+          float seg = 0.65 + 0.35 * sin(angle * 4.0 + uTime * 2.4);
+          float pulse = 0.84 + 0.16 * sin(uTime * 4.5);
+          alpha = (ring * seg + halo) * pulse;
+        } else if (uStyle < 3.5) {
+          // Check warning: urgent pulsing crimson aura & tight ring
+          float pulse = 0.72 + 0.28 * sin(uTime * 6.5);
+          float ring = smoothstep(0.075, 0.0, abs(dist - 0.82));
+          float aura = smoothstep(0.95, 0.15, dist) * 0.52;
+          alpha = (ring + aura) * pulse;
+        } else if (uStyle < 4.5) {
+          // Last move subtle glowing square border
+          vec2 edge = abs(p);
+          float sqDist = max(edge.x, edge.y);
+          float rim = smoothstep(0.055, 0.0, abs(sqDist - 0.88)) * 0.68;
+          float wash = smoothstep(0.92, 0.45, sqDist) * 0.12;
+          alpha = rim + wash;
+        } else {
+          // Hover legal target intensified ring
+          float ring = smoothstep(0.075, 0.0, abs(dist - 0.82));
+          float wash = smoothstep(0.84, 0.2, dist) * 0.35;
+          alpha = ring + wash;
+        }
+
+        if (alpha < 0.005) discard;
+        vec3 col = uColor * uIntensity;
+        gl_FragColor = vec4(col, alpha);
+      }
+    `
+  });
+}
+
+const ringPlaneGeo = new THREE.PlaneGeometry(0.96, 0.96);
+ringPlaneGeo.rotateX(-Math.PI / 2);
+
+const ringMaterials = {
+  selected: createEmissiveRingMaterial(0xffce63, 1.85, 0),
+  legal: createEmissiveRingMaterial(0x9de6ff, 1.38, 1),
+  capture: createEmissiveRingMaterial(0xff6b45, 1.92, 2),
+  check: createEmissiveRingMaterial(0xff2638, 2.25, 3),
+  lastMove: createEmissiveRingMaterial(0xe8b55a, 0.92, 4),
+  hover: createEmissiveRingMaterial(0xffe596, 2.05, 5)
+};
+
+// Reusable ring pools
+const activeRings = {
+  selected: new THREE.Mesh(ringPlaneGeo, ringMaterials.selected),
+  check: new THREE.Mesh(ringPlaneGeo, ringMaterials.check),
+  hover: new THREE.Mesh(ringPlaneGeo, ringMaterials.hover),
+  lastFrom: new THREE.Mesh(ringPlaneGeo, ringMaterials.lastMove),
+  lastTo: new THREE.Mesh(ringPlaneGeo, ringMaterials.lastMove),
+  legalPool: []
+};
+
+[activeRings.selected, activeRings.check, activeRings.hover, activeRings.lastFrom, activeRings.lastTo].forEach(m => {
+  m.visible = false;
+  m.renderOrder = 2;
+  highlightGroup.add(m);
+});
+
+for (let i = 0; i < 32; i++) {
+  const m = new THREE.Mesh(ringPlaneGeo, ringMaterials.legal);
+  m.visible = false;
+  m.renderOrder = 2;
+  highlightGroup.add(m);
+  activeRings.legalPool.push(m);
+}
+
+function placeRing(mesh, r, f, yOff = 0.011) {
+  const p = squareToWorld(r, f);
+  mesh.position.set(p.x, BOARD_TOP_Y + yOff, p.z);
+  mesh.visible = true;
+}
+
+// ============================================================================
+// 9. AMBIENT DUST MOTES & GOLDEN EMBER CAPTURE PARTICLE SYSTEM
+// ============================================================================
+const glowSprite = createSoftGlowSprite();
+
+// --- Drifting Ambient Dust Motes in the Warm Spotlight Beam ---
+const DUST_COUNT = 240;
+const dustRand = mulberry32(4242);
+const dustGeo = new THREE.BufferGeometry();
+const dustPositions = new Float32Array(DUST_COUNT * 3);
+const dustSizes = new Float32Array(DUST_COUNT);
+const dustSeeds = new Float32Array(DUST_COUNT * 3);
+
+for (let i = 0; i < DUST_COUNT; i++) {
+  const angle = dustRand() * Math.PI * 2;
+  const radius = Math.pow(dustRand(), 0.55) * 6.8;
+  dustPositions[i * 3] = Math.cos(angle) * radius;
+  dustPositions[i * 3 + 1] = 0.55 + dustRand() * 7.8;
+  dustPositions[i * 3 + 2] = Math.sin(angle) * radius;
+  dustSizes[i] = 0.65 + dustRand() * 1.45;
+  dustSeeds[i * 3] = dustRand() * 6.283;
+  dustSeeds[i * 3 + 1] = 0.18 + dustRand() * 0.42;
+  dustSeeds[i * 3 + 2] = dustRand() * 6.283;
+}
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
+dustGeo.setAttribute('aSize', new THREE.BufferAttribute(dustSizes, 1));
+dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(dustSeeds, 3));
+
+const dustMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  uniforms: {
+    uTime: { value: 0 },
+    uSprite: { value: glowSprite },
+    uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) }
+  },
+  vertexShader: `
+    attribute float aSize;
+    attribute vec3 aSeed;
+    uniform float uTime;
+    uniform float uPixelRatio;
+    varying float vAlpha;
+    void main() {
+      vec3 p = position;
+      p.x += sin(uTime * aSeed.y + aSeed.x) * 0.42;
+      p.y += mod(uTime * 0.09 * aSeed.y + aSeed.z, 7.6) * 0.22 - 0.8;
+      p.z += cos(uTime * aSeed.y * 0.8 + aSeed.z) * 0.42;
+
+      // Spotlight cone illumination intensity
+      float distAxis = length(p.xz - vec2(0.4, 0.4));
+      float inBeam = smoothstep(7.2, 1.4, distAxis);
+      float twinkle = 0.55 + 0.45 * sin(uTime * (1.2 + aSeed.y * 2.0) + aSeed.x * 3.0);
+      vAlpha = inBeam * twinkle * 0.38;
+
+      vec4 mvPos = modelViewMatrix * vec4(p, 1.0);
+      gl_PointSize = aSize * uPixelRatio * (105.0 / -mvPos.z);
+      gl_Position = projectionMatrix * mvPos;
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D uSprite;
+    varying float vAlpha;
+    void main() {
+      vec4 tex = texture2D(uSprite, gl_PointCoord);
+      float a = tex.a * vAlpha;
+      if (a < 0.005) discard;
+      gl_FragColor = vec4(1.0, 0.88, 0.66, a);
+    }
+  `
+});
+const dustMotes = new THREE.Points(dustGeo, dustMat);
+scene.add(dustMotes);
+
+// --- Shimmering Golden Ember Burst Pool (for Captured Pieces) ---
+const MAX_EMBERS = 900;
+const emberGeo = new THREE.BufferGeometry();
+const emberPos = new Float32Array(MAX_EMBERS * 3);
+const emberCol = new Float32Array(MAX_EMBERS * 3);
+const emberSize = new Float32Array(MAX_EMBERS);
+const emberAlpha = new Float32Array(MAX_EMBERS);
+
+emberGeo.setAttribute('position', new THREE.BufferAttribute(emberPos, 3));
+emberGeo.setAttribute('aColor', new THREE.BufferAttribute(emberCol, 3));
+emberGeo.setAttribute('aSize', new THREE.BufferAttribute(emberSize, 1));
+emberGeo.setAttribute('aAlpha', new THREE.BufferAttribute(emberAlpha, 1));
+
+const emberMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  uniforms: {
+    uSprite: { value: glowSprite },
+    uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) }
+  },
+  vertexShader: `
+    attribute vec3 aColor;
+    attribute float aSize;
+    attribute float aAlpha;
+    uniform float uPixelRatio;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+      vColor = aColor;
+      vAlpha = aAlpha;
+      vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uPixelRatio * (130.0 / max(1.0, -mvPos.z));
+      gl_Position = projectionMatrix * mvPos;
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D uSprite;
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+      if (vAlpha <= 0.005) discard;
+      vec4 tex = texture2D(uSprite, gl_PointCoord);
+      float a = tex.a * vAlpha;
+      if (a < 0.005) discard;
+      gl_FragColor = vec4(vColor, a);
+    }
+  `
+});
+
+const emberPoints = new THREE.Points(emberGeo, emberMat);
+emberPoints.frustumCulled = false;
+scene.add(emberPoints);
+
+const activeEmbers = [];
+function spawnGoldenEmbers(origin, count = 175) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const rad = Math.random() * 0.34;
+    const h = Math.random() * 1.15;
+    const speedOut = 0.25 + Math.random() * 0.95;
+    const life = 1.05 + Math.random() * 1.25;
+    const warmShift = Math.random();
+    activeEmbers.push({
+      x: origin.x + Math.cos(a) * rad,
+      y: origin.y + 0.1 + h,
+      z: origin.z + Math.sin(a) * rad,
+      vx: Math.cos(a) * speedOut,
+      vy: 0.75 + Math.random() * 1.85,
+      vz: Math.sin(a) * speedOut,
+      swirl: (Math.random() - 0.5) * 3.8,
+      age: 0,
+      life,
+      size: 0.75 + Math.random() * 1.9,
+      // HDR golden-amber values > 1.0 so Unreal Bloom gives real incandescent sparkle
+      r: lerp(2.6, 3.2, warmShift),
+      g: lerp(1.25, 2.2, warmShift),
+      b: lerp(0.22, 0.75, warmShift)
+    });
+  }
+  while (activeEmbers.length > MAX_EMBERS) activeEmbers.shift();
+}
+
+function updateEmbers(dt) {
+  for (let i = activeEmbers.length - 1; i >= 0; i--) {
+    const e = activeEmbers[i];
+    e.age += dt;
+    if (e.age >= e.life) {
+      activeEmbers.splice(i, 1);
+      continue;
+    }
+    const swirlA = e.swirl * dt;
+    const nvx = e.vx * Math.cos(swirlA) - e.vz * Math.sin(swirlA);
+    const nvz = e.vx * Math.sin(swirlA) + e.vz * Math.cos(swirlA);
+    e.vx = nvx * (1 - dt * 0.65);
+    e.vz = nvz * (1 - dt * 0.65);
+    e.vy *= (1 - dt * 0.32);
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    e.z += e.vz * dt;
+  }
+
+  for (let i = 0; i < MAX_EMBERS; i++) {
+    if (i < activeEmbers.length) {
+      const e = activeEmbers[i];
+      const t = e.age / e.life;
+      const flicker = 0.72 + 0.28 * Math.sin(e.age * 24.0 + i * 1.7);
+      emberPos[i * 3] = e.x;
+      emberPos[i * 3 + 1] = e.y;
+      emberPos[i * 3 + 2] = e.z;
+      emberCol[i * 3] = e.r;
+      emberCol[i * 3 + 1] = e.g * (1 - t * 0.35);
+      emberCol[i * 3 + 2] = e.b;
+      emberSize[i] = e.size * (1.0 - t * 0.65);
+      emberAlpha[i] = Math.sin(Math.min(1, t * 5.0) * Math.PI * 0.5) * Math.pow(1.0 - t, 1.4) * flicker;
+    } else {
+      emberAlpha[i] = 0;
+    }
+  }
+  emberGeo.attributes.position.needsUpdate = true;
+  emberGeo.attributes.aColor.needsUpdate = true;
+  emberGeo.attributes.aSize.needsUpdate = true;
+  emberGeo.attributes.aAlpha.needsUpdate = true;
+}
+
+// ============================================================================
+// 10. SCENE PIECE MANAGEMENT & PHYSICS-INSPIRED ANIMATIONS
+// ============================================================================
+const engine = new ChessEngine();
+const piecesGroup = new THREE.Group();
+scene.add(piecesGroup);
+
+const pieceMeshes = new Map(); // pieceId -> THREE.Group
+const capturedTrayCounts = { w: 0, b: 0 };
+const capturedMeshes = { w: [], b: [] }; // pieces resting in trays
+const activeAnimations = [];
+
+let captureMode = 'embers'; // 'embers' | 'tray'
+let playbackSpeed = 1.0;
+
+function clearAllPiecesAndAnimations() {
+  activeAnimations.length = 0;
+  for (const mesh of pieceMeshes.values()) {
+    piecesGroup.remove(mesh);
+  }
+  pieceMeshes.clear();
+  capturedTrayCounts.w = 0;
+  capturedTrayCounts.b = 0;
+  capturedMeshes.w.length = 0;
+  capturedMeshes.b.length = 0;
+}
+
+function syncMeshesToEngine() {
+  clearAllPiecesAndAnimations();
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const p = engine.board[r][f];
+      if (!p) continue;
+      const mesh = createPieceMesh(p);
+      const pos = squareToWorld(r, f);
+      mesh.position.copy(pos);
+      piecesGroup.add(mesh);
+      pieceMeshes.set(p.id, mesh);
+    }
+  }
+  updateBoardHighlights();
+}
+
+function swapMeshForPromotion(mesh, newType) {
+  mesh.userData.type = newType;
+  mesh.userData.bodyMesh.geometry = PIECE_GEOMETRIES[newType];
+}
+
+function animateMoveRecord(record, isInstant = false) {
+  const movingMesh = pieceMeshes.get(record.piece.id);
+  const toWorld = squareToWorld(record.to.r, record.to.f);
+
+  // Finish any prior animations cleanly before starting new move
+  flushAnimations();
+
+  if (isInstant) {
+    if (movingMesh) {
+      movingMesh.position.copy(toWorld);
+      if (record.promotion) swapMeshForPromotion(movingMesh, record.promotion);
+    }
+    if (record.castle && record.rookPiece) {
+      const rMesh = pieceMeshes.get(record.rookPiece.id);
+      if (rMesh) rMesh.position.copy(squareToWorld(record.rookTo.r, record.rookTo.f));
+    }
+    if (record.captured) {
+      const capMesh = pieceMeshes.get(record.captured.id);
+      if (capMesh) {
+        if (captureMode === 'tray') {
+          const slot = capturedTrayCounts[record.captured.color]++;
+          capMesh.position.copy(getTraySlotPosition(record.captured.color, slot));
+          capMesh.visible = true;
+          capturedMeshes[record.captured.color].push(capMesh);
+        } else {
+          capMesh.visible = false;
+        }
+      }
+    }
+    updateClockPlungers();
+    updateBoardHighlights();
+    return;
+  }
+
+  // Main moving piece animation
+  if (movingMesh) {
+    const startPos = movingMesh.position.clone();
+    const isKnight = record.piece.type === 'n';
+    const dist = startPos.distanceTo(toWorld);
+    const duration = (isKnight ? 0.72 : clamp(0.42 + dist * 0.068, 0.44, 0.82)) / playbackSpeed;
+
+    activeAnimations.push({
+      type: isKnight ? 'knight' : 'slide',
+      mesh: movingMesh,
+      startPos,
+      endPos: toWorld.clone(),
+      baseRotY: movingMesh.rotation.y,
+      elapsed: 0,
+      duration,
+      onComplete: () => {
+        movingMesh.position.copy(toWorld);
+        movingMesh.rotation.x = 0;
+        movingMesh.rotation.z = 0;
+        movingMesh.rotation.y = record.piece.color === 'b' ? Math.PI : 0;
+        if (record.promotion) {
+          swapMeshForPromotion(movingMesh, record.promotion);
+          spawnGoldenEmbers(toWorld, 65);
+        }
+      }
+    });
+  }
+
+  // Castling rook simultaneous smooth glide
+  if (record.castle && record.rookPiece) {
+    const rMesh = pieceMeshes.get(record.rookPiece.id);
+    if (rMesh) {
+      const rStart = rMesh.position.clone();
+      const rEnd = squareToWorld(record.rookTo.r, record.rookTo.f);
+      activeAnimations.push({
+        type: 'slide',
+        mesh: rMesh,
+        startPos: rStart,
+        endPos: rEnd,
+        baseRotY: rMesh.rotation.y,
+        elapsed: -0.06,
+        duration: 0.56 / playbackSpeed,
+        onComplete: () => {
+          rMesh.position.copy(rEnd);
+          rMesh.rotation.x = 0;
+          rMesh.rotation.z = 0;
+        }
+      });
+    }
+  }
+
+  // Captured piece animation (either tip & dissolve into golden embers OR glide neatly to side tray)
+  if (record.captured) {
+    const capMesh = pieceMeshes.get(record.captured.id);
+    if (capMesh) {
+      const capStart = capMesh.position.clone();
+      const impactDir = new THREE.Vector3().subVectors(toWorld, squareToWorld(record.from.r, record.from.f)).normalize();
+      if (captureMode === 'embers') {
+        // Clone material for molten-gold glow & fade dissolution
+        const dissolveMat = capMesh.userData.baseMat.clone();
+        dissolveMat.transparent = true;
+        dissolveMat.opacity = 1.0;
+        dissolveMat.emissive = new THREE.Color(0xffaa2b);
+        dissolveMat.emissiveIntensity = 0.0;
+        capMesh.userData.bodyMesh.material = dissolveMat;
+
+        const tiltAxis = new THREE.Vector3(-impactDir.z, 0, impactDir.x).normalize();
+        activeAnimations.push({
+          type: 'emberCapture',
+          mesh: capMesh,
+          dissolveMat,
+          startPos: capStart,
+          tiltAxis,
+          spawnedEmbers: false,
+          elapsed: -0.18 / playbackSpeed,
+          duration: 0.88 / playbackSpeed,
+          onComplete: () => {
+            capMesh.visible = false;
+            capMesh.scale.setScalar(1);
+            capMesh.rotation.set(0, capMesh.userData.color === 'b' ? Math.PI : 0, 0);
+            capMesh.userData.bodyMesh.material = capMesh.userData.baseMat;
+            dissolveMat.dispose();
+          }
+        });
+      } else {
+        // Slide/arc neatly into velvet-lined side tray
+        const slot = capturedTrayCounts[record.captured.color]++;
+        const slotPos = getTraySlotPosition(record.captured.color, slot);
+        capturedMeshes[record.captured.color].push(capMesh);
+        activeAnimations.push({
+          type: 'trayCapture',
+          mesh: capMesh,
+          startPos: capStart,
+          endPos: slotPos,
+          elapsed: -0.14 / playbackSpeed,
+          duration: 0.85 / playbackSpeed,
+          onComplete: () => {
+            capMesh.position.copy(slotPos);
+            capMesh.rotation.set(0, capMesh.userData.color === 'b' ? Math.PI : 0, 0);
+          }
+        });
+      }
+    }
+  }
+
+  updateClockPlungers();
+  updateBoardHighlights();
+}
+
+function flushAnimations() {
+  while (activeAnimations.length > 0) {
+    const a = activeAnimations.shift();
+    if (a.onComplete) a.onComplete();
+  }
+}
+
+function updateAnimations(dt) {
+  for (let i = activeAnimations.length - 1; i >= 0; i--) {
+    const a = activeAnimations[i];
+    a.elapsed += dt;
+    if (a.elapsed < 0) continue;
+    const rawT = clamp(a.elapsed / a.duration, 0, 1);
+
+    if (a.type === 'slide') {
+      const e = easeInOutCubic(rawT);
+      a.mesh.position.lerpVectors(a.startPos, a.endPos, e);
+      // Subtle physics micro-lift during glide and cushioned landing
+      const lift = Math.sin(rawT * Math.PI) * 0.085;
+      a.mesh.position.y = lerp(a.startPos.y, a.endPos.y, e) + lift;
+      // Gentle inertial pitch along motion direction
+      const vel = Math.sin(rawT * Math.PI);
+      const dx = a.endPos.x - a.startPos.x;
+      const dz = a.endPos.z - a.startPos.z;
+      const len = Math.max(0.001, Math.hypot(dx, dz));
+      a.mesh.rotation.z = -(dx / len) * vel * 0.045;
+      a.mesh.rotation.x = (dz / len) * vel * 0.045;
+    } else if (a.type === 'knight') {
+      // Graceful parabolic arc lifting well over adjacent pieces
+      const e = easeInOutQuint(rawT);
+      a.mesh.position.x = lerp(a.startPos.x, a.endPos.x, e);
+      a.mesh.position.z = lerp(a.startPos.z, a.endPos.z, e);
+      const parabola = 4.0 * rawT * (1.0 - rawT); // peaks at 1.0 when t=0.5
+      const arcHeight = 2.05;
+      // Tiny soft landing cushion at end
+      const settle = rawT > 0.88 ? Math.sin(((rawT - 0.88) / 0.12) * Math.PI) * 0.035 : 0;
+      a.mesh.position.y = BOARD_TOP_Y + parabola * arcHeight + settle;
+      // Expressive leap tilt
+      const tilt = Math.cos(rawT * Math.PI) * 0.16;
+      const dx = a.endPos.x - a.startPos.x;
+      const dz = a.endPos.z - a.startPos.z;
+      const len = Math.max(0.001, Math.hypot(dx, dz));
+      a.mesh.rotation.x = (dz / len) * tilt;
+      a.mesh.rotation.z = -(dx / len) * tilt;
+    } else if (a.type === 'emberCapture') {
+      if (!a.spawnedEmbers && rawT > 0.12) {
+        a.spawnedEmbers = true;
+        spawnGoldenEmbers(a.startPos, 185);
+      }
+      // Tip smoothly while flaring golden emissive and fading away
+      const tip = easeOutCubic(Math.min(1, rawT * 1.4));
+      a.mesh.quaternion.setFromAxisAngle(a.tiltAxis, tip * 1.15);
+      const fade = clamp((rawT - 0.18) / 0.82, 0, 1);
+      a.dissolveMat.emissiveIntensity = Math.sin(Math.min(1, rawT * 1.6) * Math.PI * 0.5) * 3.8 * (1.0 - fade * 0.5);
+      a.dissolveMat.opacity = 1.0 - easeInOutCubic(fade);
+      a.mesh.position.y = a.startPos.y + fade * 0.28;
+      a.mesh.scale.setScalar(1.0 - fade * 0.25);
+    } else if (a.type === 'trayCapture') {
+      const e = easeInOutCubic(rawT);
+      a.mesh.position.x = lerp(a.startPos.x, a.endPos.x, e);
+      a.mesh.position.z = lerp(a.startPos.z, a.endPos.z, e);
+      const lift = Math.sin(rawT * Math.PI) * 1.35;
+      a.mesh.position.y = lerp(a.startPos.y, a.endPos.y, e) + lift;
+    } else if (a.type === 'snapBack') {
+      const e = easeOutCubic(rawT);
+      a.mesh.position.lerpVectors(a.startPos, a.endPos, e);
+    }
+
+    if (rawT >= 1) {
+      if (a.onComplete) a.onComplete();
+      activeAnimations.splice(i, 1);
+    }
+  }
+}
+
+function updateClockPlungers() {
+  const isWhite = engine.turn === 'w';
+  chessClock.pL.position.y = isWhite ? 1.17 : 1.24;
+  chessClock.pR.position.y = isWhite ? 1.24 : 1.17;
+}
+
+// ============================================================================
+// 11. INTERACTIVE RAYCASTING (CLICK-TO-MOVE & DRAG-AND-DROP)
+// ============================================================================
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -BOARD_TOP_Y);
+
+let selectedSquare = null; // { r, f }
+let legalTargets = [];     // array of legal moves from selectedSquare
+let dragState = null;      // { pieceId, from: {r,f}, mesh, startClientX, startClientY, isDragging, hoverSq }
+
+function updateBoardHighlights() {
+  // Last move glow
+  if (engine.history.length > 0) {
+    const last = engine.history[engine.history.length - 1];
+    placeRing(activeRings.lastFrom, last.from.r, last.from.f, 0.008);
+    placeRing(activeRings.lastTo, last.to.r, last.to.f, 0.008);
+  } else {
+    activeRings.lastFrom.visible = false;
+    activeRings.lastTo.visible = false;
+  }
+
+  // Check warning pulsing crimson ring under threatened King
+  if (engine.isInCheck(engine.turn)) {
+    const k = engine.findKing(engine.turn);
+    if (k) placeRing(activeRings.check, k.r, k.f, 0.012);
+  } else {
+    activeRings.check.visible = false;
+  }
+
+  // Selected piece ring
+  if (selectedSquare) {
+    placeRing(activeRings.selected, selectedSquare.r, selectedSquare.f, 0.014);
+  } else {
+    activeRings.selected.visible = false;
+  }
+
+  // Legal destination rings
+  for (let i = 0; i < activeRings.legalPool.length; i++) {
+    const ring = activeRings.legalPool[i];
+    if (i < legalTargets.length) {
+      const m = legalTargets[i];
+      ring.material = m.captured ? ringMaterials.capture : ringMaterials.legal;
+      placeRing(ring, m.to.r, m.to.f, 0.013);
+    } else {
+      ring.visible = false;
+    }
+  }
+
+  // Hover square during drag
+  if (dragState && dragState.isDragging && dragState.hoverSq) {
+    const isLegal = legalTargets.some(m => m.to.r === dragState.hoverSq.r && m.to.f === dragState.hoverSq.f);
+    if (isLegal) {
+      placeRing(activeRings.hover, dragState.hoverSq.r, dragState.hoverSq.f, 0.017);
+    } else {
+      activeRings.hover.visible = false;
+    }
+  } else {
+    activeRings.hover.visible = false;
+  }
+}
+
+function clearSelection() {
+  if (selectedSquare) {
+    const p = engine.board[selectedSquare.r][selectedSquare.f];
+    if (p) {
+      const m = pieceMeshes.get(p.id);
+      if (m && activeAnimations.every(a => a.mesh !== m)) {
+        m.position.y = BOARD_TOP_Y;
+      }
+    }
+  }
+  selectedSquare = null;
+  legalTargets = [];
+  updateBoardHighlights();
+}
+
+function selectSquare(r, f) {
+  const p = engine.board[r][f];
+  if (!p || p.color !== engine.turn) return false;
+  if (currentMode === 'ai' && engine.turn === 'b') return false;
+  clearSelection();
+  selectedSquare = { r, f };
+  legalTargets = engine.getLegalMovesFrom(r, f);
+  updateBoardHighlights();
+  return true;
+}
+
+function getPointerIntersection(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+
+  // Check pieces first
+  const pieceHits = raycaster.intersectObjects(piecesGroup.children, true);
+  for (const hit of pieceHits) {
+    const pid = hit.object.userData.pieceId;
+    if (pid != null) {
+      // Find board square of this live piece
+      for (let r = 0; r < 8; r++) {
+        for (let f = 0; f < 8; f++) {
+          const p = engine.board[r][f];
+          if (p && p.id === pid) return { type: 'piece', r, f, piece: p };
+        }
+      }
+    }
+  }
+
+  // Check board squares
+  const sqHits = raycaster.intersectObjects(squareMeshes, false);
+  if (sqHits.length > 0) {
+    const { r, f } = sqHits[0].object.userData;
+    return { type: 'square', r, f };
+  }
+  return null;
+}
+
+function executeInteractiveMove(move, fromDrag = false) {
+  // If a famous game replay is running, pause it seamlessly so the user can explore
+  if (isAutoPlaying) setPlaying(false);
+  if (currentMode !== 'ai' && currentMode !== 'free') {
+    currentMode = 'free';
+    gameSelect.value = 'free';
+    document.getElementById('gameSubtitle').textContent = 'Interactive Variation · Free Play';
+    document.getElementById('gameMeta').textContent = 'Diverged into interactive study play — click Reset or choose a match to replay.';
+  }
+
+  clearSelection();
+  const record = engine.makeMove(move);
+  if (fromDrag) {
+    // Piece is already near destination — do a crisp short settle glide
+    const m = pieceMeshes.get(record.piece.id);
+    if (m) {
+      const targetPos = squareToWorld(record.to.r, record.to.f);
+      activeAnimations.push({
+        type: 'snapBack',
+        mesh: m,
+        startPos: m.position.clone(),
+        endPos: targetPos,
+        elapsed: 0,
+        duration: 0.16,
+        onComplete: () => {
+          m.position.copy(targetPos);
+          if (record.promotion) {
+            swapMeshForPromotion(m, record.promotion);
+            spawnGoldenEmbers(targetPos, 65);
+          }
+        }
+      });
+    }
+    // Still animate castling rook & capture effects!
+    if (record.castle && record.rookPiece) {
+      const rMesh = pieceMeshes.get(record.rookPiece.id);
+      if (rMesh) {
+        const rStart = rMesh.position.clone();
+        const rEnd = squareToWorld(record.rookTo.r, record.rookTo.f);
+        activeAnimations.push({
+          type: 'slide',
+          mesh: rMesh,
+          startPos: rStart,
+          endPos: rEnd,
+          baseRotY: rMesh.rotation.y,
+          elapsed: 0,
+          duration: 0.45,
+          onComplete: () => { rMesh.position.copy(rEnd); rMesh.rotation.x = 0; rMesh.rotation.z = 0; }
+        });
+      }
+    }
+    if (record.captured) {
+      // Trigger capture effect
+      const capRec = { ...record, piece: { id: -999 }, castle: null };
+      animateMoveRecord(capRec, false);
+    } else {
+      updateClockPlungers();
+      updateBoardHighlights();
+    }
+  } else {
+    animateMoveRecord(record, false);
+  }
+
+  renderMoveHistory();
+  updateStatusUI();
+
+  // Trigger Study AI reply if in AI mode
+  if (currentMode === 'ai' && engine.turn === 'b' && engine.getGameStatus().state === 'playing') {
+    scheduleAIReply();
+  }
+}
+
+let aiTimer = null;
+function scheduleAIReply() {
+  if (aiTimer) clearTimeout(aiTimer);
+  aiTimer = setTimeout(() => {
+    aiTimer = null;
+    if (currentMode !== 'ai' || engine.turn !== 'b') return;
+    const aiMove = engine.chooseAIMove();
+    if (!aiMove) return;
+    const rec = engine.makeMove(aiMove);
+    animateMoveRecord(rec, false);
+    renderMoveHistory();
+    updateStatusUI();
+  }, 620);
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  if (cinematicOrbit) setCameraPreset(null); // yield cinematic orbit on user interaction
+
+  const hit = getPointerIntersection(e.clientX, e.clientY);
+  if (!hit) {
+    clearSelection();
+    return;
+  }
+
+  // If clicking a legal target square while a piece is already selected -> move immediately!
+  if (selectedSquare) {
+    const matchMove = legalTargets.find(m => m.to.r === hit.r && m.to.f === hit.f);
+    if (matchMove) {
+      executeInteractiveMove(matchMove, false);
+      return;
+    }
+  }
+
+  // Otherwise check if pressing on an active-turn piece (supports both click-select and drag)
+  const p = engine.board[hit.r][hit.f];
+  if (p && p.color === engine.turn && !(currentMode === 'ai' && engine.turn === 'b')) {
+    flushAnimations();
+    selectSquare(hit.r, hit.f);
+    const mesh = pieceMeshes.get(p.id);
+    if (mesh) {
+      controls.enabled = false;
+      dragState = {
+        pieceId: p.id,
+        from: { r: hit.r, f: hit.f },
+        mesh,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        isDragging: false,
+        hoverSq: { r: hit.r, f: hit.f }
+      };
+    }
+  } else {
+    clearSelection();
+  }
+});
+
+window.addEventListener('pointermove', (e) => {
+  if (!dragState) {
+    // Update subtle cursor feedback when hovering movable pieces
+    const hit = getPointerIntersection(e.clientX, e.clientY);
+    if (hit) {
+      const p = engine.board[hit.r][hit.f];
+      const isLegalDest = selectedSquare && legalTargets.some(m => m.to.r === hit.r && m.to.f === hit.f);
+      if (isLegalDest) {
+        renderer.domElement.style.cursor = 'pointer';
+      } else if (p && p.color === engine.turn && !(currentMode === 'ai' && engine.turn === 'b')) {
+        renderer.domElement.style.cursor = 'grab';
+      } else {
+        renderer.domElement.style.cursor = 'default';
+      }
+    } else {
+      renderer.domElement.style.cursor = 'default';
+    }
+    return;
+  }
+
+  const distPx = Math.hypot(e.clientX - dragState.startClientX, e.clientY - dragState.startClientY);
+  if (!dragState.isDragging && distPx > 6) {
+    dragState.isDragging = true;
+    renderer.domElement.style.cursor = 'grabbing';
+  }
+
+  if (dragState.isDragging) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointerNDC, camera);
+    const pt = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(dragPlane, pt)) {
+      dragState.mesh.position.set(
+        clamp(pt.x, -4.3, 4.3),
+        BOARD_TOP_Y + 0.56,
+        clamp(pt.z, -4.3, 4.3)
+      );
+      dragState.hoverSq = worldToSquare(pt.x, pt.z);
+      updateBoardHighlights();
+    }
+  }
+});
+
+window.addEventListener('pointerup', () => {
+  if (!dragState) return;
+  const ds = dragState;
+  dragState = null;
+  controls.enabled = true;
+  renderer.domElement.style.cursor = 'default';
+
+  if (ds.isDragging) {
+    const targetSq = ds.hoverSq;
+    const matchMove = targetSq
+      ? legalTargets.find(m => m.to.r === targetSq.r && m.to.f === targetSq.f)
+      : null;
+    if (matchMove) {
+      executeInteractiveMove(matchMove, true);
+    } else {
+      // Spring smoothly back to origin square
+      const home = squareToWorld(ds.from.r, ds.from.f);
+      activeAnimations.push({
+        type: 'snapBack',
+        mesh: ds.mesh,
+        startPos: ds.mesh.position.clone(),
+        endPos: home,
+        elapsed: 0,
+        duration: 0.22,
+        onComplete: () => ds.mesh.position.copy(home)
+      });
+      updateBoardHighlights();
+    }
+  }
+});
+
+// ============================================================================
+// 12. CAMERA PRESETS & CINEMATIC ORBIT
+// ============================================================================
+const CAMERA_PRESETS = {
+  white: { pos: new THREE.Vector3(0, 7.6, 10.6), target: new THREE.Vector3(0, 0.45, 0.1) },
+  black: { pos: new THREE.Vector3(0, 7.6, -10.6), target: new THREE.Vector3(0, 0.45, -0.1) },
+  top:   { pos: new THREE.Vector3(0, 14.4, 0.02), target: new THREE.Vector3(0, 0.36, 0) }
+};
+
+let cameraTransition = null;
+let cinematicOrbit = false;
+let orbitAngle = 0.22;
+
+function setCameraPreset(presetName) {
+  document.querySelectorAll('.cam-btn[data-cam]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.cam === presetName);
+  });
+
+  if (!presetName) {
+    cinematicOrbit = false;
+    cameraTransition = null;
+    return;
+  }
+
+  if (presetName === 'orbit') {
+    cinematicOrbit = true;
+    cameraTransition = null;
+    orbitAngle = Math.atan2(camera.position.x, camera.position.z);
+    return;
+  }
+
+  cinematicOrbit = false;
+  const preset = CAMERA_PRESETS[presetName];
+  if (!preset) return;
+  cameraTransition = {
+    startPos: camera.position.clone(),
+    endPos: preset.pos.clone(),
+    startTarget: controls.target.clone(),
+    endTarget: preset.target.clone(),
+    elapsed: 0,
+    duration: 1.05
+  };
+}
+
+controls.addEventListener('start', () => {
+  if (cinematicOrbit || cameraTransition) {
+    setCameraPreset(null);
+  }
+});
+
+// ============================================================================
+// 13. AUTOMATED FAMOUS-GAME PLAYBACK & HUD CONTROLLER
+// ============================================================================
+const gameSelect = document.getElementById('gameSelect');
+const movesListEl = document.getElementById('movesList');
+const btnPlayPause = document.getElementById('btnPlayPause');
+const btnPrev = document.getElementById('btnPrev');
+const btnNext = document.getElementById('btnNext');
+const btnReset = document.getElementById('btnReset');
+const btnSpeed = document.getElementById('btnSpeed');
+const btnCaptureMode = document.getElementById('btnCaptureMode');
+const turnDotEl = document.getElementById('turnDot');
+const statusTextEl = document.getElementById('statusText');
+const statusBadgeEl = document.getElementById('statusBadge');
+const moveCounterEl = document.getElementById('moveCounter');
+const hudEl = document.getElementById('hud');
+
+let currentMode = 'opera';
+let scriptedMoves = [];
+let scriptIndex = 0;
+let isAutoPlaying = true;
+let autoPlayCooldown = 1.1;
+
+function loadMode(modeKey, autoStart = true) {
+  if (aiTimer) { clearTimeout(aiTimer); aiTimer = null; }
+  currentMode = modeKey;
+  const info = FAMOUS_GAMES[modeKey];
+  document.getElementById('gameSubtitle').textContent = info.subtitle;
+  document.getElementById('gameMeta').textContent = info.meta;
+
+  clearSelection();
+  engine.reset();
+  syncMeshesToEngine();
+
+  scriptedMoves = info.moves ? [...info.moves] : [];
+  scriptIndex = 0;
+  setPlaying(Boolean(info.moves && autoStart));
+  autoPlayCooldown = 0.95;
+
+  renderMoveHistory();
+  updateStatusUI();
+  updateClockPlungers();
+}
+
+function setPlaying(playing) {
+  const hasScript = scriptedMoves.length > 0 && scriptIndex < scriptedMoves.length;
+  isAutoPlaying = playing && hasScript;
+  btnPlayPause.textContent = isAutoPlaying ? '❚❚ Pause' : '▶ Play';
+  btnPlayPause.disabled = scriptedMoves.length === 0;
+}
+
+function stepForward(instant = false) {
+  if (scriptedMoves.length === 0 || scriptIndex >= scriptedMoves.length) {
+    setPlaying(false);
+    return false;
+  }
+  clearSelection();
+  const san = scriptedMoves[scriptIndex];
+  const move = engine.parseSAN(san);
+  if (!move) {
+    console.warn('Could not parse SAN:', san);
+    setPlaying(false);
+    return false;
+  }
+  const rec = engine.makeMove(move);
+  scriptIndex++;
+  animateMoveRecord(rec, instant);
+  renderMoveHistory();
+  updateStatusUI();
+
+  if (scriptIndex >= scriptedMoves.length) {
+    setPlaying(false);
+  }
+  return true;
+}
+
+function jumpToPly(targetPly) {
+  const wasPlaying = isAutoPlaying;
+  setPlaying(false);
+  clearSelection();
+
+  if (scriptedMoves.length > 0) {
+    const clamped = clamp(targetPly, 0, scriptedMoves.length);
+    engine.reset();
+    syncMeshesToEngine();
+    scriptIndex = 0;
+    for (let i = 0; i < clamped; i++) {
+      const m = engine.parseSAN(scriptedMoves[i]);
+      if (!m) break;
+      const rec = engine.makeMove(m);
+      scriptIndex++;
+      animateMoveRecord(rec, true);
+    }
+    renderMoveHistory();
+    updateStatusUI();
+    if (wasPlaying && scriptIndex < scriptedMoves.length) setPlaying(true);
+  } else {
+    // Undo in interactive mode
+    if (targetPly < engine.history.length) {
+      const movesToKeep = engine.history.slice(0, targetPly).map(h => ({
+        from: h.from, to: h.to, promotion: h.promotion
+      }));
+      engine.reset();
+      syncMeshesToEngine();
+      for (const mk of movesToKeep) {
+        const legal = engine.getLegalMoves(engine.turn);
+        const found = legal.find(m =>
+          m.from.r === mk.from.r && m.from.f === mk.from.f &&
+          m.to.r === mk.to.r && m.to.f === mk.to.f &&
+          (m.promotion || null) === (mk.promotion || null)
+        );
+        if (found) {
+          const rec = engine.makeMove(found);
+          animateMoveRecord(rec, true);
+        }
+      }
+      renderMoveHistory();
+      updateStatusUI();
+    }
+  }
+}
+
+function updateStatusUI() {
+  const status = engine.getGameStatus();
+  const turnName = engine.turn === 'w' ? 'White' : 'Black';
+  turnDotEl.className = 'turn-dot ' + (engine.turn === 'w' ? 'white' : 'black');
+
+  statusBadgeEl.className = 'status-badge';
+  statusBadgeEl.textContent = '';
+
+  if (status.state === 'checkmate') {
+    const winner = status.winner === 'w' ? 'White' : 'Black';
+    statusTextEl.textContent = `${winner} wins by checkmate`;
+    statusBadgeEl.className = 'status-badge mate';
+    statusBadgeEl.textContent = 'Checkmate';
+  } else if (status.state === 'stalemate') {
+    statusTextEl.textContent = 'Draw by stalemate';
+    statusBadgeEl.className = 'status-badge mate';
+    statusBadgeEl.textContent = 'Draw';
+  } else {
+    statusTextEl.textContent = `${turnName} to move`;
+    if (status.inCheck) {
+      statusBadgeEl.className = 'status-badge check';
+      statusBadgeEl.textContent = 'Check';
+    }
+  }
+
+  if (scriptedMoves.length > 0) {
+    moveCounterEl.textContent = `${scriptIndex} / ${scriptedMoves.length}`;
+    btnNext.disabled = scriptIndex >= scriptedMoves.length;
+    btnPrev.disabled = scriptIndex <= 0;
+  } else {
+    moveCounterEl.textContent = `${engine.history.length} ply`;
+    btnNext.disabled = true;
+    btnPrev.disabled = engine.history.length === 0;
+  }
+}
+
+function renderMoveHistory() {
+  const hist = engine.history;
+  if (hist.length === 0) {
+    movesListEl.innerHTML = '<div class="move-empty">Awaiting opening move…</div>';
+    return;
+  }
+  let html = '';
+  for (let i = 0; i < hist.length; i += 2) {
+    const moveNum = Math.floor(i / 2) + 1;
+    const wRec = hist[i];
+    const bRec = hist[i + 1];
+    const wCur = i === hist.length - 1 ? ' current' : '';
+    const bCur = (i + 1) === hist.length - 1 ? ' current' : '';
+    html += `<div class="move-row">
+      <span class="move-num">${moveNum}.</span>
+      <span class="move-cell${wCur}" data-ply="${i + 1}">${wRec.san}</span>
+      ${bRec ? `<span class="move-cell${bCur}" data-ply="${i + 2}">${bRec.san}</span>` : '<span></span>'}
+    </div>`;
+  }
+  movesListEl.innerHTML = html;
+  movesListEl.scrollTop = movesListEl.scrollHeight;
+}
+
+movesListEl.addEventListener('click', (e) => {
+  const cell = e.target.closest('.move-cell');
+  if (!cell) return;
+  const ply = parseInt(cell.dataset.ply, 10);
+  if (!isNaN(ply)) jumpToPly(ply);
+});
+
+// Wire HUD buttons
+document.querySelectorAll('.cam-btn[data-cam]').forEach(btn => {
+  btn.addEventListener('click', () => setCameraPreset(btn.dataset.cam));
+});
+
+gameSelect.addEventListener('change', (e) => {
+  loadMode(e.target.value, true);
+});
+
+btnPlayPause.addEventListener('click', () => {
+  if (scriptedMoves.length === 0) return;
+  if (scriptIndex >= scriptedMoves.length) {
+    loadMode(currentMode, true);
+    return;
+  }
+  setPlaying(!isAutoPlaying);
+  if (isAutoPlaying) autoPlayCooldown = 0.25;
+});
+
+btnNext.addEventListener('click', () => {
+  setPlaying(false);
+  stepForward(false);
+});
+
+btnPrev.addEventListener('click', () => {
+  setPlaying(false);
+  const target = Math.max(0, engine.history.length - 1);
+  jumpToPly(target);
+});
+
+btnReset.addEventListener('click', () => {
+  loadMode(currentMode, scriptedMoves.length > 0);
+});
+
+const SPEEDS = [0.75, 1.0, 1.5, 2.0];
+let speedIdx = 1;
+btnSpeed.addEventListener('click', () => {
+  speedIdx = (speedIdx + 1) % SPEEDS.length;
+  playbackSpeed = SPEEDS[speedIdx];
+  btnSpeed.textContent = playbackSpeed.toFixed(playbackSpeed % 1 === 0 ? 1 : 2) + '×';
+});
+
+btnCaptureMode.addEventListener('click', () => {
+  captureMode = captureMode === 'embers' ? 'tray' : 'embers';
+  btnCaptureMode.textContent = captureMode === 'embers' ? '✦ Embers' : '▤ Side Tray';
+  // Re-sync existing captured pieces to reflect chosen mode cleanly
+  jumpToPly(engine.history.length);
+});
+
+document.getElementById('btnHideHud').addEventListener('click', () => hudEl.classList.add('hud-hidden'));
+document.getElementById('btnShowHud').addEventListener('click', () => hudEl.classList.remove('hud-hidden'));
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') hudEl.classList.toggle('hud-hidden');
+  else if (e.key === ' ' && document.activeElement.tagName !== 'SELECT') {
+    e.preventDefault();
+    btnPlayPause.click();
+  } else if (e.key === 'ArrowRight') {
+    btnNext.click();
+  } else if (e.key === 'ArrowLeft') {
+    btnPrev.click();
+  }
+});
+
+// ============================================================================
+// 14. RESIZE & MAIN ANIMATION LOOP
+// ============================================================================
+window.addEventListener('resize', () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  bloomPass.setSize(w, h);
+});
+
+const clock = new THREE.Clock();
+
+// Initialize the match (The Opera Game)
+loadMode('opera', true);
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const elapsed = clock.elapsedTime;
+
+  // Update shader uniforms (dust motes & glowing board rings)
+  dustMat.uniforms.uTime.value = elapsed;
+  for (const key in ringMaterials) {
+    ringMaterials[key].uniforms.uTime.value = elapsed;
+  }
+
+  // Subtle idle float for currently selected piece (when not dragging or animating)
+  if (selectedSquare && (!dragState || !dragState.isDragging)) {
+    const p = engine.board[selectedSquare.r][selectedSquare.f];
+    if (p) {
+      const mesh = pieceMeshes.get(p.id);
+      if (mesh && activeAnimations.every(a => a.mesh !== mesh)) {
+        mesh.position.y = BOARD_TOP_Y + 0.11 + Math.sin(elapsed * 3.8) * 0.03;
+      }
+    }
+  }
+
+  // Advance physics-inspired piece animations & golden embers
+  updateAnimations(dt);
+  updateEmbers(dt);
+
+  // Automated famous-game playback scheduler
+  if (isAutoPlaying && activeAnimations.length === 0) {
+    autoPlayCooldown -= dt * playbackSpeed;
+    if (autoPlayCooldown <= 0) {
+      const ok = stepForward(false);
+      if (ok) autoPlayCooldown = 1.05;
+    }
+  }
+
+  // Smooth camera preset transitions
+  if (cameraTransition) {
+    cameraTransition.elapsed += dt;
+    const t = clamp(cameraTransition.elapsed / cameraTransition.duration, 0, 1);
+    const e = easeInOutCubic(t);
+    camera.position.lerpVectors(cameraTransition.startPos, cameraTransition.endPos, e);
+    controls.target.lerpVectors(cameraTransition.startTarget, cameraTransition.endTarget, e);
+    if (t >= 1) cameraTransition = null;
+  } else if (cinematicOrbit) {
+    orbitAngle += dt * 0.17;
+    const radius = 10.9 + Math.sin(elapsed * 0.28) * 0.7;
+    const height = 6.4 + Math.sin(elapsed * 0.35) * 1.1;
+    camera.position.set(Math.sin(orbitAngle) * radius, height, Math.cos(orbitAngle) * radius);
+    controls.target.lerp(new THREE.Vector3(0, 0.45, 0), dt * 2.5);
+  }
+
+  controls.update();
+  composer.render();
+}
+
+animate();
+</script>
+</body>
+</html>

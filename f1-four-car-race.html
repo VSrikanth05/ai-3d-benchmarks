@@ -1,0 +1,5176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Grand Prix</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1a120d;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ============================================================================
+// 1. DETERMINISTIC PRNG & MATH UTILITIES
+// ============================================================================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const rng = mulberry32(20261119);
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+const wrapMod = (x, m) => ((x % m) + m) % m;
+
+function hash2D(ix, iz) {
+  let n = Math.imul(ix, 374761393) + Math.imul(iz, 668265263);
+  n = (n ^ (n >>> 13)) >>> 0;
+  n = Math.imul(n, 1274126177) >>> 0;
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function valueNoise2D(x, z) {
+  const ix = Math.floor(x);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uz = fz * fz * (3 - 2 * fz);
+  const a = hash2D(ix, iz);
+  const b = hash2D(ix + 1, iz);
+  const c = hash2D(ix, iz + 1);
+  const d = hash2D(ix + 1, iz + 1);
+  return lerp(lerp(a, b, ux), lerp(c, d, ux), uz);
+}
+
+function fbm2D(x, z, octaves = 4) {
+  let sum = 0;
+  let amp = 0.5;
+  let freq = 1;
+  let norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += amp * valueNoise2D(x * freq, z * freq);
+    norm += amp;
+    amp *= 0.5;
+    freq *= 2.03;
+  }
+  return sum / norm;
+}
+
+// ============================================================================
+// 2. RENDERER, SCENE, CAMERA & CONTROLS
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({
+  antialias: false,
+  powerPreference: 'high-performance',
+  stencil: false
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.NoToneMapping; // Handled in final HDR post-process pass
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0xd89d6e, 0.00145);
+
+const camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.25, 1600);
+camera.position.set(22, 11, 28);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.055;
+controls.enablePan = true;
+controls.minDistance = 4.2;
+controls.maxDistance = 260;
+controls.maxPolarAngle = Math.PI * 0.488;
+controls.rotateSpeed = 0.65;
+controls.zoomSpeed = 0.85;
+controls.enabled = false;
+
+// ============================================================================
+// 3. GOLDEN-HOUR SKY DOME, SUN LIGHTING & PMREM ENVIRONMENT
+// ============================================================================
+const SUN_AZIMUTH = 0.62; // Warm low golden-hour sun across the track
+const SUN_ELEVATION = 0.21; // ~12 degrees above horizon
+const SUN_DIR = new THREE.Vector3(
+  Math.cos(SUN_ELEVATION) * Math.sin(SUN_AZIMUTH),
+  Math.sin(SUN_ELEVATION),
+  Math.cos(SUN_ELEVATION) * Math.cos(SUN_AZIMUTH)
+).normalize();
+
+function createGoldenHourSkyMaterial() {
+  return new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: {
+      uSunDir: { value: SUN_DIR.clone() }
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uSunDir;
+      varying vec3 vDir;
+
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
+          mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+      float fbm(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+        for (int i = 0; i < 4; i++) {
+          v += a * noise(p);
+          p = rot * p * 2.06;
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        vec3 d = normalize(vDir);
+        float y = max(d.y, 0.0);
+        float sunCos = max(dot(d, normalize(uSunDir)), 0.0001);
+
+        // Zenith to warm golden-hour horizon gradient (strictly positive pow bases -> zero NaNs)
+        vec3 zenithCol = vec3(0.08, 0.16, 0.34);
+        vec3 midSkyCol = vec3(0.32, 0.42, 0.58);
+        vec3 horizonCol = vec3(0.95, 0.56, 0.30);
+        vec3 groundHaze = vec3(0.36, 0.23, 0.16);
+
+        float horizT = pow(max(smoothstep(0.0, 0.38, y), 0.0001), 0.72);
+        vec3 sky = mix(horizonCol, midSkyCol, horizT);
+        sky = mix(sky, zenithCol, smoothstep(0.24, 0.92, y));
+
+        // Mie forward scattering golden glow around sun
+        float mieWide = pow(sunCos, 4.0);
+        float mieTight = pow(sunCos, 48.0);
+        float sunDisc = smoothstep(0.9986, 0.9996, sunCos);
+
+        sky += vec3(1.0, 0.52, 0.22) * mieWide * (0.48 + 0.55 * (1.0 - smoothstep(0.0, 0.45, y)));
+        sky += vec3(1.5, 0.92, 0.48) * mieTight * 0.95;
+        sky += vec3(5.2, 3.8, 2.2) * sunDisc;
+
+        // High-altitude sunlit golden cirrus clouds
+        if (d.y > 0.015) {
+          vec2 cloudUV = d.xz / (d.y + 0.16) * 0.65 + vec2(1.4, -0.8);
+          float c1 = fbm(cloudUV * 1.4);
+          float c2 = fbm(cloudUV * 3.1 + vec2(4.2, 2.7));
+          float cloudMask = smoothstep(0.48, 0.78, c1 * 0.72 + c2 * 0.28);
+          cloudMask *= smoothstep(0.015, 0.14, d.y) * (1.0 - smoothstep(0.58, 0.96, d.y));
+          vec3 cloudDark = vec3(0.45, 0.32, 0.34);
+          vec3 cloudLit = mix(vec3(1.1, 0.68, 0.38), vec3(1.7, 1.15, 0.65), pow(sunCos, 2.5));
+          vec3 cloudCol = mix(cloudDark, cloudLit, smoothstep(0.2, 0.85, c2 + sunCos * 0.45));
+          sky = mix(sky, cloudCol, cloudMask * 0.62);
+        }
+
+        // Below horizon warm hazy blend
+        float below = smoothstep(0.03, -0.14, d.y);
+        sky = mix(sky, groundHaze, below);
+
+        gl_FragColor = vec4(clamp(sky, vec3(0.0), vec3(12.0)), 1.0);
+      }
+    `
+  });
+}
+
+const skyMesh = new THREE.Mesh(new THREE.SphereGeometry(1250, 48, 28), createGoldenHourSkyMaterial());
+scene.add(skyMesh);
+
+function buildGoldenHourPMREM() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const envScene = new THREE.Scene();
+  const envSky = new THREE.Mesh(new THREE.SphereGeometry(40, 32, 20), createGoldenHourSkyMaterial());
+  envScene.add(envSky);
+
+  // Subtle warm ground bounce disc for realistic underside metallic reflections
+  const groundBounce = new THREE.Mesh(
+    new THREE.CircleGeometry(35, 32),
+    new THREE.MeshBasicMaterial({ color: 0x3b2b20 })
+  );
+  groundBounce.rotation.x = -Math.PI / 2;
+  groundBounce.position.y = -4;
+  envScene.add(groundBounce);
+
+  const rt = pmrem.fromScene(envScene, 0.025);
+  pmrem.dispose();
+  return rt.texture;
+}
+
+scene.environment = buildGoldenHourPMREM();
+scene.environmentIntensity = 0.88;
+
+// Primary Golden-Hour Sun Light (dynamic shadow frustum tracks the race pack)
+const sunLight = new THREE.DirectionalLight(0xffb56e, 3.4);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 10;
+sunLight.shadow.camera.far = 360;
+const SHADOW_EXTENT = 72;
+sunLight.shadow.camera.left = -SHADOW_EXTENT;
+sunLight.shadow.camera.right = SHADOW_EXTENT;
+sunLight.shadow.camera.top = SHADOW_EXTENT;
+sunLight.shadow.camera.bottom = -SHADOW_EXTENT;
+sunLight.shadow.bias = -0.00045;
+sunLight.shadow.normalBias = 0.035;
+scene.add(sunLight);
+scene.add(sunLight.target);
+
+// Cool sky / warm earth hemisphere fill
+const hemiLight = new THREE.HemisphereLight(0x88a8dc, 0x4c3626, 0.78);
+scene.add(hemiLight);
+
+// Subtle warm rim bounce from opposite horizon
+const rimLight = new THREE.DirectionalLight(0x7ca2d8, 0.42);
+rimLight.position.copy(SUN_DIR).multiplyScalar(-120);
+rimLight.position.y = 42;
+scene.add(rimLight);
+
+// ============================================================================
+// 4. PROCEDURAL PBR TEXTURES (CARBON WEAVE, ASPHALT, GRAVEL, RUBBER, FENCE)
+// ============================================================================
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return c;
+}
+
+function createCarbonTextures() {
+  const size = 256;
+  const colCanvas = makeCanvas(size, size);
+  const cctx = colCanvas.getContext('2d');
+  const normCanvas = makeCanvas(size, size);
+  const nctx = normCanvas.getContext('2d');
+  const roughCanvas = makeCanvas(size, size);
+  const rctx = roughCanvas.getContext('2d');
+
+  const colImg = cctx.createImageData(size, size);
+  const normImg = nctx.createImageData(size, size);
+  const roughImg = rctx.createImageData(size, size);
+
+  const cell = 16; // 2x2 twill weave repeat
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const gx = Math.floor(x / (cell / 2));
+      const gy = Math.floor(y / (cell / 2));
+      const lx = (x % (cell / 2)) / (cell / 2);
+      const ly = (y % (cell / 2)) / (cell / 2);
+
+      // 2x2 twill pattern
+      const twill = ((gx + gy) % 4) < 2;
+      const fiber = twill
+        ? Math.sin(lx * Math.PI) * (0.85 + 0.15 * Math.sin(ly * Math.PI * 3))
+        : Math.sin(ly * Math.PI) * (0.85 + 0.15 * Math.sin(lx * Math.PI * 3));
+
+      const base = twill ? 20 + fiber * 24 : 14 + fiber * 19;
+      const idx = (y * size + x) * 4;
+      colImg.data[idx] = base;
+      colImg.data[idx + 1] = base + 1;
+      colImg.data[idx + 2] = base + 3;
+      colImg.data[idx + 3] = 255;
+
+      // Subtle twill normal slope
+      const nx = twill ? Math.cos(lx * Math.PI) * 0.42 : 0.0;
+      const ny = twill ? 0.0 : Math.cos(ly * Math.PI) * 0.42;
+      normImg.data[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+      normImg.data[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      normImg.data[idx + 2] = 238;
+      normImg.data[idx + 3] = 255;
+
+      const rough = Math.round((twill ? 0.24 : 0.34) * 255 + (1 - fiber) * 24);
+      roughImg.data[idx] = rough;
+      roughImg.data[idx + 1] = rough;
+      roughImg.data[idx + 2] = rough;
+      roughImg.data[idx + 3] = 255;
+    }
+  }
+  cctx.putImageData(colImg, 0, 0);
+  nctx.putImageData(normImg, 0, 0);
+  rctx.putImageData(roughImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(colCanvas);
+  const normalMap = new THREE.CanvasTexture(normCanvas);
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  for (const t of [map, normalMap, roughnessMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(14, 14);
+    t.anisotropy = 8;
+  }
+  map.colorSpace = THREE.SRGBColorSpace;
+  return { map, normalMap, roughnessMap };
+}
+
+function createAsphaltTextures() {
+  const size = 512;
+  const colCanvas = makeCanvas(size, size);
+  const cctx = colCanvas.getContext('2d');
+  const normCanvas = makeCanvas(size, size);
+  const nctx = normCanvas.getContext('2d');
+  const roughCanvas = makeCanvas(size, size);
+  const rctx = roughCanvas.getContext('2d');
+
+  const colImg = cctx.createImageData(size, size);
+  const normImg = nctx.createImageData(size, size);
+  const roughImg = rctx.createImageData(size, size);
+
+  const hField = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const n1 = hash2D(x, y);
+      const n2 = valueNoise2D(x * 0.14, y * 0.14);
+      const n3 = valueNoise2D(x * 0.035, y * 0.035);
+      // Longitudinal subtle tire wear streaks along V (y)
+      const streak = valueNoise2D(x * 0.09, y * 0.008);
+      const h = n1 * 0.45 + n2 * 0.35 + n3 * 0.2;
+      hField[y * size + x] = h;
+
+      const idx = (y * size + x) * 4;
+      const pebble = (n1 > 0.86 ? 20 : 0) + (n1 < 0.12 ? -10 : 0);
+      const val = clamp(50 + n3 * 18 + (n2 - 0.5) * 14 + pebble - streak * 8, 28, 92);
+      colImg.data[idx] = val;
+      colImg.data[idx + 1] = val + 1;
+      colImg.data[idx + 2] = val + 3;
+      colImg.data[idx + 3] = 255;
+
+      const rough = clamp(Math.round((0.72 + (1 - n2) * 0.2 - streak * 0.08) * 255), 115, 245);
+      roughImg.data[idx] = rough;
+      roughImg.data[idx + 1] = rough;
+      roughImg.data[idx + 2] = rough;
+      roughImg.data[idx + 3] = 255;
+    }
+  }
+
+  for (let y = 0; y < size; y++) {
+    const ym = (y - 1 + size) % size;
+    const yp = (y + 1) % size;
+    for (let x = 0; x < size; x++) {
+      const xm = (x - 1 + size) % size;
+      const xp = (x + 1) % size;
+      const dx = (hField[y * size + xp] - hField[y * size + xm]) * 2.4;
+      const dy = (hField[yp * size + x] - hField[ym * size + x]) * 2.4;
+      const idx = (y * size + x) * 4;
+      normImg.data[idx] = clamp(Math.round((-dx * 0.5 + 0.5) * 255), 0, 255);
+      normImg.data[idx + 1] = clamp(Math.round((-dy * 0.5 + 0.5) * 255), 0, 255);
+      normImg.data[idx + 2] = 235;
+      normImg.data[idx + 3] = 255;
+    }
+  }
+  cctx.putImageData(colImg, 0, 0);
+  nctx.putImageData(normImg, 0, 0);
+  rctx.putImageData(roughImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(colCanvas);
+  const normalMap = new THREE.CanvasTexture(normCanvas);
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  for (const t of [map, normalMap, roughnessMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 12;
+  }
+  map.colorSpace = THREE.SRGBColorSpace;
+  return { map, normalMap, roughnessMap };
+}
+
+function createGravelTextures() {
+  const size = 256;
+  const colCanvas = makeCanvas(size, size);
+  const cctx = colCanvas.getContext('2d');
+  const normCanvas = makeCanvas(size, size);
+  const nctx = normCanvas.getContext('2d');
+  const colImg = cctx.createImageData(size, size);
+  const normImg = nctx.createImageData(size, size);
+  const hf = new Float32Array(size * size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // Raked gravel furrows along track length (y)
+      const rake = Math.sin(x * 0.34) * 0.5 + 0.5;
+      const stone = hash2D(x, y);
+      const lump = valueNoise2D(x * 0.25, y * 0.25);
+      const h = rake * 0.45 + stone * 0.35 + lump * 0.2;
+      hf[y * size + x] = h;
+      const idx = (y * size + x) * 4;
+      const base = 152 + (stone - 0.5) * 42 + (rake - 0.5) * 18;
+      colImg.data[idx] = clamp(base + 14, 95, 220);
+      colImg.data[idx + 1] = clamp(base + 4, 85, 210);
+      colImg.data[idx + 2] = clamp(base - 14, 70, 195);
+      colImg.data[idx + 3] = 255;
+    }
+  }
+  for (let y = 0; y < size; y++) {
+    const ym = (y - 1 + size) % size;
+    const yp = (y + 1) % size;
+    for (let x = 0; x < size; x++) {
+      const xm = (x - 1 + size) % size;
+      const xp = (x + 1) % size;
+      const dx = (hf[y * size + xp] - hf[y * size + xm]) * 3.0;
+      const dy = (hf[yp * size + x] - hf[ym * size + x]) * 3.0;
+      const idx = (y * size + x) * 4;
+      normImg.data[idx] = clamp(Math.round((-dx * 0.5 + 0.5) * 255), 0, 255);
+      normImg.data[idx + 1] = clamp(Math.round((-dy * 0.5 + 0.5) * 255), 0, 255);
+      normImg.data[idx + 2] = 220;
+      normImg.data[idx + 3] = 255;
+    }
+  }
+  cctx.putImageData(colImg, 0, 0);
+  nctx.putImageData(normImg, 0, 0);
+  const map = new THREE.CanvasTexture(colCanvas);
+  const normalMap = new THREE.CanvasTexture(normCanvas);
+  for (const t of [map, normalMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  }
+  map.colorSpace = THREE.SRGBColorSpace;
+  return { map, normalMap };
+}
+
+function createFenceTexture() {
+  const size = 128;
+  const c = makeCanvas(size, size);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  ctx.strokeStyle = 'rgba(185, 192, 200, 0.78)';
+  ctx.lineWidth = 2.0;
+  const step = 16;
+  for (let i = -size; i < size * 2; i += step) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + size, size);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(i, size);
+    ctx.lineTo(i + size, 0);
+    ctx.stroke();
+  }
+  // Horizontal tension cables
+  ctx.strokeStyle = 'rgba(215, 220, 226, 0.92)';
+  ctx.lineWidth = 3.0;
+  for (const y of [16, 48, 80, 112]) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(size, y);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+function createSlickRubberTextures(stripeHex) {
+  const w = 256;
+  const h = 256;
+  const col = makeCanvas(w, h);
+  const cctx = col.getContext('2d');
+  const rough = makeCanvas(w, h);
+  const rctx = rough.getContext('2d');
+
+  // V coordinate runs across tire profile: 0..0.28 inner sidewall, 0.28..0.72 tread-less slick crown, 0.72..1.0 outer sidewall
+  cctx.fillStyle = '#1b1c1f';
+  cctx.fillRect(0, 0, w, h);
+
+  // Subtle scrubbed contact patch grain (tread-less racing slick)
+  for (let y = 0; y < h; y++) {
+    const v = y / h;
+    const isCrown = v > 0.27 && v < 0.73;
+    const scrub = isCrown ? 0.85 : 0.4;
+    for (let x = 0; x < w; x += 2) {
+      const n = hash2D(x, y);
+      const val = Math.round(22 + n * 16 * scrub);
+      cctx.fillStyle = `rgb(${val},${val},${val + 1})`;
+      cctx.fillRect(x, y, 2, 1);
+    }
+  }
+
+  // Clean geometric colored compound sidewall ring (no text/logos)
+  cctx.fillStyle = stripeHex;
+  cctx.fillRect(0, Math.round(h * 0.81), w, Math.round(h * 0.042));
+  cctx.fillRect(0, Math.round(h * 0.148), w, Math.round(h * 0.042));
+
+  // Roughness: sidewall slightly satin, scrubbed crown slightly smoother glossy rubber
+  const rgrad = rctx.createLinearGradient(0, 0, 0, h);
+  rgrad.addColorStop(0.0, '#c8c8c8');
+  rgrad.addColorStop(0.26, '#b8b8b8');
+  rgrad.addColorStop(0.36, '#7a7a7a');
+  rgrad.addColorStop(0.64, '#7a7a7a');
+  rgrad.addColorStop(0.74, '#b8b8b8');
+  rgrad.addColorStop(1.0, '#c8c8c8');
+  rctx.fillStyle = rgrad;
+  rctx.fillRect(0, 0, w, h);
+
+  const map = new THREE.CanvasTexture(col);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.ClampToEdgeWrapping;
+  map.anisotropy = 8;
+
+  const roughnessMap = new THREE.CanvasTexture(rough);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.ClampToEdgeWrapping;
+  return { map, roughnessMap };
+}
+
+function createMotionBlurWheelTexture(rimTint) {
+  const size = 256;
+  const c = makeCanvas(size, size);
+  const ctx = c.getContext('2d');
+  const cx = size / 2;
+  const cy = size / 2;
+
+  ctx.clearRect(0, 0, size, size);
+  // Radial spinning spoke blur rings
+  const grad = ctx.createRadialGradient(cx, cy, size * 0.08, cx, cy, size * 0.48);
+  grad.addColorStop(0.0, 'rgba(30,34,42,0.92)');
+  grad.addColorStop(0.18, 'rgba(200,210,225,0.65)');
+  grad.addColorStop(0.55, 'rgba(130,140,155,0.42)');
+  grad.addColorStop(0.84, rimTint);
+  grad.addColorStop(0.95, 'rgba(220,228,240,0.85)');
+  grad.addColorStop(1.0, 'rgba(0,0,0,0.0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.48, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Subtle concentric streaks simulating rapid spoke rotation
+  for (let r = 24; r < 118; r += 5) {
+    ctx.strokeStyle = `rgba(235, 240, 250, ${0.06 + (r % 10 === 0 ? 0.14 : 0.04)})`;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createSoftParticleTexture() {
+  const size = 128;
+  const c = makeCanvas(size, size);
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+  g.addColorStop(0.0, 'rgba(255,255,255,0.95)');
+  g.addColorStop(0.35, 'rgba(245,240,235,0.52)');
+  g.addColorStop(0.7, 'rgba(225,215,205,0.16)');
+  g.addColorStop(1.0, 'rgba(210,200,190,0.0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+}
+
+function createTerrainGrassTextures() {
+  const size = 512;
+  const colCanvas = makeCanvas(size, size);
+  const cctx = colCanvas.getContext('2d');
+  const normCanvas = makeCanvas(size, size);
+  const nctx = normCanvas.getContext('2d');
+  const colImg = cctx.createImageData(size, size);
+  const normImg = nctx.createImageData(size, size);
+  const hf = new Float32Array(size * size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const nFine = hash2D(x, y);
+      const nBlade = valueNoise2D(x * 0.28, y * 0.14);
+      const nClump = valueNoise2D(x * 0.045, y * 0.045);
+      const nPatch = valueNoise2D(x * 0.018 + 7.1, y * 0.018 - 3.4);
+      const h = nFine * 0.35 + nBlade * 0.40 + nClump * 0.25;
+      hf[y * size + x] = h;
+
+      const idx = (y * size + x) * 4;
+      // Rich sunlit grass + dry meadow straw + dark soil micro-variation (neutral-bright to multiply vertexColors)
+      const dry = smoothstep(0.45, 0.78, nPatch);
+      const r = clamp(150 + dry * 48 + (nBlade - 0.5) * 42 + (nFine - 0.5) * 28, 95, 240);
+      const g = clamp(172 + (1 - dry) * 32 + (nBlade - 0.5) * 46 + (nFine - 0.5) * 26, 110, 245);
+      const b = clamp(118 + dry * 12 + (nClump - 0.5) * 28 + (nFine - 0.5) * 22, 75, 195);
+      colImg.data[idx] = r;
+      colImg.data[idx + 1] = g;
+      colImg.data[idx + 2] = b;
+      colImg.data[idx + 3] = 255;
+    }
+  }
+  for (let y = 0; y < size; y++) {
+    const ym = (y - 1 + size) % size;
+    const yp = (y + 1) % size;
+    for (let x = 0; x < size; x++) {
+      const xm = (x - 1 + size) % size;
+      const xp = (x + 1) % size;
+      const dx = (hf[y * size + xp] - hf[y * size + xm]) * 2.6;
+      const dy = (hf[yp * size + x] - hf[ym * size + x]) * 2.6;
+      const idx = (y * size + x) * 4;
+      normImg.data[idx] = clamp(Math.round((-dx * 0.5 + 0.5) * 255), 0, 255);
+      normImg.data[idx + 1] = clamp(Math.round((-dy * 0.5 + 0.5) * 255), 0, 255);
+      normImg.data[idx + 2] = 228;
+      normImg.data[idx + 3] = 255;
+    }
+  }
+  cctx.putImageData(colImg, 0, 0);
+  nctx.putImageData(normImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(colCanvas);
+  const normalMap = new THREE.CanvasTexture(normCanvas);
+  for (const t of [map, normalMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(76, 76);
+    t.anisotropy = 8;
+  }
+  map.colorSpace = THREE.SRGBColorSpace;
+  return { map, normalMap };
+}
+
+// High-Resolution Side-by-Side Trackside Motorsport Graphic Boards (pure geometric, zero text/logos)
+function createBarrierGraphicAtlas() {
+  const w = 2048;
+  const h = 256;
+  const col = makeCanvas(w, h);
+  const ctx = col.getContext('2d');
+  const norm = makeCanvas(w, h);
+  const nctx = norm.getContext('2d');
+
+  // Neutral normal base
+  nctx.fillStyle = 'rgb(128,128,255)';
+  nctx.fillRect(0, 0, w, h);
+
+  const panels = [
+    { bgA: '#0d1526', bgB: '#162542', acc1: '#e01b24', acc2: '#f4f7fb', style: 'chevrons' },
+    { bgA: '#f0f3f8', bgB: '#dde3ee', acc1: '#0c56f0', acc2: '#14d8ff', style: 'slashes' },
+    { bgA: '#0a2926', bgB: '#11443e', acc1: '#eab338', acc2: '#22e0b0', style: 'rings' },
+    { bgA: '#15171d', bgB: '#222630', acc1: '#ff6a08', acc2: '#f5f7fa', style: 'velocity' },
+    { bgA: '#b8101c', bgB: '#850812', acc1: '#f4f6fa', acc2: '#171920', style: 'checkerWave' },
+    { bgA: '#cad2dc', bgB: '#9aa4b2', acc1: '#0d4be0', acc2: '#181c24', style: 'prism' },
+    { bgA: '#191b22', bgB: '#292420', acc1: '#f59c24', acc2: '#ffdf88', style: 'pulse' },
+    { bgA: '#1c2432', bgB: '#0f141e', acc1: '#18e0b2', acc2: '#eef4fa', style: 'splitDiag' }
+  ];
+
+  const pw = w / panels.length; // 256 px per graphic board side-by-side
+  for (let i = 0; i < panels.length; i++) {
+    const p = panels[i];
+    const x0 = i * pw;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, 0, pw, h);
+    ctx.clip();
+
+    // Gradient graphic base
+    const grad = ctx.createLinearGradient(x0, 0, x0 + pw, h);
+    grad.addColorStop(0, p.bgA);
+    grad.addColorStop(1, p.bgB);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x0, 0, pw, h);
+
+    // Subtle micro-carbon diagonal grid overlay on every board
+    ctx.strokeStyle = 'rgba(255,255,255,0.045)';
+    ctx.lineWidth = 2;
+    for (let d = -h; d < pw + h; d += 18) {
+      ctx.beginPath();
+      ctx.moveTo(x0 + d, 0);
+      ctx.lineTo(x0 + d + h * 0.65, h);
+      ctx.stroke();
+    }
+
+    // Distinct authentic motorsport graphic motif per panel (purely geometric, zero text!)
+    if (p.style === 'chevrons') {
+      for (let k = 0; k < 4; k++) {
+        const cx = x0 + 38 + k * 54;
+        ctx.fillStyle = k % 2 === 0 ? p.acc1 : p.acc2;
+        ctx.beginPath();
+        ctx.moveTo(cx, 38);
+        ctx.lineTo(cx + 34, 38);
+        ctx.lineTo(cx + 68, h * 0.5);
+        ctx.lineTo(cx + 34, h - 38);
+        ctx.lineTo(cx, h - 38);
+        ctx.lineTo(cx + 34, h * 0.5);
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else if (p.style === 'slashes') {
+      ctx.fillStyle = p.acc1;
+      for (let k = 0; k < 3; k++) {
+        ctx.beginPath();
+        ctx.moveTo(x0 + 28 + k * 66, h);
+        ctx.lineTo(x0 + 72 + k * 66, 0);
+        ctx.lineTo(x0 + 106 + k * 66, 0);
+        ctx.lineTo(x0 + 62 + k * 66, h);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = p.acc2;
+      ctx.fillRect(x0, h * 0.72, pw, 16);
+    } else if (p.style === 'rings') {
+      ctx.strokeStyle = p.acc1;
+      ctx.lineWidth = 14;
+      ctx.beginPath();
+      ctx.arc(x0 + pw * 0.36, h * 0.5, 62, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = p.acc2;
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.arc(x0 + pw * 0.36, h * 0.5, 36, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = p.acc1;
+      ctx.fillRect(x0 + pw * 0.62, h * 0.34, 72, 16);
+      ctx.fillStyle = p.acc2;
+      ctx.fillRect(x0 + pw * 0.62, h * 0.54, 54, 14);
+    } else if (p.style === 'velocity') {
+      ctx.fillStyle = p.acc1;
+      ctx.beginPath();
+      ctx.moveTo(x0, h * 0.24);
+      ctx.lineTo(x0 + pw * 0.78, h * 0.24);
+      ctx.lineTo(x0 + pw * 0.62, h * 0.62);
+      ctx.lineTo(x0, h * 0.62);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = p.acc2;
+      ctx.beginPath();
+      ctx.moveTo(x0 + pw * 0.26, h * 0.68);
+      ctx.lineTo(x0 + pw, h * 0.68);
+      ctx.lineTo(x0 + pw, h * 0.82);
+      ctx.lineTo(x0 + pw * 0.18, h * 0.82);
+      ctx.closePath();
+      ctx.fill();
+    } else if (p.style === 'checkerWave') {
+      const sq = 24;
+      for (let r = 0; r < 6; r++) {
+        for (let c = 0; c < 4; c++) {
+          ctx.fillStyle = (r + c) % 2 === 0 ? p.acc1 : p.acc2;
+          ctx.fillRect(x0 + 18 + c * sq + r * 6, 48 + r * sq, sq, sq);
+        }
+      }
+      ctx.fillStyle = p.acc1;
+      ctx.fillRect(x0 + 148, 76, 86, 20);
+      ctx.fillRect(x0 + 148, 114, 62, 16);
+      ctx.fillRect(x0 + 148, 148, 86, 12);
+    } else if (p.style === 'prism') {
+      ctx.fillStyle = p.acc2;
+      ctx.beginPath();
+      ctx.moveTo(x0 + 24, h);
+      ctx.lineTo(x0 + 108, 22);
+      ctx.lineTo(x0 + 232, 22);
+      ctx.lineTo(x0 + 148, h);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = p.acc1;
+      ctx.beginPath();
+      ctx.moveTo(x0 + 56, h);
+      ctx.lineTo(x0 + 124, 52);
+      ctx.lineTo(x0 + 188, 52);
+      ctx.lineTo(x0 + 120, h);
+      ctx.closePath();
+      ctx.fill();
+    } else if (p.style === 'pulse') {
+      for (let b = 0; b < 9; b++) {
+        const bh = 38 + Math.round(Math.sin(b * 0.85 + 0.5) * 58 + 52);
+        ctx.fillStyle = b % 3 === 0 ? p.acc2 : p.acc1;
+        ctx.fillRect(x0 + 22 + b * 24, h - 38 - bh, 14, bh);
+      }
+    } else {
+      ctx.fillStyle = p.acc1;
+      ctx.beginPath();
+      ctx.moveTo(x0, 0);
+      ctx.lineTo(x0 + pw * 0.58, 0);
+      ctx.lineTo(x0 + pw * 0.34, h);
+      ctx.lineTo(x0, h);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = p.acc2;
+      ctx.fillRect(x0 + pw * 0.52, h * 0.38, pw * 0.38, 18);
+      ctx.fillRect(x0 + pw * 0.46, h * 0.56, pw * 0.32, 12);
+    }
+
+    // Glossy top & bottom aluminum barrier trim rails + subtle concrete kicker at base
+    ctx.fillStyle = '#d4d9e2';
+    ctx.fillRect(x0, 0, pw, 14);
+    ctx.fillStyle = '#252932';
+    ctx.fillRect(x0, 14, pw, 5);
+    ctx.fillStyle = '#7e828a';
+    ctx.fillRect(x0, h - 28, pw, 28);
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.fillRect(x0, h - 32, pw, 5);
+
+    // Side-by-side panel vertical anodized frame seam
+    ctx.fillStyle = '#12151c';
+    ctx.fillRect(x0, 0, 5, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.fillRect(x0 + 5, 0, 2, h);
+
+    // Matching normal bevel along panel seams & top/bottom frame rails
+    nctx.fillStyle = 'rgb(70,128,235)';
+    nctx.fillRect(x0, 0, 4, h);
+    nctx.fillStyle = 'rgb(186,128,235)';
+    nctx.fillRect(x0 + 4, 0, 4, h);
+    nctx.fillStyle = 'rgb(128,185,235)';
+    nctx.fillRect(x0, 12, pw, 5);
+    nctx.fillStyle = 'rgb(128,72,235)';
+    nctx.fillRect(x0, h - 32, pw, 5);
+
+    ctx.restore();
+  }
+
+  const map = new THREE.CanvasTexture(col);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.ClampToEdgeWrapping;
+  map.anisotropy = 12;
+
+  const normalMap = new THREE.CanvasTexture(norm);
+  normalMap.wrapS = THREE.RepeatWrapping;
+  normalMap.wrapT = THREE.ClampToEdgeWrapping;
+  normalMap.anisotropy = 8;
+  return { map, normalMap };
+}
+
+// Botanical alpha-tested sunlit grass tuft & meadow plant sprite
+function createGrassTuftTexture() {
+  const size = 128;
+  const c = makeCanvas(size, size);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+
+  const blades = 15;
+  for (let i = 0; i < blades; i++) {
+    const t = i / (blades - 1);
+    const bx = 18 + t * 92 + (hash2D(i, 3) - 0.5) * 10;
+    const h = 58 + hash2D(i, 7) * 58;
+    const bend = (t - 0.5) * 44 + (hash2D(i, 11) - 0.5) * 22;
+    const wBase = 5.5 + hash2D(i, 17) * 4.5;
+
+    const grad = ctx.createLinearGradient(bx, size, bx + bend, size - h);
+    grad.addColorStop(0.0, '#273818');
+    grad.addColorStop(0.55, '#4c6928');
+    grad.addColorStop(1.0, '#96a846');
+
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(bx - wBase * 0.5, size);
+    ctx.quadraticCurveTo(bx + bend * 0.35 - wBase * 0.3, size - h * 0.55, bx + bend, size - h);
+    ctx.quadraticCurveTo(bx + bend * 0.35 + wBase * 0.3, size - h * 0.55, bx + wBase * 0.5, size);
+    ctx.closePath();
+    ctx.fill();
+
+    // Occasional tiny sunlit wildflower seedhead tip
+    if (i % 5 === 2) {
+      ctx.fillStyle = i % 10 === 2 ? '#f0d878' : '#f4eee0';
+      ctx.beginPath();
+      ctx.arc(bx + bend, size - h + 3, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Procedural Multi-Color Geometric Car Livery Graphics (zero text/logos)
+function createCarLiveryTexture(livery) {
+  const w = 512;
+  const h = 512;
+  const c = makeCanvas(w, h);
+  const ctx = c.getContext('2d');
+
+  const pCol = '#' + livery.primary.toString(16).padStart(6, '0');
+  const sCol = '#' + livery.secondary.toString(16).padStart(6, '0');
+  const aCol = '#' + livery.accent.toString(16).padStart(6, '0');
+
+  // Primary paint base
+  ctx.fillStyle = pCol;
+  ctx.fillRect(0, 0, w, h);
+
+  // Rear coke-bottle carbon-contrast sweep (u > 0.62 -> right side of texture)
+  ctx.fillStyle = sCol;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.60, 0);
+  ctx.lineTo(w, 0);
+  ctx.lineTo(w, h);
+  ctx.lineTo(w * 0.74, h);
+  ctx.closePath();
+  ctx.fill();
+
+  // Lower undercut dark carbon belt running along sides
+  ctx.fillStyle = sCol;
+  ctx.fillRect(0, h * 0.36, w, h * 0.28);
+
+  // Crisp sweeping aerodynamic accent graphics along nose, sidepods & engine cover
+  ctx.strokeStyle = aCol;
+  ctx.lineWidth = 11;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.06, h * 0.35);
+  ctx.bezierCurveTo(w * 0.32, h * 0.32, w * 0.52, h * 0.14, w * 0.88, h * 0.10);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(w * 0.06, h * 0.65);
+  ctx.bezierCurveTo(w * 0.32, h * 0.68, w * 0.52, h * 0.86, w * 0.88, h * 0.90);
+  ctx.stroke();
+
+  // Sharp parallel pinstripe accents
+  ctx.strokeStyle = '#f2f5fa';
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.14, h * 0.32);
+  ctx.bezierCurveTo(w * 0.38, h * 0.28, w * 0.56, h * 0.10, w * 0.92, h * 0.06);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(w * 0.14, h * 0.68);
+  ctx.bezierCurveTo(w * 0.38, h * 0.72, w * 0.56, h * 0.90, w * 0.92, h * 0.94);
+  ctx.stroke();
+
+  // Geometric forward speed chevrons on nose & engine cover flanks
+  ctx.fillStyle = aCol;
+  for (let k = 0; k < 3; k++) {
+    const cx = w * (0.18 + k * 0.055);
+    ctx.beginPath();
+    ctx.moveTo(cx, h * 0.22);
+    ctx.lineTo(cx + 16, h * 0.22);
+    ctx.lineTo(cx + 6, h * 0.30);
+    ctx.lineTo(cx - 10, h * 0.30);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(cx, h * 0.78);
+    ctx.lineTo(cx + 16, h * 0.78);
+    ctx.lineTo(cx + 6, h * 0.70);
+    ctx.lineTo(cx - 10, h * 0.70);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+const carbonTex = createCarbonTextures();
+const asphaltTex = createAsphaltTextures();
+const gravelTex = createGravelTextures();
+const fenceTex = createFenceTexture();
+const softSmokeTex = createSoftParticleTexture();
+const terrainGrassTex = createTerrainGrassTextures();
+const barrierGraphicAtlas = createBarrierGraphicAtlas();
+const grassTuftTex = createGrassTuftTexture();
+
+const sharedCarbonMat = new THREE.MeshPhysicalMaterial({
+  color: 0xffffff,
+  map: carbonTex.map,
+  normalMap: carbonTex.normalMap,
+  normalScale: new THREE.Vector2(0.55, 0.55),
+  roughnessMap: carbonTex.roughnessMap,
+  roughness: 0.44,
+  metalness: 0.18,
+  clearcoat: 0.65,
+  clearcoatRoughness: 0.16
+});
+
+const sharedMatteCarbonMat = new THREE.MeshStandardMaterial({
+  color: 0x1a1c21,
+  map: carbonTex.map,
+  normalMap: carbonTex.normalMap,
+  normalScale: new THREE.Vector2(0.45, 0.45),
+  roughness: 0.62,
+  metalness: 0.14
+});
+
+const sharedMetalMat = new THREE.MeshStandardMaterial({
+  color: 0xc2c8d2,
+  metalness: 0.92,
+  roughness: 0.22
+});
+
+const sharedExhaustMat = new THREE.MeshStandardMaterial({
+  color: 0x6b6058,
+  metalness: 0.88,
+  roughness: 0.34
+});
+
+const sharedVisorMat = new THREE.MeshPhysicalMaterial({
+  color: 0x0c1324,
+  metalness: 0.86,
+  roughness: 0.08,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.03
+});
+
+// ============================================================================
+// 5. GRAND PRIX CIRCUIT SPLINE, BANKING & PHYSICS LOOKUP TABLE
+// ============================================================================
+const TRACK_WIDTH = 14.5;
+const TRACK_HALF_W = TRACK_WIDTH * 0.5;
+const TRACK_SAMPLES = 1200;
+
+// Closed flowing FIA Grade 1 circuit (clockwise from above, zero self-intersections)
+// Straight along +Z at x = 0 from z = -155 to z = +200 (~355 m!)
+const rawControlPoints = [
+  new THREE.Vector3(   0,  0.0, -155), // Main straight start
+  new THREE.Vector3(   0,  0.0,  -40), // Grid zone
+  new THREE.Vector3(   0,  0.0,   80), // Start/Finish Gantry at z=45
+  new THREE.Vector3(   0,  0.4,  200), // Heavy braking into Turn 1
+  new THREE.Vector3( -38,  2.6,  270), // Turn 1 fast right apex
+  new THREE.Vector3(-120,  6.8,  286), // Climbing out of T1
+  new THREE.Vector3(-206, 11.4,  242), // Turn 2 banked high-speed right
+  new THREE.Vector3(-250, 13.0,  154), // Sweeping crest
+  new THREE.Vector3(-212,  9.8,   68), // Turn 3 fast left sweeper
+  new THREE.Vector3(-256,  6.5,  -18), // Turn 4 flowing right kink
+  new THREE.Vector3(-322,  3.4, -108), // Back straight acceleration
+  new THREE.Vector3(-312,  1.8, -214), // Back straight braking zone
+  new THREE.Vector3(-244,  2.4, -284), // Turn 5 wide banked Parabolica entry
+  new THREE.Vector3(-164,  3.4, -296), // Turn 6 banked carousel apex
+  new THREE.Vector3(-108,  2.6, -226), // Technical S-chicane left
+  new THREE.Vector3( -60,  1.0, -258), // Final banked corner apex
+  new THREE.Vector3(  -4,  0.1, -208)  // Exit onto main straight
+];
+
+const trackSpline = new THREE.CatmullRomCurve3(rawControlPoints, true, 'centripetal', 0.45);
+const TRACK_LENGTH = trackSpline.getLength();
+
+// Build dense arc-length-parameterized circuit table
+const trackTable = [];
+const worldUp = new THREE.Vector3(0, 1, 0);
+
+{
+  const pts = trackSpline.getSpacedPoints(TRACK_SAMPLES);
+  const tangents = [];
+  const rawCurvature = new Float32Array(TRACK_SAMPLES);
+
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    const prev = pts[(i - 1 + TRACK_SAMPLES) % TRACK_SAMPLES];
+    const next = pts[(i + 1) % TRACK_SAMPLES];
+    const t = new THREE.Vector3().subVectors(next, prev).normalize();
+    tangents.push(t);
+  }
+
+  const ds = TRACK_LENGTH / TRACK_SAMPLES;
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    const tPrev = tangents[(i - 2 + TRACK_SAMPLES) % TRACK_SAMPLES];
+    const tNext = tangents[(i + 2) % TRACK_SAMPLES];
+    const dT = new THREE.Vector3().subVectors(tNext, tPrev).divideScalar(4 * ds);
+    const flatRight = new THREE.Vector3().crossVectors(tangents[i], worldUp).normalize();
+    // Positive curvature => turning RIGHT (toward flatRight)
+    rawCurvature[i] = dT.dot(flatRight);
+  }
+
+  // Smooth curvature for silky C2 banking and ideal racing line
+  const smoothCurv = new Float32Array(TRACK_SAMPLES);
+  const wideCurv = new Float32Array(TRACK_SAMPLES);
+  const kernelA = 14;
+  const kernelB = 28;
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    let sA = 0, wA = 0;
+    for (let k = -kernelA; k <= kernelA; k++) {
+      const w = Math.exp(-0.5 * (k / (kernelA * 0.45)) ** 2);
+      sA += rawCurvature[(i + k + TRACK_SAMPLES) % TRACK_SAMPLES] * w;
+      wA += w;
+    }
+    smoothCurv[i] = sA / wA;
+
+    let sB = 0, wB = 0;
+    for (let k = -kernelB; k <= kernelB; k++) {
+      const w = Math.exp(-0.5 * (k / (kernelB * 0.45)) ** 2);
+      sB += rawCurvature[(i + k + TRACK_SAMPLES) % TRACK_SAMPLES] * w;
+      wB += w;
+    }
+    wideCurv[i] = sB / wB;
+  }
+
+  // Compute physical speed profile around circuit (forward & backward braking pass)
+  const MAX_SPEED = 91.0; // ~328 km/h
+  const MAX_LAT_G = 42.0; // High downforce F1 cornering grip (~4.3 G!)
+  const MAX_BRAKE_DECEL = 44.0; // Carbon-ceramic braking (~4.5 G!)
+  const MAX_ACCEL = 18.5;
+
+  const targetSpeed = new Float32Array(TRACK_SAMPLES);
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    const kAbs = Math.max(Math.abs(smoothCurv[i]), 0.0004);
+    const vCorner = Math.sqrt(MAX_LAT_G / kAbs);
+    targetSpeed[i] = Math.min(MAX_SPEED, Math.max(29.0, vCorner));
+  }
+
+  // Two backward passes for realistic braking zones into corners
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = TRACK_SAMPLES - 1; i >= 0; i--) {
+      const next = (i + 1) % TRACK_SAMPLES;
+      const vNext = targetSpeed[next];
+      const vMaxEntry = Math.sqrt(vNext * vNext + 2 * MAX_BRAKE_DECEL * ds);
+      if (targetSpeed[i] > vMaxEntry) targetSpeed[i] = vMaxEntry;
+    }
+  }
+  // Two forward passes for realistic corner-exit acceleration
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < TRACK_SAMPLES; i++) {
+      const prev = (i - 1 + TRACK_SAMPLES) % TRACK_SAMPLES;
+      const vPrev = targetSpeed[prev];
+      const vMaxExit = Math.sqrt(vPrev * vPrev + 2 * MAX_ACCEL * ds);
+      if (targetSpeed[i] > vMaxExit) targetSpeed[i] = vMaxExit;
+    }
+  }
+
+  // Compute ideal racing line offset (outside -> inside apex -> outside)
+  const idealLine = new Float32Array(TRACK_SAMPLES);
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    const kNow = smoothCurv[i];
+    const kAhead = smoothCurv[(i + 24) % TRACK_SAMPLES];
+    const kBehind = smoothCurv[(i - 24 + TRACK_SAMPLES) % TRACK_SAMPLES];
+    // Push toward inside (+sign of kNow) at apex, swing wide opposite before/after
+    let offset = clamp(kNow * 320, -4.6, 4.6) - clamp((kAhead + kBehind - 2 * kNow) * 140, -2.2, 2.2);
+    idealLine[i] = clamp(offset, -4.7, 4.7);
+  }
+  // Smooth ideal line
+  const smoothLine = new Float32Array(TRACK_SAMPLES);
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    let acc = 0;
+    for (let k = -10; k <= 10; k++) {
+      acc += idealLine[(i + k + TRACK_SAMPLES) % TRACK_SAMPLES];
+    }
+    smoothLine[i] = acc / 21;
+  }
+
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    const pos = pts[i].clone();
+    const tangent = tangents[i].clone();
+    const flatRight = new THREE.Vector3().crossVectors(tangent, worldUp).normalize();
+    const flatUp = new THREE.Vector3().crossVectors(flatRight, tangent).normalize();
+
+    // Bank inward on corners (keep main straight strictly flat!)
+    const isMainStraight = Math.abs(pos.x) < 12 && pos.z > -165 && pos.z < 190;
+    const bankAngle = isMainStraight ? 0 : clamp(wideCurv[i] * 8.2, -0.17, 0.21);
+
+    const cosB = Math.cos(bankAngle);
+    const sinB = Math.sin(bankAngle);
+    const right = flatRight.clone().multiplyScalar(cosB).addScaledVector(flatUp, -sinB).normalize();
+    const up = flatUp.clone().multiplyScalar(cosB).addScaledVector(flatRight, sinB).normalize();
+
+    // Determine curb flags (inside apex & outside exit of corners)
+    const k = smoothCurv[i];
+    const kPrev = smoothCurv[(i - 20 + TRACK_SAMPLES) % TRACK_SAMPLES];
+    const curbRight = !isMainStraight && (k > 0.0072 || kPrev < -0.0082);
+    const curbLeft = !isMainStraight && (k < -0.0072 || kPrev > 0.0082);
+    const isStraight = Math.abs(wideCurv[i]) < 0.0032;
+
+    trackTable.push({
+      s: i * ds,
+      pos,
+      tangent,
+      right,
+      up,
+      bank: bankAngle,
+      curvature: k,
+      targetSpeed: targetSpeed[i],
+      idealLine: smoothLine[i],
+      curbRight,
+      curbLeft,
+      isStraight,
+      isMainStraight
+    });
+  }
+}
+
+const _tmpV1 = new THREE.Vector3();
+const _tmpV2 = new THREE.Vector3();
+
+function sampleTrack(s, out = {}) {
+  const sWrap = wrapMod(s, TRACK_LENGTH);
+  const f = (sWrap / TRACK_LENGTH) * TRACK_SAMPLES;
+  const i0 = Math.floor(f) % TRACK_SAMPLES;
+  const i1 = (i0 + 1) % TRACK_SAMPLES;
+  const t = f - Math.floor(f);
+  const a = trackTable[i0];
+  const b = trackTable[i1];
+
+  out.pos = (out.pos || new THREE.Vector3()).lerpVectors(a.pos, b.pos, t);
+  out.tangent = (out.tangent || new THREE.Vector3()).lerpVectors(a.tangent, b.tangent, t).normalize();
+  out.right = (out.right || new THREE.Vector3()).lerpVectors(a.right, b.right, t).normalize();
+  out.up = (out.up || new THREE.Vector3()).lerpVectors(a.up, b.up, t).normalize();
+  out.bank = lerp(a.bank, b.bank, t);
+  out.curvature = lerp(a.curvature, b.curvature, t);
+  out.targetSpeed = lerp(a.targetSpeed, b.targetSpeed, t);
+  out.idealLine = lerp(a.idealLine, b.idealLine, t);
+  out.curbRight = a.curbRight || b.curbRight;
+  out.curbLeft = a.curbLeft || b.curbLeft;
+  out.isStraight = a.isStraight && b.isStraight;
+  out.isMainStraight = a.isMainStraight && b.isMainStraight;
+  return out;
+}
+
+// Find arc-length 's' of the Start/Finish line near (0, 0, 42)
+let START_FINISH_S = 195;
+{
+  let bestD = Infinity;
+  for (let i = 0; i < TRACK_SAMPLES; i++) {
+    const p = trackTable[i].pos;
+    if (Math.abs(p.x) < 10) {
+      const d = Math.abs(p.z - 42);
+      if (d < bestD) {
+        bestD = d;
+        START_FINISH_S = trackTable[i].s;
+      }
+    }
+  }
+}
+
+// Helper for terrain heightfield matching track corridor smoothly
+function nearestTrackInfo(x, z) {
+  let minD2 = Infinity;
+  let bestIdx = 0;
+  // Coarse stride 4, then refine locally
+  for (let i = 0; i < TRACK_SAMPLES; i += 4) {
+    const p = trackTable[i].pos;
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < minD2) {
+      minD2 = d2;
+      bestIdx = i;
+    }
+  }
+  for (let k = -4; k <= 4; k++) {
+    const idx = (bestIdx + k + TRACK_SAMPLES) % TRACK_SAMPLES;
+    const p = trackTable[idx].pos;
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < minD2) {
+      minD2 = d2;
+      bestIdx = idx;
+    }
+  }
+  const sample = trackTable[bestIdx];
+  const relX = x - sample.pos.x;
+  const relZ = z - sample.pos.z;
+  const lat = relX * sample.right.x + relZ * sample.right.z;
+  const trackY = sample.pos.y + lat * sample.right.y;
+  return { dist: Math.sqrt(minD2), lat, trackY, sample, idx: bestIdx };
+}
+
+// ============================================================================
+// 6. CIRCUIT ENVIRONMENT: TERRAIN, TRACK, CURBS, GRAVEL, BARRIERS, GRANDSTANDS
+// ============================================================================
+const trackGroup = new THREE.Group();
+scene.add(trackGroup);
+
+// 6.1 Sculpted Rolling Golden-Hour Terrain (carved cleanly to match track)
+function buildTerrain() {
+  const size = 1480;
+  const segs = 190;
+  const geo = new THREE.PlaneGeometry(size, size, segs, segs);
+  geo.rotateX(-Math.PI / 2);
+  // Center terrain around circuit centroid (-155, -10)
+  const cx = -155;
+  const cz = -10;
+  geo.translate(cx, 0, cz);
+
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const grassA = new THREE.Color(0x46522e);
+  const grassB = new THREE.Color(0x6e5f38);
+  const rockCol = new THREE.Color(0x5b5245);
+  const vergeCol = new THREE.Color(0x4f5a33);
+  const tmpC = new THREE.Color();
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const info = nearestTrackInfo(x, z);
+
+    // Pit-lane flat apron zone (x in [-48, +26], z in [-165, 195])
+    const inPitPlateau = x > -58 && x < 42 && z > -175 && z < 205;
+    const pitBlend = inPitPlateau
+      ? smoothstep(58, 36, Math.abs(x + 8)) * smoothstep(205, 175, Math.abs(z - 15))
+      : 0;
+
+    // Natural rolling surrounding hills rising toward outer horizon
+    const radialDist = Math.hypot(x - cx, z - cz);
+    const hillMask = smoothstep(210, 580, radialDist);
+    const n1 = fbm2D(x * 0.0042 + 12.3, z * 0.0042 - 7.1, 4);
+    const n2 = fbm2D(x * 0.015 - 3.4, z * 0.015 + 9.2, 3);
+    const naturalY = -1.2 + (n1 - 0.36) * 28 + (n2 - 0.5) * 6 + hillMask * (34 + n1 * 72);
+
+    // Keep terrain strictly below track surface inside corridor (zero z-fighting!)
+    const trackFloorY = info.trackY - 0.28;
+    const corridorBlend = smoothstep(22, 58, info.dist);
+    let y = lerp(trackFloorY, naturalY, corridorBlend);
+    if (pitBlend > 0) {
+      y = lerp(y, -0.22, pitBlend * 0.92);
+    }
+    // Never poke above track anywhere close to asphalt
+    if (info.dist < 18.0) {
+      y = Math.min(y, info.trackY - 0.24);
+    }
+    pos.setY(i, y);
+
+    // Subtle sunlit Mediterranean meadow/dry-hill vertex shading
+    const patch = fbm2D(x * 0.012, z * 0.012, 3);
+    tmpC.lerpColors(grassA, grassB, smoothstep(0.28, 0.72, patch));
+    tmpC.lerp(rockCol, smoothstep(22, 62, y) * 0.65);
+    tmpC.lerp(vergeCol, (1 - corridorBlend) * 0.55);
+    colors[i * 3] = tmpC.r;
+    colors[i * 3 + 1] = tmpC.g;
+    colors[i * 3 + 2] = tmpC.b;
+  }
+
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: terrainGrassTex.map,
+    normalMap: terrainGrassTex.normalMap,
+    normalScale: new THREE.Vector2(0.95, 0.95),
+    vertexColors: true,
+    roughness: 0.92,
+    metalness: 0.0
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  trackGroup.add(mesh);
+}
+buildTerrain();
+
+// 6.2 Main Asphalt Track Ribbon with PBR Tire-Rubber Racing Line & Edge Markings
+function buildTrackSurface() {
+  const segsU = TRACK_SAMPLES;
+  const segsV = 14;
+  const verts = [];
+  const normals = [];
+  const uvs = [];
+  const colors = [];
+  const indices = [];
+
+  // Slightly wider asphalt runoff verges beyond painted white boundary lines
+  const VERGE_W = 1.65;
+  const totalHalfW = TRACK_HALF_W + VERGE_W;
+  const asphaltBase = new THREE.Color(0x888b92);
+  const rubberDark = new THREE.Color(0x3a3c42);
+  const edgePaint = new THREE.Color(0xe6e8ec);
+  const vergeDark = new THREE.Color(0x6b6f75);
+  const tmpC = new THREE.Color();
+
+  for (let i = 0; i <= segsU; i++) {
+    const sample = trackTable[i % segsU];
+    const uCoord = (i / segsU) * (TRACK_LENGTH / 7.5);
+
+    for (let j = 0; j <= segsV; j++) {
+      const f = j / segsV; // 0..1 across width
+      const lat = lerp(-totalHalfW, totalHalfW, f);
+      // Tiny drainage crown (+0.035m center)
+      const crown = (1 - (lat / totalHalfW) ** 2) * 0.035;
+      const p = sample.pos.clone()
+        .addScaledVector(sample.right, lat)
+        .addScaledVector(sample.up, crown);
+
+      verts.push(p.x, p.y, p.z);
+      normals.push(sample.up.x, sample.up.y, sample.up.z);
+      uvs.push(f * 2.4, uCoord);
+
+      // Compute realistic rubbered-in racing line & crisp painted white track boundary lines
+      const dToLine = Math.abs(lat - sample.idealLine);
+      const rubberStrength = Math.exp(-0.5 * (dToLine / 1.45) ** 2) * 0.85
+        + Math.exp(-0.5 * (Math.abs(lat - sample.idealLine * 0.65) / 2.9) ** 2) * 0.25;
+
+      // Extra braking-zone rubber marks before corners
+      const brakeZone = clamp((trackTable[(i - 4 + segsU) % segsU].targetSpeed - sample.targetSpeed) * 0.35, 0, 1);
+
+      tmpC.copy(asphaltBase);
+      tmpC.lerp(rubberDark, clamp(rubberStrength * 0.72 + brakeZone * 0.28, 0, 0.88));
+
+      // Verge darkening outside white lines
+      const absLat = Math.abs(lat);
+      if (absLat > TRACK_HALF_W + 0.15) {
+        tmpC.lerp(vergeDark, 0.45);
+      }
+
+      // Crisp painted white track edge boundary lines (at +-TRACK_HALF_W)
+      const lineDist = Math.abs(absLat - (TRACK_HALF_W - 0.15));
+      if (lineDist < 0.22) {
+        tmpC.lerp(edgePaint, smoothstep(0.22, 0.04, lineDist) * 0.92);
+      }
+
+      colors.push(tmpC.r, tmpC.g, tmpC.b);
+    }
+  }
+
+  const row = segsV + 1;
+  for (let i = 0; i < segsU; i++) {
+    for (let j = 0; j < segsV; j++) {
+      const a = i * row + j;
+      const b = (i + 1) * row + j;
+      const c = (i + 1) * row + j + 1;
+      const d = i * row + j + 1;
+      // Right x Tangent = +Up (counter-clockwise when viewed from above!)
+      indices.push(a, d, b, b, d, c);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: asphaltTex.map,
+    normalMap: asphaltTex.normalMap,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughnessMap: asphaltTex.roughnessMap,
+    roughness: 0.84,
+    metalness: 0.04,
+    vertexColors: true
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  trackGroup.add(mesh);
+}
+buildTrackSurface();
+
+// 6.3 Painted Start/Finish Checkered Line, Starting Grid Boxes & Pit Lane Apron
+function buildTrackMarkingsAndPitLane() {
+  // Checkered start-finish strip (pure geometric pattern, no text)
+  const checkCanvas = makeCanvas(256, 64);
+  const ctx = checkCanvas.getContext('2d');
+  const sq = 16;
+  for (let y = 0; y < 64; y += sq) {
+    for (let x = 0; x < 256; x += sq) {
+      ctx.fillStyle = ((x / sq + y / sq) % 2 === 0) ? '#eceff4' : '#181a1f';
+      ctx.fillRect(x, y, sq, sq);
+    }
+  }
+  const checkTex = new THREE.CanvasTexture(checkCanvas);
+  checkTex.colorSpace = THREE.SRGBColorSpace;
+  checkTex.anisotropy = 8;
+
+  const sf = sampleTrack(START_FINISH_S);
+  const checkGeo = new THREE.PlaneGeometry(TRACK_WIDTH - 0.5, 2.2);
+  checkGeo.rotateX(-Math.PI / 2);
+  const checkMat = new THREE.MeshStandardMaterial({
+    map: checkTex,
+    roughness: 0.72,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2
+  });
+  const checkMesh = new THREE.Mesh(checkGeo, checkMat);
+  checkMesh.position.copy(sf.pos).addScaledVector(sf.up, 0.055);
+  checkMesh.receiveShadow = true;
+  trackGroup.add(checkMesh);
+
+  // Starting Grid Boxes (8 staggered white racing grid brackets behind start line)
+  const paintMat = new THREE.MeshStandardMaterial({
+    color: 0xe8ebf0,
+    roughness: 0.65,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2
+  });
+
+  const gridGeos = [];
+  for (let slot = 0; slot < 8; slot++) {
+    const sPos = START_FINISH_S - 11 - slot * 8.0;
+    const latOffset = (slot % 2 === 0 ? -3.1 : 3.1);
+    const sp = sampleTrack(sPos);
+
+    // Front bar + two side brackets forming clean U-shaped starting box
+    const frontBar = new THREE.PlaneGeometry(2.6, 0.26);
+    frontBar.rotateX(-Math.PI / 2);
+    frontBar.translate(sp.pos.x + sp.right.x * latOffset, sp.pos.y + 0.055, sp.pos.z + 2.1);
+    gridGeos.push(frontBar);
+
+    for (const side of [-1.22, 1.22]) {
+      const sideBar = new THREE.PlaneGeometry(0.18, 1.9);
+      sideBar.rotateX(-Math.PI / 2);
+      sideBar.translate(sp.pos.x + sp.right.x * (latOffset + side), sp.pos.y + 0.055, sp.pos.z + 1.22);
+      gridGeos.push(sideBar);
+    }
+  }
+  const mergedGrid = mergeGeometries(gridGeos);
+  const gridMesh = new THREE.Mesh(mergedGrid, paintMat);
+  gridMesh.receiveShadow = true;
+  trackGroup.add(gridMesh);
+
+  // Pit Lane Asphalt Apron (parallel to main straight on the right / -X side)
+  const pitApronGeo = new THREE.PlaneGeometry(17.5, 290);
+  pitApronGeo.rotateX(-Math.PI / 2);
+  pitApronGeo.translate(-17.8, -0.02, 15);
+  const pitApronMat = new THREE.MeshStandardMaterial({
+    color: 0x62666e,
+    map: asphaltTex.map,
+    normalMap: asphaltTex.normalMap,
+    normalScale: new THREE.Vector2(0.55, 0.55),
+    roughness: 0.86
+  });
+  const pitApron = new THREE.Mesh(pitApronGeo, pitApronMat);
+  pitApron.receiveShadow = true;
+  trackGroup.add(pitApron);
+
+  // Pit lane white speed-limit lane stripe & garage box lines
+  const pitLineGeos = [];
+  const laneLine = new THREE.PlaneGeometry(0.28, 255);
+  laneLine.rotateX(-Math.PI / 2);
+  laneLine.translate(-15.0, 0.02, 15);
+  pitLineGeos.push(laneLine);
+
+  const outerPitLine = new THREE.PlaneGeometry(0.28, 255);
+  outerPitLine.rotateX(-Math.PI / 2);
+  outerPitLine.translate(-20.4, 0.02, 15);
+  pitLineGeos.push(outerPitLine);
+
+  for (let b = 0; b < 10; b++) {
+    const bz = -90 + b * 22;
+    const divider = new THREE.PlaneGeometry(5.6, 0.22);
+    divider.rotateX(-Math.PI / 2);
+    divider.translate(-23.2, 0.02, bz);
+    pitLineGeos.push(divider);
+  }
+  const pitLinesMesh = new THREE.Mesh(mergeGeometries(pitLineGeos), paintMat);
+  pitLinesMesh.receiveShadow = true;
+  trackGroup.add(pitLinesMesh);
+}
+buildTrackMarkingsAndPitLane();
+
+// 6.4 3D Profiled Red-and-White Curbs on Corner Apexes & Exits
+function buildCurbs() {
+  const verts = [];
+  const normals = [];
+  const colors = [];
+  const indices = [];
+  const redCol = new THREE.Color(0xc81c22);
+  const whiteCol = new THREE.Color(0xe6e7e9);
+
+  // Cross-section profile of beveled racing rumble curb (width ~1.35 m, height 0.09 m)
+  const profX = [0.0, 0.18, 0.88, 1.32];
+  const profY = [0.01, 0.085, 0.095, 0.015];
+
+  function addCurbSide(sideSign) {
+    let i = 0;
+    while (i < TRACK_SAMPLES) {
+      const has = sideSign > 0 ? trackTable[i].curbRight : trackTable[i].curbLeft;
+      if (!has) { i++; continue; }
+      const start = i;
+      while (i < TRACK_SAMPLES && (sideSign > 0 ? trackTable[i].curbRight : trackTable[i].curbLeft)) {
+        i++;
+      }
+      const end = i;
+      if (end - start < 4) continue;
+
+      const baseVert = verts.length / 3;
+      const len = end - start;
+      for (let k = 0; k <= len; k++) {
+        const idx = (start + k) % TRACK_SAMPLES;
+        const sp = trackTable[idx];
+        const taper = smoothstep(0, 3, k) * smoothstep(0, 3, len - k);
+        const col = ((Math.floor(k * 0.65) % 2) === 0) ? redCol : whiteCol;
+
+        for (let p = 0; p < profX.length; p++) {
+          const lat = sideSign * (TRACK_HALF_W - 0.08 + profX[p]);
+          const h = profY[p] * (0.25 + 0.75 * taper);
+          const pt = sp.pos.clone()
+            .addScaledVector(sp.right, lat)
+            .addScaledVector(sp.up, h);
+          verts.push(pt.x, pt.y, pt.z);
+          normals.push(sp.up.x, sp.up.y, sp.up.z);
+          colors.push(col.r, col.g, col.b);
+        }
+      }
+
+      const stride = profX.length;
+      for (let k = 0; k < len; k++) {
+        for (let p = 0; p < stride - 1; p++) {
+          const a = baseVert + k * stride + p;
+          const b = baseVert + (k + 1) * stride + p;
+          const c = baseVert + (k + 1) * stride + p + 1;
+          const d = baseVert + k * stride + p + 1;
+          if (sideSign > 0) {
+            indices.push(a, d, b, b, d, c);
+          } else {
+            indices.push(a, b, d, b, c, d);
+          }
+        }
+      }
+    }
+  }
+
+  addCurbSide(1);
+  addCurbSide(-1);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.76,
+    metalness: 0.04
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  trackGroup.add(mesh);
+}
+buildCurbs();
+
+// 6.5 Gravel Traps on Corner Runoffs
+function buildGravelTraps() {
+  const verts = [];
+  const uvs = [];
+  const indices = [];
+
+  function addGravelSide(sideSign) {
+    let i = 0;
+    while (i < TRACK_SAMPLES) {
+      const sp = trackTable[i];
+      // Place gravel on the OUTSIDE of corners (opposite to turn direction)
+      const needsGravel = !sp.isMainStraight && (sideSign > 0 ? sp.curvature < -0.0068 : sp.curvature > 0.0068);
+      if (!needsGravel) { i++; continue; }
+      const start = Math.max(0, i - 6);
+      while (i < TRACK_SAMPLES) {
+        const s2 = trackTable[i];
+        const ok = !s2.isMainStraight && (sideSign > 0 ? s2.curvature < -0.0052 : s2.curvature > 0.0052);
+        if (!ok) break;
+        i++;
+      }
+      const end = Math.min(TRACK_SAMPLES - 1, i + 10);
+      if (end - start < 10) continue;
+
+      const base = verts.length / 3;
+      const len = end - start;
+      for (let k = 0; k <= len; k++) {
+        const spk = trackTable[(start + k) % TRACK_SAMPLES];
+        const bell = smoothstep(0, 7, k) * smoothstep(0, 8, len - k);
+        const wInner = TRACK_HALF_W + 1.85;
+        const wOuter = TRACK_HALF_W + 2.4 + 10.5 * bell;
+
+        const pIn = spk.pos.clone().addScaledVector(spk.right, sideSign * wInner).addScaledVector(spk.up, -0.06);
+        const pOut = spk.pos.clone().addScaledVector(spk.right, sideSign * wOuter).addScaledVector(spk.up, -0.14);
+        verts.push(pIn.x, pIn.y, pIn.z, pOut.x, pOut.y, pOut.z);
+        uvs.push(0, k * 0.45, 2.2 * bell + 0.3, k * 0.45);
+      }
+
+      for (let k = 0; k < len; k++) {
+        const a = base + k * 2;
+        const b = base + (k + 1) * 2;
+        const c = base + (k + 1) * 2 + 1;
+        const d = base + k * 2 + 1;
+        if (sideSign > 0) indices.push(a, d, b, b, d, c);
+        else indices.push(a, b, d, b, c, d);
+      }
+    }
+  }
+
+  addGravelSide(1);
+  addGravelSide(-1);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: gravelTex.map,
+    normalMap: gravelTex.normalMap,
+    normalScale: new THREE.Vector2(1.1, 1.1),
+    roughness: 0.96,
+    metalness: 0.0
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  trackGroup.add(mesh);
+}
+buildGravelTraps();
+
+// 6.5b Painted High-Friction Trackside Runoff Graphics (Cobalt & Crimson Geometric Aprons)
+function buildPaintedRunoffGraphics() {
+  const c = makeCanvas(256, 256);
+  const ctx = c.getContext('2d');
+  // Modern Grand Prix painted runoff stripe graphics (Paul Ricard / Yas Marina style)
+  ctx.fillStyle = '#1b3564';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = i % 2 === 0 ? '#1450b8' : '#0f2348';
+    ctx.fillRect(0, i * 32, 256, 16);
+  }
+  // Outer crimson high-friction grip zone bands
+  ctx.fillStyle = '#b41c24';
+  ctx.fillRect(168, 0, 88, 256);
+  ctx.fillStyle = '#d6282e';
+  for (let i = 0; i < 8; i++) {
+    ctx.fillRect(168, i * 32, 88, 12);
+  }
+  // Crisp white separator line
+  ctx.fillStyle = '#e8ecf2';
+  ctx.fillRect(162, 0, 6, 256);
+  ctx.fillRect(0, 0, 6, 256);
+
+  const runoffTex = new THREE.CanvasTexture(c);
+  runoffTex.colorSpace = THREE.SRGBColorSpace;
+  runoffTex.wrapS = runoffTex.wrapT = THREE.RepeatWrapping;
+  runoffTex.anisotropy = 8;
+
+  const verts = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+
+  for (const sideSign of [-1, 1]) {
+    let i = 0;
+    while (i < TRACK_SAMPLES) {
+      const sp = trackTable[i];
+      // Place painted graphic runoff aprons on inside apexes & sweeping curves where there isn't a gravel trap
+      const hasCurb = sideSign > 0 ? sp.curbRight : sp.curbLeft;
+      const isGravel = !sp.isMainStraight && (sideSign > 0 ? sp.curvature < -0.0055 : sp.curvature > 0.0055);
+      if (!hasCurb || isGravel) { i++; continue; }
+      const start = Math.max(0, i - 3);
+      while (i < TRACK_SAMPLES) {
+        const s2 = trackTable[i];
+        const ok = (sideSign > 0 ? s2.curbRight : s2.curbLeft) && !(sideSign > 0 ? s2.curvature < -0.0055 : s2.curvature > 0.0055);
+        if (!ok) break;
+        i++;
+      }
+      const end = Math.min(TRACK_SAMPLES - 1, i + 3);
+      if (end - start < 5) continue;
+
+      const base = verts.length / 3;
+      const len = end - start;
+      for (let k = 0; k <= len; k++) {
+        const spk = trackTable[(start + k) % TRACK_SAMPLES];
+        const bell = smoothstep(0, 4, k) * smoothstep(0, 4, len - k);
+        const wIn = TRACK_HALF_W + 1.25;
+        const wOut = TRACK_HALF_W + 1.45 + 3.1 * bell;
+        const pIn = spk.pos.clone().addScaledVector(spk.right, sideSign * wIn).addScaledVector(spk.up, 0.015);
+        const pOut = spk.pos.clone().addScaledVector(spk.right, sideSign * wOut).addScaledVector(spk.up, -0.02);
+        verts.push(pIn.x, pIn.y, pIn.z, pOut.x, pOut.y, pOut.z);
+        normals.push(spk.up.x, spk.up.y, spk.up.z, spk.up.x, spk.up.y, spk.up.z);
+        uvs.push(0, k * 0.35, 1, k * 0.35);
+      }
+      for (let k = 0; k < len; k++) {
+        const a = base + k * 2;
+        const b = base + (k + 1) * 2;
+        const c = base + (k + 1) * 2 + 1;
+        const d = base + k * 2 + 1;
+        if (sideSign > 0) indices.push(a, d, b, b, d, c);
+        else indices.push(a, b, d, b, c, d);
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: runoffTex,
+    normalMap: asphaltTex.normalMap,
+    normalScale: new THREE.Vector2(0.55, 0.55),
+    roughness: 0.78,
+    metalness: 0.04
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  trackGroup.add(mesh);
+}
+buildPaintedRunoffGraphics();
+
+// 6.6 Side-by-Side Trackside Graphic Barrier Boards, Tire Walls, Catch Fencing & LED Marshal Panels
+function buildBarriersTiresAndFencing() {
+  const wallVerts = [];
+  const wallNormals = [];
+  const wallUvs = [];
+  const wallIndices = [];
+
+  const fenceVerts = [];
+  const fenceUvs = [];
+  const fenceIndices = [];
+
+  const postTransforms = [];
+  const tireTransforms = [];
+  const tireColors = [];
+
+  const redBand = new THREE.Color(0xc22026);
+  const whiteBand = new THREE.Color(0xe2e4e8);
+  const darkTire = new THREE.Color(0x1f2024);
+
+  const step = 3; // every 3 samples (~4.2m)
+  const nPts = Math.floor(TRACK_SAMPLES / step);
+
+  for (const sideSign of [-1, 1]) {
+    const wallBase = wallVerts.length / 3;
+    const fenceBase = fenceVerts.length / 3;
+
+    for (let k = 0; k <= nPts; k++) {
+      const idx = (k * step) % TRACK_SAMPLES;
+      const sp = trackTable[idx];
+
+      // Widen corridor on outside of corners (for gravel traps) & pit wall on main straight
+      const isOutsideCorner = (sideSign > 0 && sp.curvature < -0.0055) || (sideSign < 0 && sp.curvature > 0.0055);
+      let wallDist = TRACK_HALF_W + 4.8;
+      if (isOutsideCorner && !sp.isMainStraight) {
+        wallDist += 9.0 * smoothstep(0.0055, 0.013, Math.abs(sp.curvature));
+      }
+      // Pit wall right side of main straight sits closer as crisp pit wall
+      if (sp.isMainStraight && sideSign > 0) {
+        wallDist = TRACK_HALF_W + 2.2;
+      }
+
+      const basePos = sp.pos.clone().addScaledVector(sp.right, sideSign * wallDist);
+      const topPos = basePos.clone().addScaledVector(worldUp, 1.32);
+      const fenceTop = basePos.clone().addScaledVector(worldUp, 3.85);
+
+      const nOut = sp.right.clone().multiplyScalar(-sideSign);
+
+      // Wall vertical face with crisp side-by-side graphic panel UVs (8 panels per ~34m)
+      wallVerts.push(basePos.x, basePos.y - 0.20, basePos.z);
+      wallVerts.push(topPos.x, topPos.y, topPos.z);
+      wallNormals.push(nOut.x, nOut.y, nOut.z, nOut.x, nOut.y, nOut.z);
+      const panelU = k * 0.125; // Each 4.2m segment = 1 distinct side-by-side graphic panel!
+      wallUvs.push(panelU, 0, panelU, 1);
+
+      // Catch fencing ribbon above the graphic barrier wall
+      fenceVerts.push(topPos.x, topPos.y, topPos.z);
+      fenceVerts.push(fenceTop.x, fenceTop.y, fenceTop.z);
+      fenceUvs.push(k * 1.4, 0, k * 1.4, 1.6);
+
+      // Fence posts every 2nd segment
+      if (k < nPts && k % 2 === 0) {
+        const m = new THREE.Matrix4();
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), sp.right);
+        m.compose(
+          basePos.clone().add(new THREE.Vector3(0, 1.92, 0)),
+          q,
+          new THREE.Vector3(1, 1, 1)
+        );
+        postTransforms.push(m);
+      }
+
+      // Instanced tire-wall stacks lining outside of corners
+      if (k < nPts && isOutsideCorner && !sp.isMainStraight) {
+        const tireBasePos = sp.pos.clone().addScaledVector(sp.right, sideSign * (wallDist - 0.72));
+        for (let row = 0; row < 2; row++) {
+          const stackPos = tireBasePos.clone().addScaledVector(sp.tangent, (row - 0.5) * 1.65);
+          for (let tier = 0; tier < 3; tier++) {
+            const tm = new THREE.Matrix4();
+            tm.makeTranslation(stackPos.x, stackPos.y + 0.16 + tier * 0.34, stackPos.z);
+            tireTransforms.push(tm);
+            const bandColor = ((k + row) % 4 < 2) ? redBand : ((tier === 1) ? whiteBand : darkTire);
+            tireColors.push(bandColor);
+          }
+        }
+      }
+    }
+
+    for (let k = 0; k < nPts; k++) {
+      const a = wallBase + k * 2;
+      const b = wallBase + (k + 1) * 2;
+      const c = wallBase + (k + 1) * 2 + 1;
+      const d = wallBase + k * 2 + 1;
+      wallIndices.push(a, b, d, b, c, d);
+
+      const fa = fenceBase + k * 2;
+      const fb = fenceBase + (k + 1) * 2;
+      const fc = fenceBase + (k + 1) * 2 + 1;
+      const fd = fenceBase + k * 2 + 1;
+      fenceIndices.push(fa, fb, fd, fb, fc, fd);
+    }
+  }
+
+  // Glossy Laminated Side-by-Side Trackside Graphic Barrier Boards
+  const wallGeo = new THREE.BufferGeometry();
+  wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wallVerts, 3));
+  wallGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wallNormals, 3));
+  wallGeo.setAttribute('uv', new THREE.Float32BufferAttribute(wallUvs, 2));
+  wallGeo.setIndex(wallIndices);
+  const wallMat = new THREE.MeshPhysicalMaterial({
+    map: barrierGraphicAtlas.map,
+    normalMap: barrierGraphicAtlas.normalMap,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughness: 0.34,
+    metalness: 0.14,
+    clearcoat: 0.72,
+    clearcoatRoughness: 0.18,
+    side: THREE.DoubleSide
+  });
+  const wallMesh = new THREE.Mesh(wallGeo, wallMat);
+  wallMesh.receiveShadow = true;
+  wallMesh.castShadow = true;
+  trackGroup.add(wallMesh);
+
+  // Catch fence mesh (with exact outward normals -> zero NaN in PBR shader!)
+  const fenceGeo = new THREE.BufferGeometry();
+  fenceGeo.setAttribute('position', new THREE.Float32BufferAttribute(fenceVerts, 3));
+  fenceGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wallNormals, 3));
+  fenceGeo.setAttribute('uv', new THREE.Float32BufferAttribute(fenceUvs, 2));
+  fenceGeo.setIndex(fenceIndices);
+  const fenceMat = new THREE.MeshStandardMaterial({
+    map: fenceTex,
+    transparent: true,
+    alphaTest: 0.18,
+    side: THREE.DoubleSide,
+    roughness: 0.55,
+    metalness: 0.65
+  });
+  trackGroup.add(new THREE.Mesh(fenceGeo, fenceMat));
+
+  // Instanced Catch Fence Steel Posts
+  const postGeo = new THREE.CylinderGeometry(0.055, 0.065, 3.85, 6);
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x8e959e, metalness: 0.78, roughness: 0.38 });
+  const postInst = new THREE.InstancedMesh(postGeo, postMat, postTransforms.length);
+  for (let i = 0; i < postTransforms.length; i++) postInst.setMatrixAt(i, postTransforms[i]);
+  postInst.instanceMatrix.needsUpdate = true;
+  trackGroup.add(postInst);
+
+  // Instanced Tire-Wall Barriers
+  const tireGeo = new THREE.TorusGeometry(0.32, 0.16, 8, 14);
+  tireGeo.rotateX(Math.PI / 2);
+  const tireMat = new THREE.MeshStandardMaterial({ roughness: 0.86, metalness: 0.04 });
+  const tireInst = new THREE.InstancedMesh(tireGeo, tireMat, tireTransforms.length);
+  for (let i = 0; i < tireTransforms.length; i++) {
+    tireInst.setMatrixAt(i, tireTransforms[i]);
+    tireInst.setColorAt(i, tireColors[i]);
+  }
+  tireInst.instanceMatrix.needsUpdate = true;
+  tireInst.instanceColor.needsUpdate = true;
+  tireInst.castShadow = true;
+  tireInst.receiveShadow = true;
+  trackGroup.add(tireInst);
+
+  // Glowing Trackside FIA-style LED Marshal Light Panels + Striped Braking Marker Boards
+  const housingMat = new THREE.MeshStandardMaterial({ color: 0x181b22, metalness: 0.55, roughness: 0.4 });
+  const greenPanelMat = new THREE.MeshStandardMaterial({
+    color: 0x16ff70,
+    emissive: 0x12ff64,
+    emissiveIntensity: 3.2,
+    roughness: 0.2
+  });
+  const amberPanelMat = new THREE.MeshStandardMaterial({
+    color: 0xffb218,
+    emissive: 0xff9a08,
+    emissiveIntensity: 3.0,
+    roughness: 0.2
+  });
+
+  // 16 Trackside LED Marshal Light Panels spaced around circuit
+  for (let m = 0; m < 16; m++) {
+    const sp = trackTable[Math.floor((m / 16) * TRACK_SAMPLES)];
+    const side = m % 2 === 0 ? -1 : 1;
+    const dist = sp.isMainStraight && side > 0 ? TRACK_HALF_W + 2.4 : TRACK_HALF_W + 4.9;
+    const base = sp.pos.clone().addScaledVector(sp.right, side * dist);
+    const panelGrp = new THREE.Group();
+    panelGrp.position.copy(base);
+    // Aim panel face slightly toward oncoming cars (-tangent)
+    const lookPt = base.clone().addScaledVector(sp.tangent, -12).addScaledVector(sp.right, -side * 3);
+    panelGrp.lookAt(lookPt);
+
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 2.75, 6), postMat);
+    mast.position.y = 1.38;
+    panelGrp.add(mast);
+
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.72, 0.12), housingMat);
+    frame.position.y = 2.65;
+    panelGrp.add(frame);
+
+    const ledFace = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.58), m % 4 === 1 ? amberPanelMat : greenPanelMat);
+    ledFace.position.set(0, 2.65, 0.065);
+    panelGrp.add(ledFace);
+    trackGroup.add(panelGrp);
+  }
+
+  // Geometric Striped Braking-Zone Distance Boards (3-bar, 2-bar, 1-bar — zero numbers/text)
+  function makeBrakeBoardTex(bars) {
+    const bc = makeCanvas(128, 96);
+    const bctx = bc.getContext('2d');
+    bctx.fillStyle = '#eff2f7';
+    bctx.fillRect(0, 0, 128, 96);
+    bctx.strokeStyle = '#181b22';
+    bctx.lineWidth = 6;
+    bctx.strokeRect(3, 3, 122, 90);
+    bctx.fillStyle = '#d41a24';
+    for (let b = 0; b < bars; b++) {
+      const bx = 24 + b * 32;
+      bctx.beginPath();
+      bctx.moveTo(bx, 78);
+      bctx.lineTo(bx + 18, 18);
+      bctx.lineTo(bx + 34, 18);
+      bctx.lineTo(bx + 16, 78);
+      bctx.closePath();
+      bctx.fill();
+    }
+    const t = new THREE.CanvasTexture(bc);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+  const brakeMats = [1, 2, 3].map(n => new THREE.MeshStandardMaterial({ map: makeBrakeBoardTex(n), roughness: 0.45 }));
+
+  // Place 3-2-1 braking boards ahead of Turn 1 (main straight end) and Turn 5 (back straight end)
+  const brakeAnchorSs = [START_FINISH_S + 145, START_FINISH_S + 985];
+  for (const anchorS of brakeAnchorSs) {
+    for (let b = 0; b < 3; b++) {
+      const sp = sampleTrack(anchorS - b * 34);
+      const base = sp.pos.clone().addScaledVector(sp.right, -(TRACK_HALF_W + 3.4));
+      const grp = new THREE.Group();
+      grp.position.copy(base);
+      grp.lookAt(base.clone().addScaledVector(sp.tangent, -15));
+      const board = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.85, 0.08), brakeMats[b]);
+      board.position.y = 0.78;
+      board.castShadow = true;
+      grp.add(board);
+      trackGroup.add(grp);
+    }
+  }
+}
+buildBarriersTiresAndFencing();
+
+// 6.7 Start-Finish Gantry (Sleek Truss + Glowing Start Signal Lights, No Text)
+function buildStartFinishGantry() {
+  const sf = sampleTrack(START_FINISH_S);
+  const g = new THREE.Group();
+  g.position.copy(sf.pos);
+
+  const steelMat = new THREE.MeshStandardMaterial({ color: 0xd0d6df, metalness: 0.72, roughness: 0.28 });
+  const darkTrimMat = new THREE.MeshStandardMaterial({ color: 0x1e222b, metalness: 0.45, roughness: 0.42 });
+  const accentMat = new THREE.MeshStandardMaterial({ color: 0xd4222a, metalness: 0.35, roughness: 0.32 });
+
+  const span = TRACK_WIDTH + 6.4;
+  const height = 8.4;
+
+  // Dual tapered support towers on left & right of track
+  for (const s of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(1.15, height, 1.35), darkTrimMat);
+    leg.position.set(s * (span * 0.5), height * 0.5, 0);
+    leg.castShadow = true;
+    g.add(leg);
+
+    const accentStripe = new THREE.Mesh(new THREE.BoxGeometry(1.22, 1.4, 1.42), accentMat);
+    accentStripe.position.set(s * (span * 0.5), height * 0.72, 0);
+    g.add(accentStripe);
+  }
+
+  // Main overhead bridge beam + curved aerodynamic fascia
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(span + 1.4, 2.0, 2.2), darkTrimMat);
+  beam.position.set(0, height - 0.5, 0);
+  beam.castShadow = true;
+  g.add(beam);
+
+  const upperTrim = new THREE.Mesh(new THREE.BoxGeometry(span + 1.6, 0.28, 2.32), steelMat);
+  upperTrim.position.set(0, height + 0.52, 0);
+  g.add(upperTrim);
+
+  const lowerTrim = new THREE.Mesh(new THREE.BoxGeometry(span + 1.6, 0.24, 2.32), accentMat);
+  lowerTrim.position.set(0, height - 1.52, 0);
+  g.add(lowerTrim);
+
+  // Geometric speed-stripe accent panels on bridge face (purely geometric, zero text)
+  for (let i = -4; i <= 4; i++) {
+    const chev = new THREE.Mesh(new THREE.BoxGeometry(0.75, 1.15, 2.34), i % 2 === 0 ? steelMat : accentMat);
+    chev.position.set(i * 1.9, height - 0.5, 0);
+    chev.rotation.z = -0.26;
+    g.add(chev);
+  }
+
+  // 5 Motorsport Start Light Pods hanging beneath gantry (glowing green race-active LEDs)
+  const podMat = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.4, metalness: 0.5 });
+  const greenLedMat = new THREE.MeshStandardMaterial({
+    color: 0x20ff78,
+    emissive: 0x14ff66,
+    emissiveIntensity: 3.4,
+    roughness: 0.2
+  });
+  for (let i = -2; i <= 2; i++) {
+    const pod = new THREE.Mesh(new THREE.BoxGeometry(0.55, 1.05, 0.36), podMat);
+    pod.position.set(i * 1.45, height - 2.15, 0.45);
+    g.add(pod);
+    for (const dy of [-0.24, 0.24]) {
+      const led = new THREE.Mesh(new THREE.CircleGeometry(0.16, 14), greenLedMat);
+      led.position.set(i * 1.45, height - 2.15 + dy, 0.26);
+      led.rotation.y = Math.PI;
+      g.add(led);
+      const ledBack = led.clone();
+      ledBack.position.z = 0.64;
+      ledBack.rotation.y = 0;
+      g.add(ledBack);
+    }
+  }
+
+  trackGroup.add(g);
+}
+buildStartFinishGantry();
+
+// 6.8 Modern Two-Story Pit-Lane Buildings & Race Control Tower
+function buildPitComplex() {
+  const pit = new THREE.Group();
+  const concreteMat = new THREE.MeshStandardMaterial({ color: 0xd8dce2, roughness: 0.72, metalness: 0.08 });
+  const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x242832, roughness: 0.42, metalness: 0.62 });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0x1c2b3c,
+    roughness: 0.08,
+    metalness: 0.75,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.04
+  });
+  const warmGarageGlow = new THREE.MeshStandardMaterial({
+    color: 0xffeed6,
+    emissive: 0xffba68,
+    emissiveIntensity: 1.65,
+    roughness: 0.4
+  });
+  const accentStripeMat = new THREE.MeshStandardMaterial({ color: 0xc81c22, roughness: 0.42, metalness: 0.25 });
+
+  // Main Pit Building block sitting alongside pit lane at x = -34
+  const length = 225;
+  const mainBody = new THREE.Mesh(new THREE.BoxGeometry(15, 10.5, length), concreteMat);
+  mainBody.position.set(-34.5, 5.25, 12);
+  mainBody.castShadow = true;
+  mainBody.receiveShadow = true;
+  pit.add(mainBody);
+
+  // Cantilevered cantilevered sleek roof overhanging pit boxes
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(21, 0.75, length + 8), darkMetalMat);
+  canopy.position.set(-32.2, 10.9, 12);
+  canopy.castShadow = true;
+  pit.add(canopy);
+
+  const roofAccent = new THREE.Mesh(new THREE.BoxGeometry(21.4, 0.35, length + 8.4), accentStripeMat);
+  roofAccent.position.set(-32.2, 11.4, 12);
+  pit.add(roofAccent);
+
+  // Upper hospitality panoramic glass gallery
+  const upperGlass = new THREE.Mesh(new THREE.BoxGeometry(0.3, 3.6, length - 10), glassMat);
+  upperGlass.position.set(-26.9, 7.6, 12);
+  pit.add(upperGlass);
+
+  // Balcony deck railing
+  const balcony = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.32, length - 4), darkMetalMat);
+  balcony.position.set(-25.8, 5.4, 12);
+  pit.add(balcony);
+
+  // 10 recessed warm-lit garage bays
+  for (let i = 0; i < 10; i++) {
+    const gz = -86 + i * 21.5;
+    const bayRecess = new THREE.Mesh(new THREE.BoxGeometry(0.4, 4.0, 14.5), warmGarageGlow);
+    bayRecess.position.set(-26.92, 2.0, gz);
+    pit.add(bayRecess);
+
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 10.5, 1.2), darkMetalMat);
+    pillar.position.set(-26.7, 5.25, gz - 10.75);
+    pit.add(pillar);
+  }
+
+  // Iconic Angled Race Control Tower near Start/Finish line
+  const towerBase = new THREE.Mesh(new THREE.BoxGeometry(11, 21, 14), darkMetalMat);
+  towerBase.position.set(-35, 10.5, 42);
+  towerBase.castShadow = true;
+  pit.add(towerBase);
+
+  const towerGlass = new THREE.Mesh(new THREE.BoxGeometry(12.2, 5.8, 15.2), glassMat);
+  towerGlass.position.set(-34.2, 17.4, 42);
+  pit.add(towerGlass);
+
+  const towerCap = new THREE.Mesh(new THREE.BoxGeometry(14.5, 1.1, 17.5), concreteMat);
+  towerCap.position.set(-33.8, 21.0, 42);
+  towerCap.castShadow = true;
+  pit.add(towerCap);
+
+  // Overhead Pit-Lane Wheel-Gun Gantry Booms & Stacked Spare Slick Tire Racks
+  const boomMat = new THREE.MeshStandardMaterial({ color: 0x1c2028, metalness: 0.72, roughness: 0.34 });
+  const slickStackMat = new THREE.MeshStandardMaterial({ color: 0x1a1c20, roughness: 0.85, metalness: 0.05 });
+  const tireTorusGeo = new THREE.TorusGeometry(0.28, 0.14, 8, 14);
+  tireTorusGeo.rotateX(Math.PI / 2);
+
+  for (let i = 0; i < 10; i++) {
+    const gz = -86 + i * 21.5;
+    const boom = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.22, 0.28), boomMat);
+    boom.position.set(-23.2, 4.4, gz);
+    boom.castShadow = true;
+    pit.add(boom);
+
+    // Spare slick tire stack beside each garage bay
+    for (let t = 0; t < 4; t++) {
+      const spare = new THREE.Mesh(tireTorusGeo, slickStackMat);
+      spare.position.set(-25.4, 0.15 + t * 0.29, gz + 6.4);
+      pit.add(spare);
+    }
+  }
+
+  // Pit-Wall Telemetry Command Stand with Glowing Abstract Telemetry Monitors (no text)
+  const teleCanvas = makeCanvas(256, 64);
+  const tctx = teleCanvas.getContext('2d');
+  tctx.fillStyle = '#070c16';
+  tctx.fillRect(0, 0, 256, 64);
+  for (let m = 0; m < 4; m++) {
+    const mx = m * 64 + 4;
+    tctx.strokeStyle = '#1b2c44';
+    tctx.strokeRect(mx, 6, 56, 52);
+    tctx.strokeStyle = m % 2 === 0 ? '#18e8ff' : '#ff6c24';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    for (let x = 0; x < 50; x += 5) {
+      const y = 34 + Math.sin(x * 0.28 + m * 1.4) * 16;
+      if (x === 0) tctx.moveTo(mx + 3 + x, y);
+      else tctx.lineTo(mx + 3 + x, y);
+    }
+    tctx.stroke();
+    tctx.fillStyle = '#22ff78';
+    tctx.fillRect(mx + 4, 10, 14 + (m * 7) % 24, 5);
+  }
+  const teleTex = new THREE.CanvasTexture(teleCanvas);
+  teleTex.colorSpace = THREE.SRGBColorSpace;
+  const teleMat = new THREE.MeshStandardMaterial({
+    map: teleTex,
+    emissiveMap: teleTex,
+    emissive: 0xffffff,
+    emissiveIntensity: 1.5,
+    roughness: 0.25
+  });
+
+  for (let s = 0; s < 5; s++) {
+    const sz = -45 + s * 32;
+    const bunker = new THREE.Group();
+    bunker.position.set(-11.2, 0, sz);
+    const desk = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.3, 8.2), darkMetalMat);
+    desk.position.y = 0.65;
+    bunker.add(desk);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.16, 8.8), darkMetalMat);
+    roof.position.y = 2.75;
+    bunker.add(roof);
+    const screens = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.62, 7.2), teleMat);
+    screens.position.set(0.1, 1.65, 0);
+    bunker.add(screens);
+    for (const dz of [-3.8, 3.8]) {
+      const st = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.7, 6), darkMetalMat);
+      st.position.set(-0.5, 1.35, dz);
+      bunker.add(st);
+    }
+    pit.add(bunker);
+  }
+
+  // Architectural Paddock Concrete Planter Boxes with Lush Ornamental Shrubs
+  const planterMat = new THREE.MeshStandardMaterial({ color: 0xc2c6cc, roughness: 0.85 });
+  const shrubMat = new THREE.MeshStandardMaterial({ color: 0x2f5426, roughness: 0.88 });
+  const bushClusterGeo = new THREE.DodecahedronGeometry(0.68, 1);
+  for (let i = 0; i < 8; i++) {
+    const pz = -92 + i * 28;
+    const box = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.72, 3.8), planterMat);
+    box.position.set(-25.6, 0.36, pz);
+    box.castShadow = true;
+    pit.add(box);
+    for (const dz of [-1.0, 0.0, 1.0]) {
+      const bush = new THREE.Mesh(bushClusterGeo, shrubMat);
+      bush.position.set(-25.6 + (dz === 0 ? 0.12 : -0.1), 1.05 + (dz === 0 ? 0.18 : 0), pz + dz);
+      bush.scale.set(1.05, 0.85, 1.0);
+      pit.add(bush);
+    }
+  }
+
+  // Back-Straight Arched Graphic Pedestrian / Broadcast Bridge
+  const backSp = sampleTrack(START_FINISH_S + 860);
+  const bridge = new THREE.Group();
+  bridge.position.copy(backSp.pos);
+  bridge.lookAt(backSp.pos.clone().add(backSp.tangent));
+  const bSpan = TRACK_WIDTH + 9.0;
+  const bHeight = 8.6;
+  const bridgeFasciaMat = new THREE.MeshPhysicalMaterial({
+    map: barrierGraphicAtlas.map,
+    roughness: 0.32,
+    clearcoat: 0.75,
+    metalness: 0.16
+  });
+  for (const s of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(1.3, bHeight, 2.0), darkMetalMat);
+    leg.position.set(s * bSpan * 0.5, bHeight * 0.5, 0);
+    leg.castShadow = true;
+    bridge.add(leg);
+  }
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(bSpan + 1.5, 2.3, 2.8), bridgeFasciaMat);
+  deck.position.set(0, bHeight - 0.2, 0);
+  deck.castShadow = true;
+  bridge.add(deck);
+  const bRoof = new THREE.Mesh(new THREE.BoxGeometry(bSpan + 2.0, 0.32, 3.2), concreteMat);
+  bRoof.position.set(0, bHeight + 1.05, 0);
+  bridge.add(bRoof);
+  pit.add(bridge);
+
+  trackGroup.add(pit);
+}
+buildPitComplex();
+
+// 6.9 Grandstands Full of Colorful Instanced Spectators (with LOD & subtle wave)
+const spectatorInstData = [];
+let spectatorHeadInst = null;
+let spectatorBodyInst = null;
+
+function buildGrandstandsAndSpectators() {
+  const concreteMat = new THREE.MeshStandardMaterial({ color: 0xc8ccd2, roughness: 0.82, metalness: 0.05 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0xe6e8ee, roughness: 0.48, metalness: 0.22 });
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x252a34, roughness: 0.45, metalness: 0.72 });
+
+  // Local grandstand front (-Z) faces the track; back wall sits at +Z behind the tiers
+  const standConfigs = [
+    // Main straight massive grandstands (opposite pits, +X side, facing -X toward track)
+    { pos: new THREE.Vector3(22.5, 0, 15), rotY: Math.PI / 2, len: 105, tiers: 14 },
+    { pos: new THREE.Vector3(22.5, 0, 132), rotY: Math.PI / 2, len: 92, tiers: 13 },
+    // Turn 1 sweeping grandstand (facing -Z toward Turn 1)
+    { pos: new THREE.Vector3(-42, 4.2, 314), rotY: -0.22, len: 86, tiers: 12 },
+    // Turn 6 Parabolica grandstand (facing +Z toward Parabolica)
+    { pos: new THREE.Vector3(-188, 3.0, -334), rotY: Math.PI + 0.14, len: 84, tiers: 12 },
+    // Final Chicane grandstand (facing +Z toward Final Corner)
+    { pos: new THREE.Vector3(-46, 0.5, -294), rotY: Math.PI - 0.25, len: 68, tiers: 11 }
+  ];
+
+  const crowdPalette = [
+    new THREE.Color(0xd6242a), // crimson fans
+    new THREE.Color(0x1664f0), // electric blue fans
+    new THREE.Color(0xff7414), // papaya orange fans
+    new THREE.Color(0xe6ebf2), // white/silver fans
+    new THREE.Color(0xf2c830), // yellow
+    new THREE.Color(0x283446), // navy
+    new THREE.Color(0x1eb090), // teal
+    new THREE.Color(0x8838a8), // violet
+    new THREE.Color(0x3a3d45)  // charcoal
+  ];
+  const skinTones = [
+    new THREE.Color(0xf2c9a6),
+    new THREE.Color(0xdba67c),
+    new THREE.Color(0xa6704c),
+    new THREE.Color(0x704930)
+  ];
+
+  const tmpPos = new THREE.Vector3();
+  const tmpMat = new THREE.Matrix4();
+  const tmpQuat = new THREE.Quaternion();
+  const tmpScale = new THREE.Vector3(1, 1, 1);
+
+  for (const cfg of standConfigs) {
+    const stand = new THREE.Group();
+    stand.position.copy(cfg.pos);
+    stand.rotation.y = cfg.rotY;
+
+    const depthStep = 1.05;
+    const heightStep = 0.68;
+    const totalDepth = cfg.tiers * depthStep;
+    const totalHeight = cfg.tiers * heightStep + 1.8;
+
+    // Tiered seating deck
+    const tierGeos = [];
+    for (let t = 0; t < cfg.tiers; t++) {
+      const box = new THREE.BoxGeometry(cfg.len, 0.55, depthStep + 0.15);
+      box.translate(0, 1.4 + t * heightStep, t * depthStep);
+      tierGeos.push(box);
+    }
+    // Back wall & support columns
+    const backWall = new THREE.BoxGeometry(cfg.len, totalHeight + 3.2, 0.9);
+    backWall.translate(0, (totalHeight + 3.2) * 0.5, totalDepth + 0.4);
+    tierGeos.push(backWall);
+
+    const baseWall = new THREE.BoxGeometry(cfg.len, 1.6, 0.5);
+    baseWall.translate(0, 0.8, -0.55);
+    tierGeos.push(baseWall);
+
+    const mergedDeck = mergeGeometries(tierGeos);
+    const deckMesh = new THREE.Mesh(mergedDeck, concreteMat);
+    deckMesh.castShadow = true;
+    deckMesh.receiveShadow = true;
+    stand.add(deckMesh);
+
+    // Cantilevered shade canopy & support trusses
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(cfg.len + 3, 0.45, totalDepth + 4.5), roofMat);
+    roof.position.set(0, totalHeight + 4.4, totalDepth * 0.45);
+    roof.rotation.x = -0.14;
+    roof.castShadow = true;
+    stand.add(roof);
+
+    const nCols = Math.max(4, Math.floor(cfg.len / 18));
+    for (let c = 0; c <= nCols; c++) {
+      const cx = lerp(-cfg.len * 0.48, cfg.len * 0.48, c / nCols);
+      const col = new THREE.Mesh(new THREE.BoxGeometry(0.55, totalHeight + 4.6, 0.65), frameMat);
+      col.position.set(cx, (totalHeight + 4.6) * 0.5, totalDepth + 0.2);
+      stand.add(col);
+
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.55, totalDepth + 4.0), frameMat);
+      arm.position.set(cx, totalHeight + 4.0, totalDepth * 0.45);
+      arm.rotation.x = -0.14;
+      stand.add(arm);
+    }
+
+    stand.updateMatrixWorld(true);
+    trackGroup.add(stand);
+
+    // Populate spectators densely across every tier
+    const seatSpacing = 1.05;
+    const colsPerRow = Math.floor((cfg.len - 2.4) / seatSpacing);
+    for (let t = 0; t < cfg.tiers; t++) {
+      for (let s = 0; s < colsPerRow; s++) {
+        if (rng() < 0.14) continue; // natural sparse empty seats
+        const lx = -cfg.len * 0.5 + 1.4 + s * seatSpacing + (rng() - 0.5) * 0.22;
+        const ly = 1.68 + t * heightStep;
+        const lz = t * depthStep + (rng() - 0.5) * 0.14;
+
+        tmpPos.set(lx, ly, lz).applyMatrix4(stand.matrixWorld);
+        const bodyCol = crowdPalette[Math.floor(rng() * crowdPalette.length)];
+        const skinCol = skinTones[Math.floor(rng() * skinTones.length)];
+        spectatorInstData.push({
+          x: tmpPos.x,
+          y: tmpPos.y,
+          z: tmpPos.z,
+          rotY: cfg.rotY + (rng() - 0.5) * 0.4,
+          phase: rng() * Math.PI * 2,
+          bodyCol,
+          skinCol
+        });
+      }
+    }
+  }
+
+  const count = spectatorInstData.length;
+  const bodyGeo = new THREE.CylinderGeometry(0.18, 0.23, 0.66, 6);
+  bodyGeo.translate(0, 0.33, 0);
+  const headGeo = new THREE.SphereGeometry(0.14, 6, 5);
+  headGeo.translate(0, 0.80, 0);
+
+  const specMat = new THREE.MeshStandardMaterial({ roughness: 0.86, metalness: 0.02 });
+  spectatorBodyInst = new THREE.InstancedMesh(bodyGeo, specMat, count);
+  spectatorHeadInst = new THREE.InstancedMesh(headGeo, specMat, count);
+
+  for (let i = 0; i < count; i++) {
+    const d = spectatorInstData[i];
+    tmpQuat.setFromAxisAngle(worldUp, d.rotY);
+    tmpMat.compose(tmpPos.set(d.x, d.y, d.z), tmpQuat, tmpScale);
+    spectatorBodyInst.setMatrixAt(i, tmpMat);
+    spectatorHeadInst.setMatrixAt(i, tmpMat);
+    spectatorBodyInst.setColorAt(i, d.bodyCol);
+    spectatorHeadInst.setColorAt(i, d.skinCol);
+  }
+  spectatorBodyInst.instanceMatrix.needsUpdate = true;
+  spectatorHeadInst.instanceMatrix.needsUpdate = true;
+  spectatorBodyInst.instanceColor.needsUpdate = true;
+  spectatorHeadInst.instanceColor.needsUpdate = true;
+  trackGroup.add(spectatorBodyInst);
+  trackGroup.add(spectatorHeadInst);
+}
+buildGrandstandsAndSpectators();
+
+// Shared animation uniforms for wind-swaying plants & fluttering trackside flags
+const foliageWindUniform = { value: 0 };
+const flagMaterials = [];
+
+function sampleTerrainHeight(x, z, info) {
+  const radialDist = Math.hypot(x + 155, z + 10);
+  const hillMask = smoothstep(210, 580, radialDist);
+  const n1 = fbm2D(x * 0.0042 + 12.3, z * 0.0042 - 7.1, 4);
+  const n2 = fbm2D(x * 0.015 - 3.4, z * 0.015 + 9.2, 3);
+  const naturalY = -1.2 + (n1 - 0.36) * 28 + (n2 - 0.5) * 6 + hillMask * (34 + n1 * 72);
+  let y = lerp(info.trackY - 0.28, naturalY, smoothstep(22, 58, info.dist));
+  const inPitPlateau = x > -58 && x < 42 && z > -175 && z < 205;
+  if (inPitPlateau) {
+    const pitBlend = smoothstep(58, 36, Math.abs(x + 8)) * smoothstep(205, 175, Math.abs(z - 15));
+    y = lerp(y, -0.22, pitBlend * 0.92);
+  }
+  return y;
+}
+
+function isInsideStructureZone(x, z) {
+  if (x > -54 && x < 44 && z > -170 && z < 210) return true; // Main straight, pits & main grandstands
+  if (x > -92 && x < 8 && z > 282 && z < 350) return true;   // Turn 1 grandstand
+  if (x > -242 && x < -134 && z > -368 && z < -305) return true; // Parabolica grandstand
+  if (x > -90 && x < -4 && z > -325 && z < -274) return true; // Final chicane grandstand
+  return false;
+}
+
+function displaceOrganicGeo(geo, amount, freq, seedOffset) {
+  const g = geo.index ? geo.toNonIndexed() : geo.clone();
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const vx = pos.getX(i);
+    const vy = pos.getY(i);
+    const vz = pos.getZ(i);
+    const n = fbm2D(vx * freq + seedOffset, vz * freq + vy * freq * 0.7 - seedOffset, 2) - 0.5;
+    const scale = 1.0 + n * amount;
+    pos.setXYZ(i, vx * scale, vy * (1 + n * amount * 0.45), vz * scale);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+// 6.10 Stadium Floodlight Towers, Multi-Species Trees, Shrubs, Swaying Plants, Rocks & Flags
+function buildLushBotanicalLandscapeAndFloodlights() {
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x767f8c, metalness: 0.72, roughness: 0.34 });
+  const housingMat = new THREE.MeshStandardMaterial({ color: 0x22262e, metalness: 0.6, roughness: 0.42 });
+  const lampGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xfff4df,
+    emissive: 0xffd79e,
+    emissiveIntensity: 4.2,
+    roughness: 0.15
+  });
+
+  // 14 Floodlight towers spaced gracefully around the track
+  const towerIndices = [25, 110, 210, 310, 415, 520, 625, 730, 835, 920, 1005, 1085, 1150, 1185];
+  for (let t = 0; t < towerIndices.length; t++) {
+    const sp = trackTable[towerIndices[t] % TRACK_SAMPLES];
+    const side = (t % 2 === 0) ? -1 : 1;
+    const offset = (sp.isMainStraight && side > 0) ? 46 : 26;
+    const base = sp.pos.clone().addScaledVector(sp.right, side * offset);
+
+    const tower = new THREE.Group();
+    tower.position.set(base.x, base.y - 0.3, base.z);
+    tower.lookAt(sp.pos.x, base.y - 0.3, sp.pos.z);
+
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.62, 26, 8), poleMat);
+    pole.position.y = 13;
+    pole.castShadow = true;
+    tower.add(pole);
+
+    const headFrame = new THREE.Mesh(new THREE.BoxGeometry(5.6, 2.4, 0.75), housingMat);
+    headFrame.position.set(0, 25.8, 0.6);
+    headFrame.rotation.x = 0.42;
+    tower.add(headFrame);
+
+    const lampFace = new THREE.Mesh(new THREE.PlaneGeometry(5.1, 1.9), lampGlowMat);
+    lampFace.position.set(0, 25.62, 1.0);
+    lampFace.rotation.x = 0.42;
+    tower.add(lampFace);
+
+    trackGroup.add(tower);
+  }
+
+  // Animated Fluttering Trackside Geometric Racing Flags lining main straight & grandstands
+  const flagColors = [0xd41a24, 0x0c56f0, 0xff6b08, 0x16d4a4, 0xf2f5fa];
+  const flagGeo = new THREE.PlaneGeometry(1.75, 1.05, 10, 4);
+  flagGeo.translate(0.875, 0, 0);
+  const flagPoleGeo = new THREE.CylinderGeometry(0.04, 0.055, 7.2, 6);
+  flagPoleGeo.translate(0, 3.6, 0);
+
+  for (let f = 0; f < 16; f++) {
+    const fz = -95 + f * 19.5;
+    const colHex = flagColors[f % flagColors.length];
+    const fMat = new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime: foliageWindUniform,
+        uPhase: { value: f * 0.85 },
+        uColorA: { value: new THREE.Color(colHex) },
+        uColorB: { value: new THREE.Color(f % 3 === 0 ? 0xf2f5fa : 0x181c24) },
+        uSunDir: { value: SUN_DIR }
+      },
+      vertexShader: /* glsl */ `
+        uniform float uTime;
+        uniform float uPhase;
+        varying vec2 vUv;
+        varying float vWave;
+        void main() {
+          vUv = uv;
+          vec3 p = position;
+          float flutter = sin(p.x * 4.2 - uTime * 7.5 + uPhase) * 0.16 * uv.x
+                        + sin(p.x * 8.5 - uTime * 11.2 + uv.y * 2.4 + uPhase) * 0.05 * uv.x;
+          p.z += flutter;
+          p.y -= 0.08 * uv.x * uv.x;
+          vWave = cos(p.x * 4.2 - uTime * 7.5 + uPhase);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uColorA;
+        uniform vec3 uColorB;
+        varying vec2 vUv;
+        varying float vWave;
+        void main() {
+          // Pure geometric diagonal racing stripe pattern (zero text/logos)
+          float stripe = step(0.55, fract(vUv.x * 1.4 - vUv.y * 0.65));
+          vec3 col = mix(uColorA, uColorB, stripe * 0.35);
+          float light = 0.72 + 0.28 * vWave;
+          gl_FragColor = vec4(col * light * vec3(1.08, 0.96, 0.86), 1.0);
+        }
+      `
+    });
+    flagMaterials.push(fMat);
+    const pole = new THREE.Mesh(flagPoleGeo, poleMat);
+    pole.position.set(16.8, 0, fz);
+    trackGroup.add(pole);
+    const flag = new THREE.Mesh(flagGeo, fMat);
+    flag.position.set(16.8, 6.55, fz);
+    flag.rotation.y = 0.4;
+    trackGroup.add(flag);
+  }
+
+  const barkMat = new THREE.MeshStandardMaterial({ color: 0x4b3828, roughness: 0.94, metalness: 0.0 });
+  const leafMat = new THREE.MeshStandardMaterial({ roughness: 0.86, metalness: 0.0 });
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  const p = new THREE.Vector3();
+
+  // ---- A. Multi-Tier Sculpted Pine / Conifer Trees (440 instances) ----
+  const pineTrunkParts = [new THREE.CylinderGeometry(0.14, 0.34, 4.4, 7).translate(0, 2.2, 0).toNonIndexed()];
+  const pineTrunkGeo = mergeGeometries(pineTrunkParts);
+  const pineCanopyParts = [
+    displaceOrganicGeo(new THREE.ConeGeometry(2.85, 3.8, 9).translate(0, 4.2, 0), 0.36, 0.9, 1.1),
+    displaceOrganicGeo(new THREE.ConeGeometry(2.35, 3.6, 9).translate(0, 6.3, 0), 0.38, 1.0, 2.7),
+    displaceOrganicGeo(new THREE.ConeGeometry(1.75, 3.3, 8).translate(0, 8.3, 0), 0.36, 1.1, 4.3),
+    displaceOrganicGeo(new THREE.ConeGeometry(1.10, 2.8, 7).translate(0, 10.1, 0), 0.32, 1.2, 5.9)
+  ];
+  const pineCanopyGeo = mergeGeometries(pineCanopyParts);
+  const pineCount = 440;
+  const pineTrunkInst = new THREE.InstancedMesh(pineTrunkGeo, barkMat, pineCount);
+  const pineLeafInst = new THREE.InstancedMesh(pineCanopyGeo, leafMat, pineCount);
+  pineLeafInst.castShadow = true;
+  pineLeafInst.receiveShadow = true;
+
+  const pinePalette = [
+    new THREE.Color(0x233b22),
+    new THREE.Color(0x2c4727),
+    new THREE.Color(0x37522b),
+    new THREE.Color(0x1f3624),
+    new THREE.Color(0x3f572e)
+  ];
+  let pinePlaced = 0;
+  for (let att = 0; att < 5500 && pinePlaced < pineCount; att++) {
+    const x = -155 + (rng() - 0.5) * 1020;
+    const z = -10 + (rng() - 0.5) * 1020;
+    const info = nearestTrackInfo(x, z);
+    if (info.dist < 30 || isInsideStructureZone(x, z)) continue;
+    const y = sampleTerrainHeight(x, z, info);
+    const sc = 0.78 + rng() * 0.92;
+    p.set(x, y - 0.35, z);
+    q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+    s.set(sc * (0.85 + rng() * 0.3), sc, sc * (0.85 + rng() * 0.3));
+    m.compose(p, q, s);
+    pineTrunkInst.setMatrixAt(pinePlaced, m);
+    pineLeafInst.setMatrixAt(pinePlaced, m);
+    pineLeafInst.setColorAt(pinePlaced, pinePalette[Math.floor(rng() * pinePalette.length)]);
+    pinePlaced++;
+  }
+  pineTrunkInst.count = pinePlaced;
+  pineLeafInst.count = pinePlaced;
+  pineTrunkInst.instanceMatrix.needsUpdate = true;
+  pineLeafInst.instanceMatrix.needsUpdate = true;
+  pineLeafInst.instanceColor.needsUpdate = true;
+  trackGroup.add(pineTrunkInst, pineLeafInst);
+
+  // ---- B. Realistic Broadleaf Deciduous Oak / Olive Trees (420 instances) ----
+  const oakTrunkParts = [
+    new THREE.CylinderGeometry(0.22, 0.42, 4.2, 7).translate(0, 2.1, 0).toNonIndexed(),
+    new THREE.CylinderGeometry(0.11, 0.20, 2.8, 6).rotateZ(0.48).translate(-0.75, 4.4, 0.2).toNonIndexed(),
+    new THREE.CylinderGeometry(0.10, 0.19, 2.6, 6).rotateZ(-0.44).rotateY(1.1).translate(0.65, 4.5, -0.3).toNonIndexed(),
+    new THREE.CylinderGeometry(0.09, 0.17, 2.4, 6).rotateX(0.42).translate(0.1, 4.4, 0.75).toNonIndexed()
+  ];
+  const oakTrunkGeo = mergeGeometries(oakTrunkParts);
+  const oakCanopyParts = [
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(2.45, 1).scale(1.15, 0.88, 1.1).translate(0, 6.4, 0), 0.45, 0.7, 0.4),
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(1.95, 1).scale(1.1, 0.85, 1.05).translate(-1.55, 5.4, 0.45), 0.48, 0.8, 2.1),
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(1.88, 1).scale(1.05, 0.86, 1.12).translate(1.45, 5.5, -0.65), 0.48, 0.8, 3.8),
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(1.75, 1).scale(1.08, 0.84, 1.0).translate(0.35, 5.3, 1.55), 0.46, 0.8, 5.2),
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(1.65, 1).scale(1.0, 0.9, 1.05).translate(-0.45, 7.6, -0.35), 0.44, 0.9, 6.7)
+  ];
+  const oakCanopyGeo = mergeGeometries(oakCanopyParts);
+  const oakCount = 420;
+  const oakTrunkInst = new THREE.InstancedMesh(oakTrunkGeo, barkMat, oakCount);
+  const oakLeafInst = new THREE.InstancedMesh(oakCanopyGeo, leafMat, oakCount);
+  oakLeafInst.castShadow = true;
+  oakLeafInst.receiveShadow = true;
+
+  const oakPalette = [
+    new THREE.Color(0x3c5928), // rich summer oak
+    new THREE.Color(0x4f682e), // sunlit olive green
+    new THREE.Color(0x667332), // golden-lit canopy
+    new THREE.Color(0x2e4a24), // deep woodland green
+    new THREE.Color(0x886a2a), // warm golden-hour amber-oak
+    new THREE.Color(0x556436)  // Mediterranean sage
+  ];
+  let oakPlaced = 0;
+  for (let att = 0; att < 5500 && oakPlaced < oakCount; att++) {
+    const x = -155 + (rng() - 0.5) * 940;
+    const z = -10 + (rng() - 0.5) * 940;
+    const info = nearestTrackInfo(x, z);
+    if (info.dist < 26 || isInsideStructureZone(x, z)) continue;
+    const y = sampleTerrainHeight(x, z, info);
+    const sc = 0.68 + rng() * 0.88;
+    p.set(x, y - 0.35, z);
+    q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+    s.set(sc * (0.9 + rng() * 0.25), sc * (0.85 + rng() * 0.3), sc * (0.9 + rng() * 0.25));
+    m.compose(p, q, s);
+    oakTrunkInst.setMatrixAt(oakPlaced, m);
+    oakLeafInst.setMatrixAt(oakPlaced, m);
+    oakLeafInst.setColorAt(oakPlaced, oakPalette[Math.floor(rng() * oakPalette.length)]);
+    oakPlaced++;
+  }
+  oakTrunkInst.count = oakPlaced;
+  oakLeafInst.count = oakPlaced;
+  oakTrunkInst.instanceMatrix.needsUpdate = true;
+  oakLeafInst.instanceMatrix.needsUpdate = true;
+  oakLeafInst.instanceColor.needsUpdate = true;
+  trackGroup.add(oakTrunkInst, oakLeafInst);
+
+  // ---- C. Sculptural Mediterranean Cypress Trees (260 instances, lining infield & stands) ----
+  const cypTrunkGeo = new THREE.CylinderGeometry(0.11, 0.20, 2.4, 6).translate(0, 1.2, 0).toNonIndexed();
+  const cypParts = [
+    displaceOrganicGeo(new THREE.ConeGeometry(0.95, 4.8, 8).translate(0, 4.0, 0), 0.28, 1.4, 1.3),
+    displaceOrganicGeo(new THREE.ConeGeometry(0.82, 4.6, 8).translate(0, 6.8, 0), 0.28, 1.5, 3.1),
+    displaceOrganicGeo(new THREE.ConeGeometry(0.55, 3.8, 7).translate(0, 9.4, 0), 0.24, 1.6, 4.9)
+  ];
+  const cypLeafGeo = mergeGeometries(cypParts);
+  const cypCount = 260;
+  const cypTrunkInst = new THREE.InstancedMesh(cypTrunkGeo, barkMat, cypCount);
+  const cypLeafInst = new THREE.InstancedMesh(cypLeafGeo, leafMat, cypCount);
+  cypLeafInst.castShadow = true;
+  cypLeafInst.receiveShadow = true;
+
+  const cypPalette = [
+    new THREE.Color(0x1f3c24),
+    new THREE.Color(0x284729),
+    new THREE.Color(0x314e2c),
+    new THREE.Color(0x223821)
+  ];
+  let cypPlaced = 0;
+  // First line scenic avenues near trackside & behind paddock/grandstands
+  for (let k = 0; k < TRACK_SAMPLES && cypPlaced < 90; k += 14) {
+    const sp = trackTable[k];
+    const side = (k % 28 === 0) ? 1 : -1;
+    const dist = 25 + rng() * 14;
+    const pos = sp.pos.clone().addScaledVector(sp.right, side * dist);
+    const info = nearestTrackInfo(pos.x, pos.z);
+    if (info.dist < 22 || isInsideStructureZone(pos.x, pos.z)) continue;
+    const y = sampleTerrainHeight(pos.x, pos.z, info);
+    const sc = 0.78 + rng() * 0.55;
+    p.set(pos.x, y - 0.25, pos.z);
+    q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+    s.set(sc, sc * (0.95 + rng() * 0.35), sc);
+    m.compose(p, q, s);
+    cypTrunkInst.setMatrixAt(cypPlaced, m);
+    cypLeafInst.setMatrixAt(cypPlaced, m);
+    cypLeafInst.setColorAt(cypPlaced, cypPalette[Math.floor(rng() * cypPalette.length)]);
+    cypPlaced++;
+  }
+  for (let att = 0; att < 3000 && cypPlaced < cypCount; att++) {
+    const x = -155 + (rng() - 0.5) * 820;
+    const z = -10 + (rng() - 0.5) * 820;
+    const info = nearestTrackInfo(x, z);
+    if (info.dist < 24 || isInsideStructureZone(x, z)) continue;
+    const y = sampleTerrainHeight(x, z, info);
+    const sc = 0.72 + rng() * 0.72;
+    p.set(x, y - 0.25, z);
+    q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+    s.set(sc, sc * (1.0 + rng() * 0.3), sc);
+    m.compose(p, q, s);
+    cypTrunkInst.setMatrixAt(cypPlaced, m);
+    cypLeafInst.setMatrixAt(cypPlaced, m);
+    cypLeafInst.setColorAt(cypPlaced, cypPalette[Math.floor(rng() * cypPalette.length)]);
+    cypPlaced++;
+  }
+  cypTrunkInst.count = cypPlaced;
+  cypLeafInst.count = cypPlaced;
+  cypTrunkInst.instanceMatrix.needsUpdate = true;
+  cypLeafInst.instanceMatrix.needsUpdate = true;
+  cypLeafInst.instanceColor.needsUpdate = true;
+  trackGroup.add(cypTrunkInst, cypLeafInst);
+
+  // ---- D. Trackside Shrubs, Wild Bushes & Hedgerows (1,200 instances) ----
+  const bushParts = [
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(0.95, 1).scale(1.18, 0.72, 1.1).translate(0, 0.52, 0), 0.52, 1.4, 0.9),
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(0.75, 1).scale(1.1, 0.68, 1.05).translate(0.62, 0.44, 0.35), 0.48, 1.5, 2.4),
+    displaceOrganicGeo(new THREE.IcosahedronGeometry(0.70, 1).scale(1.05, 0.72, 1.15).translate(-0.55, 0.40, -0.30), 0.48, 1.5, 4.1)
+  ];
+  const bushGeo = mergeGeometries(bushParts);
+  const bushCount = 1200;
+  const bushInst = new THREE.InstancedMesh(bushGeo, leafMat, bushCount);
+  bushInst.castShadow = true;
+  bushInst.receiveShadow = true;
+
+  const bushPalette = [
+    new THREE.Color(0x365424),
+    new THREE.Color(0x4b642a),
+    new THREE.Color(0x2c4720),
+    new THREE.Color(0x5d6b2e),
+    new THREE.Color(0x6e6a32),
+    new THREE.Color(0x3f5a2d)
+  ];
+  let bushPlaced = 0;
+  // Dense organic clusters right outside the track barriers & embankments (highly visible from every camera!)
+  for (let k = 0; k < TRACK_SAMPLES && bushPlaced < 540; k += 2) {
+    if (rng() < 0.32) continue;
+    const sp = trackTable[k];
+    const side = rng() < 0.5 ? 1 : -1;
+    const isOut = (side > 0 && sp.curvature < -0.0055) || (side < 0 && sp.curvature > 0.0055);
+    const minDist = TRACK_HALF_W + (isOut ? 15.5 : 7.5);
+    const dist = minDist + rng() * 18.0;
+    const pos = sp.pos.clone().addScaledVector(sp.right, side * dist);
+    const info = nearestTrackInfo(pos.x, pos.z);
+    if (info.dist < TRACK_HALF_W + 6.5 || isInsideStructureZone(pos.x, pos.z)) continue;
+    const y = sampleTerrainHeight(pos.x, pos.z, info);
+    const sc = 0.65 + rng() * 1.15;
+    p.set(pos.x, y - 0.15, pos.z);
+    q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+    s.set(sc * (0.85 + rng() * 0.45), sc * (0.7 + rng() * 0.5), sc * (0.85 + rng() * 0.45));
+    m.compose(p, q, s);
+    bushInst.setMatrixAt(bushPlaced, m);
+    bushInst.setColorAt(bushPlaced, bushPalette[Math.floor(rng() * bushPalette.length)]);
+    bushPlaced++;
+  }
+  for (let att = 0; att < 5000 && bushPlaced < bushCount; att++) {
+    const x = -155 + (rng() - 0.5) * 860;
+    const z = -10 + (rng() - 0.5) * 860;
+    const info = nearestTrackInfo(x, z);
+    if (info.dist < TRACK_HALF_W + 8.5 || isInsideStructureZone(x, z)) continue;
+    const y = sampleTerrainHeight(x, z, info);
+    const sc = 0.72 + rng() * 1.35;
+    p.set(x, y - 0.15, z);
+    q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+    s.set(sc, sc * (0.65 + rng() * 0.45), sc);
+    m.compose(p, q, s);
+    bushInst.setMatrixAt(bushPlaced, m);
+    bushInst.setColorAt(bushPlaced, bushPalette[Math.floor(rng() * bushPalette.length)]);
+    bushPlaced++;
+  }
+  bushInst.count = bushPlaced;
+  bushInst.instanceMatrix.needsUpdate = true;
+  bushInst.instanceColor.needsUpdate = true;
+  trackGroup.add(bushInst);
+
+  // ---- E. Wind-Animated Botanical Grass Tufts & Meadow Plants (3,800 instances) ----
+  const tuftPlanes = [];
+  for (let a = 0; a < 3; a++) {
+    const pl = new THREE.PlaneGeometry(1.15, 0.92).translate(0, 0.44, 0).rotateY((a * Math.PI) / 3).toNonIndexed();
+    // Tilt vertex normals smoothly upward for golden-hour backlit meadow translucency
+    const nAttr = pl.attributes.normal;
+    for (let i = 0; i < nAttr.count; i++) nAttr.setXYZ(i, 0, 1, 0);
+    tuftPlanes.push(pl);
+  }
+  const tuftGeo = mergeGeometries(tuftPlanes);
+  const tuftMat = new THREE.MeshStandardMaterial({
+    map: grassTuftTex,
+    alphaTest: 0.32,
+    side: THREE.DoubleSide,
+    roughness: 0.85,
+    metalness: 0.0
+  });
+  // Lightweight vertex-shader golden-hour wind sway for all 3,800 grass tufts!
+  tuftMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindTime = foliageWindUniform;
+    shader.vertexShader = 'uniform float uWindTime;\n' + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+       float swayH = clamp(position.y, 0.0, 1.0);
+       vec3 wPos = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+       float wind = sin(uWindTime * 2.4 + wPos.x * 0.14 + wPos.z * 0.11) * 0.16
+                  + sin(uWindTime * 4.1 + wPos.z * 0.25) * 0.05;
+       transformed.x += wind * swayH * swayH;
+       transformed.z += wind * 0.55 * swayH * swayH;`
+    );
+  };
+
+  const tuftCount = 3800;
+  const tuftInst = new THREE.InstancedMesh(tuftGeo, tuftMat, tuftCount);
+  tuftInst.receiveShadow = true;
+  const tuftPalette = [
+    new THREE.Color(0xc8d896),
+    new THREE.Color(0xdfe0a2),
+    new THREE.Color(0xb2c882),
+    new THREE.Color(0xe8d494),
+    new THREE.Color(0x9fb874)
+  ];
+  let tuftPlaced = 0;
+  // Dense meadow grass tufts right along trackside verges, embankments & infield
+  for (let k = 0; k < TRACK_SAMPLES && tuftPlaced < 2200; k++) {
+    const sp = trackTable[k];
+    for (let r = 0; r < 2 && tuftPlaced < 2200; r++) {
+      const side = rng() < 0.5 ? 1 : -1;
+      const isOut = (side > 0 && sp.curvature < -0.0055) || (side < 0 && sp.curvature > 0.0055);
+      const dist = TRACK_HALF_W + (isOut ? 14.2 : 5.6) + rng() * 24.0;
+      const pos = sp.pos.clone().addScaledVector(sp.right, side * dist).addScaledVector(sp.tangent, (rng() - 0.5) * 2.0);
+      const info = nearestTrackInfo(pos.x, pos.z);
+      if (info.dist < TRACK_HALF_W + 5.2 || isInsideStructureZone(pos.x, pos.z)) continue;
+      const y = sampleTerrainHeight(pos.x, pos.z, info);
+      const sc = 0.72 + rng() * 0.95;
+      p.set(pos.x, y - 0.05, pos.z);
+      q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+      s.set(sc, sc * (0.75 + rng() * 0.6), sc);
+      m.compose(p, q, s);
+      tuftInst.setMatrixAt(tuftPlaced, m);
+      tuftInst.setColorAt(tuftPlaced, tuftPalette[Math.floor(rng() * tuftPalette.length)]);
+      tuftPlaced++;
+    }
+  }
+  for (let att = 0; att < 5000 && tuftPlaced < tuftCount; att++) {
+    const x = -155 + (rng() - 0.5) * 620;
+    const z = -10 + (rng() - 0.5) * 620;
+    const info = nearestTrackInfo(x, z);
+    if (info.dist < TRACK_HALF_W + 6.0 || isInsideStructureZone(x, z)) continue;
+    const y = sampleTerrainHeight(x, z, info);
+    const sc = 0.8 + rng() * 1.1;
+    p.set(x, y - 0.05, z);
+    q.setFromAxisAngle(worldUp, rng() * Math.PI * 2);
+    s.set(sc, sc * (0.7 + rng() * 0.55), sc);
+    m.compose(p, q, s);
+    tuftInst.setMatrixAt(tuftPlaced, m);
+    tuftInst.setColorAt(tuftPlaced, tuftPalette[Math.floor(rng() * tuftPalette.length)]);
+    tuftPlaced++;
+  }
+  tuftInst.count = tuftPlaced;
+  tuftInst.instanceMatrix.needsUpdate = true;
+  tuftInst.instanceColor.needsUpdate = true;
+  trackGroup.add(tuftInst);
+
+  // ---- F. Sculpted Hillside Limestone / Granite Rock Outcrops (180 instances) ----
+  const rockGeo = displaceOrganicGeo(new THREE.DodecahedronGeometry(1.4, 1), 0.58, 0.95, 7.3);
+  const rockMat = new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0.04 });
+  const rockCount = 180;
+  const rockInst = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
+  rockInst.castShadow = true;
+  rockInst.receiveShadow = true;
+  const rockPalette = [new THREE.Color(0x6d6860), new THREE.Color(0x82796c), new THREE.Color(0x5b5650)];
+  let rockPlaced = 0;
+  for (let att = 0; att < 2400 && rockPlaced < rockCount; att++) {
+    const x = -155 + (rng() - 0.5) * 860;
+    const z = -10 + (rng() - 0.5) * 860;
+    const info = nearestTrackInfo(x, z);
+    if (info.dist < 22 || isInsideStructureZone(x, z)) continue;
+    const y = sampleTerrainHeight(x, z, info);
+    const sc = 0.85 + rng() * 2.2;
+    p.set(x, y - sc * 0.38, z);
+    q.setFromEuler(new THREE.Euler(rng() * 0.4, rng() * Math.PI * 2, rng() * 0.4));
+    s.set(sc * (1.0 + rng() * 0.6), sc * (0.55 + rng() * 0.4), sc * (0.9 + rng() * 0.5));
+    m.compose(p, q, s);
+    rockInst.setMatrixAt(rockPlaced, m);
+    rockInst.setColorAt(rockPlaced, rockPalette[Math.floor(rng() * rockPalette.length)]);
+    rockPlaced++;
+  }
+  rockInst.count = rockPlaced;
+  rockInst.instanceMatrix.needsUpdate = true;
+  rockInst.instanceColor.needsUpdate = true;
+  trackGroup.add(rockInst);
+}
+buildLushBotanicalLandscapeAndFloodlights();
+
+// ============================================================================
+// 7. PARAMETRIC LOFTING ENGINE WITH ANALYTIC NORMALS (NO PLACEHOLDER BOXES)
+// ============================================================================
+/**
+ * Builds a smooth parametric surface from P(u, v) with analytic normals
+ * computed from exact tangent cross-product (∂P/∂u × ∂P/∂v).
+ */
+function buildParametricLoft(uSegs, vSegs, evalPos, opts = {}) {
+  const closedU = !!opts.closedU;
+  const closedV = !!opts.closedV;
+  const flipNormal = !!opts.flipNormal;
+  const epsU = 0.0008;
+  const epsV = 0.0008;
+
+  const verts = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+
+  const p0 = new THREE.Vector3();
+  const pu1 = new THREE.Vector3();
+  const pu2 = new THREE.Vector3();
+  const pv1 = new THREE.Vector3();
+  const pv2 = new THREE.Vector3();
+  const du = new THREE.Vector3();
+  const dv = new THREE.Vector3();
+  const n = new THREE.Vector3();
+
+  for (let i = 0; i <= uSegs; i++) {
+    const u = i / uSegs;
+    const uA = closedU ? wrapMod(u - epsU, 1) : Math.max(0, u - epsU);
+    const uB = closedU ? wrapMod(u + epsU, 1) : Math.min(1, u + epsU);
+
+    for (let j = 0; j <= vSegs; j++) {
+      const v = j / vSegs;
+      const vA = closedV ? wrapMod(v - epsV, 1) : Math.max(0, v - epsV);
+      const vB = closedV ? wrapMod(v + epsV, 1) : Math.min(1, v + epsV);
+
+      evalPos(u, v, p0);
+      evalPos(uA, v, pu1);
+      evalPos(uB, v, pu2);
+      evalPos(u, vA, pv1);
+      evalPos(u, vB, pv2);
+
+      du.subVectors(pu2, pu1);
+      dv.subVectors(pv2, pv1);
+      n.crossVectors(du, dv);
+      if (n.lengthSq() < 1e-12 || !isFinite(n.x) || !isFinite(n.y) || !isFinite(n.z)) {
+        // Pole fallback (nose tip or tail cone)
+        n.set(0, 0, u < 0.5 ? 1 : -1);
+      } else {
+        n.normalize();
+      }
+      if (flipNormal) n.negate();
+
+      verts.push(p0.x, p0.y, p0.z);
+      normals.push(n.x, n.y, n.z);
+      uvs.push(u * (opts.uvU || 1), v * (opts.uvV || 1));
+    }
+  }
+
+  const row = vSegs + 1;
+  for (let i = 0; i < uSegs; i++) {
+    for (let j = 0; j < vSegs; j++) {
+      const a = i * row + j;
+      const b = (i + 1) * row + j;
+      const c = (i + 1) * row + j + 1;
+      const d = i * row + j + 1;
+      if (flipNormal) {
+        indices.push(a, d, b, b, d, c);
+      } else {
+        indices.push(a, b, d, b, c, d);
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  return geo;
+}
+
+// Helper: Swept parametric airfoil tube along a 3D curve (for halo & suspension arms)
+function buildAirfoilStrut(pA, pB, chord, thickness, radialSegs = 12, lenSegs = 6) {
+  const dir = new THREE.Vector3().subVectors(pB, pA);
+  const upRef = Math.abs(dir.clone().normalize().y) > 0.92 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+  const side = new THREE.Vector3().crossVectors(dir, upRef).normalize();
+  const up = new THREE.Vector3().crossVectors(side, dir).normalize();
+  // Orient chord along horizontal airflow (Z-ish)
+  const chordDir = side.clone().multiplyScalar(0.85).addScaledVector(up, 0.15).normalize();
+  const thickDir = new THREE.Vector3().crossVectors(dir.clone().normalize(), chordDir).normalize();
+
+  return buildParametricLoft(lenSegs, radialSegs, (u, v, out) => {
+    const theta = v * Math.PI * 2;
+    const c = Math.cos(theta) * chord * 0.5;
+    const t = Math.sin(theta) * thickness * 0.5 * (0.75 + 0.25 * Math.cos(theta));
+    out.lerpVectors(pA, pB, u)
+      .addScaledVector(chordDir, c)
+      .addScaledVector(thickDir, t);
+  }, { closedV: true, flipNormal: true });
+}
+
+// Helper: Cambered NACA-inspired F1 aero wing element loft
+function buildWingElementLoft(spanHalf, chordFn, yFn, zFn, camberFn, aoaFn, uSegs = 26, vSegs = 14) {
+  return buildParametricLoft(uSegs, vSegs, (u, v, out) => {
+    const s = (u * 2 - 1); // -1..+1 spanwise
+    const x = s * spanHalf;
+    const chord = chordFn(Math.abs(s));
+    const yBase = yFn(Math.abs(s));
+    const zBase = zFn(Math.abs(s));
+    const camber = camberFn(Math.abs(s));
+    const aoa = aoaFn(Math.abs(s));
+
+    const theta = v * Math.PI * 2;
+    // Closed airfoil cross section: xc in [0, 1] from leading edge (+Z) to trailing edge (-Z)
+    const xc = 0.5 * (1 - Math.cos(theta));
+    const halfThick = 0.12 * chord * (1.4 * Math.sqrt(Math.max(xc, 0.0001)) - 0.65 * xc - 0.68 * xc * xc);
+    const sign = Math.sin(theta) >= 0 ? 1 : -1;
+    const yc = camber * chord * Math.sin(xc * Math.PI) + sign * halfThick;
+
+    // Local Z goes backward from leading edge; rotate by Angle of Attack
+    const lz = (0.35 - xc) * chord;
+    const cosA = Math.cos(aoa);
+    const sinA = Math.sin(aoa);
+    const rz = lz * cosA - yc * sinA;
+    const ry = lz * sinA + yc * cosA;
+
+    out.set(x, yBase + ry, zBase + rz);
+  }, { closedV: true, flipNormal: false });
+}
+
+// ============================================================================
+// 8. FORMULA RACE CAR PROCEDURAL BUILDER (4 DISTINCT LIVERIES, LOD READY)
+// ============================================================================
+const LIVERIES = [
+  {
+    name: 'crimson',
+    primary: 0xc80d1c,
+    secondary: 0x16181e,
+    accent: 0xf4f6f9,
+    rimColor: 0x262932,
+    rimBlur: 'rgba(220,38,48,0.52)',
+    tireStripe: '#e2262e',
+    helmetColor: 0xd91424,
+    helmetAccent: 0xffd24c,
+    metalness: 0.42,
+    roughness: 0.16,
+    drsGlow: 0xff3b30
+  },
+  {
+    name: 'electric-blue',
+    primary: 0x0b58f2,
+    secondary: 0x121622,
+    accent: 0x28e8ff,
+    rimColor: 0xcfd7e4,
+    rimBlur: 'rgba(40,220,255,0.52)',
+    tireStripe: '#f2c828',
+    helmetColor: 0x0e62ff,
+    helmetAccent: 0x3cf4ff,
+    metalness: 0.48,
+    roughness: 0.15,
+    drsGlow: 0x24e5ff
+  },
+  {
+    name: 'papaya-orange',
+    primary: 0xff6a08,
+    secondary: 0x15171c,
+    accent: 0x12a4ff,
+    rimColor: 0x1e222a,
+    rimBlur: 'rgba(255,118,22,0.52)',
+    tireStripe: '#e2262e',
+    helmetColor: 0xff7212,
+    helmetAccent: 0x16181e,
+    metalness: 0.36,
+    roughness: 0.17,
+    drsGlow: 0xff9224
+  },
+  {
+    name: 'silver-black',
+    primary: 0xc4ccd6,
+    secondary: 0x11141a,
+    accent: 0x12d8a8,
+    rimColor: 0x1b1f26,
+    rimBlur: 'rgba(24,220,175,0.52)',
+    tireStripe: '#e8edf2',
+    helmetColor: 0xd8e0ea,
+    helmetAccent: 0x12d8a8,
+    metalness: 0.84,
+    roughness: 0.14,
+    drsGlow: 0x18f0bc
+  }
+];
+
+// Build shared parametric geometries ONCE (reused cleanly across all 4 cars for 60 FPS!)
+function buildSharedCarGeometries() {
+  // 1. Main Monocoque & Engine Cover Upper Painted Bodywork (lofted from nose tip to rear tail)
+  const monocoqueGeo = buildParametricLoft(54, 28, (u, v, out) => {
+    // z from +2.68 (nose tip) to -2.26 (rear engine tail)
+    const z = lerp(2.68, -2.26, u);
+    const theta = v * Math.PI * 2;
+    const sinT = Math.sin(theta);
+    const cosT = Math.cos(theta);
+
+    // Parametric half-width profile along car length
+    let halfW;
+    if (u < 0.08) {
+      halfW = 0.025 + 0.115 * Math.sqrt(u / 0.08);
+    } else if (u < 0.40) {
+      halfW = lerp(0.14, 0.34, smoothstep(0.08, 0.40, u));
+    } else if (u < 0.64) {
+      halfW = lerp(0.34, 0.31, smoothstep(0.40, 0.64, u));
+    } else {
+      // Dramatic coke-bottle rear taper
+      halfW = lerp(0.31, 0.095, smoothstep(0.64, 0.96, u)) * (1 - 0.35 * smoothstep(0.95, 1.0, u));
+    }
+
+    // Top & bottom heights along fuselage
+    let yBot = 0.145 + 0.055 * (1 - smoothstep(0.0, 0.24, u)) + 0.11 * smoothstep(0.74, 1.0, u);
+    let yTop;
+    if (u < 0.06) {
+      yTop = 0.18 + 0.11 * Math.sqrt(u / 0.06);
+    } else if (u < 0.38) {
+      yTop = lerp(0.29, 0.63, smoothstep(0.06, 0.38, u));
+    } else if (u < 0.56) {
+      // Cockpit opening dip (carved cleanly for driver & halo)
+      const cockpitDip = Math.sin(smoothstep(0.38, 0.56, u) * Math.PI);
+      yTop = 0.63 - 0.11 * cockpitDip;
+    } else if (u < 0.64) {
+      // Rising sharply into tall triangular overhead airbox scoop!
+      yTop = lerp(0.62, 0.96, smoothstep(0.56, 0.63, u));
+    } else {
+      // Sleek teardrop taper down to rear crash structure
+      yTop = lerp(0.96, 0.50, smoothstep(0.64, 0.98, u));
+    }
+
+    // Pinch upper airbox cross-section cleanly behind cockpit
+    const airboxPinch = smoothstep(0.56, 0.65, u) * (1 - smoothstep(0.86, 1.0, u));
+    const topPinch = (cosT > 0) ? (1 - 0.46 * airboxPinch * Math.pow(cosT, 1.4)) : 1.0;
+
+    // Superellipse shaping for crisp Formula chine lines
+    const sq = 0.78;
+    const sx = Math.sign(sinT) * Math.pow(Math.abs(sinT), sq) * halfW * topPinch;
+    const yMid = 0.5 * (yTop + yBot);
+    const yRad = 0.5 * (yTop - yBot);
+    let sy = yMid + Math.sign(cosT) * Math.pow(Math.abs(cosT), 0.85) * yRad;
+
+    // Slight recessed cockpit trough on top surface (u in 0.40..0.55)
+    if (u > 0.39 && u < 0.56 && cosT > 0.32) {
+      const cMask = Math.sin(smoothstep(0.39, 0.56, u) * Math.PI) * smoothstep(0.32, 0.82, cosT);
+      sy -= 0.20 * cMask;
+    }
+
+    out.set(sx, sy, z);
+  }, { closedV: true, flipNormal: true });
+
+  // 2. Accent Livery Nose & Spine Racing Stripe (thin lofted shell slightly offset above monocoque)
+  const accentStripeGeo = buildParametricLoft(42, 10, (u, v, out) => {
+    const z = lerp(2.58, -1.78, u);
+    const s = (v * 2 - 1); // -1..+1 across stripe
+    const halfStripe = lerp(0.032, 0.068, smoothstep(0.0, 0.35, u)) * (1 - 0.45 * smoothstep(0.65, 1.0, u));
+    // Skip cockpit opening by dipping inside floor
+    let yTop;
+    if (u < 0.06) yTop = 0.21 + 0.09 * Math.sqrt(u / 0.06);
+    else if (u < 0.38) yTop = lerp(0.30, 0.635, smoothstep(0.06, 0.38, u));
+    else if (u < 0.58) yTop = 0.32; // tucked cleanly beneath cockpit
+    else if (u < 0.65) yTop = lerp(0.64, 0.968, smoothstep(0.58, 0.65, u));
+    else yTop = lerp(0.968, 0.62, smoothstep(0.65, 1.0, u));
+
+    out.set(s * halfStripe, yTop + 0.008 - s * s * 0.006, z);
+  }, { flipNormal: true });
+
+  // 3. Sculpted Sidepods (Left & Right parametric downwash sidepods with deep forward undercut)
+  function buildSidepod(sideSign) {
+    return buildParametricLoft(32, 22, (u, v, out) => {
+      // z from +0.58 (inlet) to -1.72 (rear coke-bottle taper)
+      const z = lerp(0.58, -1.72, u);
+      const theta = v * Math.PI * 2;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+
+      // Width tapers smoothly into the rear coke-bottle
+      const wOuter = 0.28 + 0.49 * smoothstep(0.0, 0.14, u) * (1 - 0.72 * smoothstep(0.32, 1.0, u));
+      const wInner = 0.24 * (1 - 0.42 * smoothstep(0.5, 1.0, u));
+
+      // Modern downwash top ramp slopes down toward the rear floor
+      const yTop = lerp(0.61, 0.23, smoothstep(0.12, 0.98, u)) - 0.05 * Math.sin(u * Math.PI) * (sinT > 0 ? 0.5 : 0);
+      // Deep aerodynamic undercut at the front bottom
+      const undercut = 0.16 * (1 - smoothstep(0.0, 0.36, u));
+      const yBot = 0.09 + undercut + 0.06 * smoothstep(0.75, 1.0, u);
+
+      const xCenter = sideSign * (wInner + (wOuter - wInner) * 0.52);
+      const xRad = (wOuter - wInner) * 0.52;
+      const yCenter = 0.5 * (yTop + yBot);
+      const yRad = Math.max(0.03, 0.5 * (yTop - yBot));
+
+      const xLocal = Math.sign(sinT) * Math.pow(Math.abs(sinT), 0.72) * xRad;
+      const yLocal = Math.sign(cosT) * Math.pow(Math.abs(cosT), 0.78) * yRad;
+      // Front inlet lip rounding
+      const zRound = (u < 0.05) ? (1 - Math.abs(sinT) * 0.35) * 0.04 : 0;
+
+      out.set(xCenter + sideSign * xLocal, yCenter + yLocal, z + zRound);
+    }, { closedV: true, flipNormal: sideSign > 0 });
+  }
+  const sidepodL = buildSidepod(1);
+  const sidepodR = buildSidepod(-1);
+
+  // Sidepod radiator dark recessed inlets (L & R)
+  const inletGeos = [];
+  for (const s of [-1, 1]) {
+    const inlet = buildParametricLoft(8, 12, (u, v, out) => {
+      const theta = v * Math.PI * 2;
+      const r = lerp(0.02, 1.0, u);
+      const x = s * (0.50 + Math.sin(theta) * 0.19 * r);
+      const y = 0.44 + Math.cos(theta) * 0.12 * r;
+      const z = 0.56 - (1 - r) * 0.10;
+      out.set(x, y, z);
+    }, { closedV: true, flipNormal: s > 0 });
+    inletGeos.push(inlet);
+  }
+  // Airbox dark intake opening above driver
+  const airboxIntake = buildParametricLoft(8, 12, (u, v, out) => {
+    const theta = v * Math.PI * 2;
+    const r = lerp(0.02, 1.0, u);
+    out.set(Math.sin(theta) * 0.11 * r, 0.85 + Math.cos(theta) * 0.08 * r, -0.22 - (1 - r) * 0.12);
+  }, { closedV: true, flipNormal: true });
+  inletGeos.push(airboxIntake);
+
+  // 4. Shark-Fin Engine Cover (sleek dorsal aero blade)
+  const sharkFinGeo = buildParametricLoft(18, 10, (u, v, out) => {
+    const z = lerp(-0.34, -1.78, u);
+    const theta = v * Math.PI * 2;
+    const yBot = lerp(0.86, 0.55, smoothstep(0.0, 1.0, u));
+    const yTop = lerp(0.955, 0.86, smoothstep(0.0, 0.82, u)) - 0.14 * smoothstep(0.82, 1.0, u);
+    const yMid = 0.5 * (yBot + yTop);
+    const yRad = 0.5 * (yTop - yBot);
+    out.set(Math.sin(theta) * 0.014, yMid + Math.cos(theta) * yRad, z);
+  }, { closedV: true, flipNormal: true });
+
+  // 5. Aerodynamic Carbon Floor, Floor Edge Wings & Multi-Strake Venturi Diffuser
+  const floorGeos = [];
+  const mainFloor = buildParametricLoft(30, 18, (u, v, out) => {
+    const z = lerp(0.92, -2.26, u);
+    const s = v * 2 - 1; // -1..+1
+    // Narrow front bib, wide Venturi floor between axles, tapering neatly around rear wheels
+    let halfW = 0.79;
+    if (u < 0.16) halfW = lerp(0.24, 0.79, smoothstep(0.0, 0.16, u));
+    else if (u > 0.72) halfW = lerp(0.79, 0.52, smoothstep(0.72, 0.96, u));
+
+    const x = s * halfW;
+    // Upturned rear Venturi diffuser ramp (z < -1.55)
+    const diffKick = smoothstep(0.74, 1.0, u) * (1 - 0.25 * s * s);
+    // Upturned outer floor edge curl
+    const edgeCurl = smoothstep(0.84, 1.0, Math.abs(s)) * 0.045 * (1 - smoothstep(0.78, 1.0, u));
+    const y = 0.068 + diffKick * 0.24 + edgeCurl;
+    out.set(x, y, z);
+  }, { flipNormal: true });
+  floorGeos.push(mainFloor);
+
+  // Underfloor lower thickness shell
+  const floorBottom = mainFloor.clone();
+  floorBottom.translate(0, -0.022, 0);
+  floorGeos.push(floorBottom);
+
+  // Rear diffuser vertical strakes
+  for (const sx of [-0.42, -0.22, 0.22, 0.42]) {
+    const strake = buildAirfoilStrut(
+      new THREE.Vector3(sx, 0.08, -1.62),
+      new THREE.Vector3(sx, 0.24, -2.26),
+      0.16, 0.016, 6, 4
+    );
+    floorGeos.push(strake);
+  }
+  // Front floor Venturi inlet fences
+  for (const sx of [-0.62, -0.44, 0.44, 0.62]) {
+    const fence = buildAirfoilStrut(
+      new THREE.Vector3(sx, 0.14, 0.76),
+      new THREE.Vector3(sx * 1.06, 0.15, 0.34),
+      0.14, 0.014, 6, 4
+    );
+    floorGeos.push(fence);
+  }
+
+  // 6. Multi-Element Front Wing (Main Plane + 3 Stacked Swept Flaps + Sculpted Endplates)
+  const fwMainCarbon = buildWingElementLoft(
+    0.98,
+    s => lerp(0.32, 0.24, s),
+    s => 0.105 + 0.032 * smoothstep(0.18, 0.9, s),
+    s => 2.52 - 0.22 * s * s,
+    () => 0.06,
+    s => 0.07 + 0.06 * s,
+    26, 12
+  );
+  const fwFlap1Painted = buildWingElementLoft(
+    0.96,
+    s => lerp(0.20, 0.16, s),
+    s => 0.158 + 0.055 * smoothstep(0.12, 0.95, s),
+    s => 2.34 - 0.21 * s * s,
+    () => 0.08,
+    s => 0.18 + 0.12 * s,
+    24, 10
+  );
+  const fwFlap2Painted = buildWingElementLoft(
+    0.95,
+    s => lerp(0.15, 0.13, s),
+    s => 0.215 + 0.068 * smoothstep(0.15, 0.95, s),
+    s => 2.20 - 0.19 * s * s,
+    () => 0.09,
+    s => 0.28 + 0.14 * s,
+    24, 10
+  );
+  const fwFlap3Accent = buildWingElementLoft(
+    0.93,
+    s => lerp(0.11, 0.09, s),
+    s => 0.268 + 0.062 * smoothstep(0.18, 0.95, s),
+    s => 2.09 - 0.17 * s * s,
+    () => 0.08,
+    s => 0.36 + 0.12 * s,
+    22, 10
+  );
+
+  // Curved Front Wing Endplates + Diveplanes
+  const fwEndplates = [];
+  for (const s of [-1, 1]) {
+    const ep = buildParametricLoft(14, 12, (u, v, out) => {
+      const z = lerp(2.40, 1.88, u);
+      const theta = v * Math.PI * 2;
+      const yBot = 0.095;
+      const yTop = lerp(0.24, 0.40, smoothstep(0.0, 0.82, u)) - 0.05 * smoothstep(0.82, 1.0, u);
+      const yMid = 0.5 * (yBot + yTop);
+      const yRad = 0.5 * (yTop - yBot);
+      const flare = smoothstep(0.2, 1.0, u) * 0.04;
+      out.set(s * (0.985 + flare) + Math.sin(theta) * 0.015, yMid + Math.cos(theta) * yRad, z);
+    }, { closedV: true, flipNormal: true });
+    fwEndplates.push(ep);
+
+    // Outer diveplane scroll
+    const dive = buildAirfoilStrut(
+      new THREE.Vector3(s * 1.01, 0.24, 2.26),
+      new THREE.Vector3(s * 1.06, 0.32, 1.96),
+      0.08, 0.014, 6, 4
+    );
+    fwEndplates.push(dive);
+
+    // Nose-to-wing mounting pylon
+    const pylon = buildAirfoilStrut(
+      new THREE.Vector3(s * 0.11, 0.25, 2.38),
+      new THREE.Vector3(s * 0.14, 0.11, 2.40),
+      0.16, 0.018, 6, 4
+    );
+    fwEndplates.push(pylon);
+  }
+
+  // 7. Tall Double-Element Rear Wing (Main Plane, Beam Wing, Tall Sculpted Endplates, Swan-Neck Pylon)
+  const rwMainCarbon = buildWingElementLoft(
+    0.53,
+    () => 0.34,
+    s => 0.77 + 0.022 * s * s,
+    () => -2.06,
+    () => 0.10,
+    () => 0.20,
+    22, 12
+  );
+  const rwBeamCarbon = buildWingElementLoft(
+    0.48,
+    () => 0.22,
+    () => 0.36,
+    () => -2.14,
+    () => 0.08,
+    () => 0.26,
+    18, 10
+  );
+
+  // Separate Hinged Upper DRS Flap (pivots smoothly around trailing axis!)
+  const drsPivotY = 0.985;
+  const drsPivotZ = -2.26;
+  const drsFlapGeo = buildWingElementLoft(
+    0.515,
+    () => 0.21,
+    () => 0.945 - drsPivotY,
+    () => -2.19 - drsPivotZ,
+    () => 0.08,
+    () => 0.56,
+    20, 10
+  );
+  // Subtle glowing DRS edge accent strip mounted to DRS flap
+  const drsGlowStripGeo = buildParametricLoft(18, 8, (u, v, out) => {
+    const x = lerp(-0.48, 0.48, u);
+    const theta = v * Math.PI * 2;
+    out.set(x, (0.98 - drsPivotY) + Math.cos(theta) * 0.010, (-2.265 - drsPivotZ) + Math.sin(theta) * 0.010);
+  }, { closedV: true, flipNormal: true });
+
+  // Tall sculpted rear wing endplates + central swan-neck pylon
+  const rwEndplates = [];
+  for (const s of [-1, 1]) {
+    const rep = buildParametricLoft(16, 12, (u, v, out) => {
+      const z = lerp(-1.82, -2.32, u);
+      const theta = v * Math.PI * 2;
+      const yBot = lerp(0.56, 0.34, smoothstep(0.0, 0.45, u));
+      const yTop = lerp(0.95, 1.03, smoothstep(0.0, 0.55, u));
+      const yMid = 0.5 * (yBot + yTop);
+      const yRad = 0.5 * (yTop - yBot);
+      const pinch = lerp(0.49, 0.535, smoothstep(0.0, 0.7, u));
+      out.set(s * pinch + Math.sin(theta) * 0.016, yMid + Math.cos(theta) * yRad, z);
+    }, { closedV: true, flipNormal: true });
+    rwEndplates.push(rep);
+  }
+  // Swan-neck central rear wing pylon
+  const swanCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.52, -1.86),
+    new THREE.Vector3(0, 0.84, -1.94),
+    new THREE.Vector3(0, 0.86, -2.06),
+    new THREE.Vector3(0, 0.80, -2.08)
+  ]);
+  const swanPylon = new THREE.TubeGeometry(swanCurve, 14, 0.022, 8, false);
+  swanPylon.scale(0.65, 1.0, 1.45);
+  rwEndplates.push(swanPylon);
+
+  // Rear crash structure housing
+  const rearCrash = buildParametricLoft(10, 12, (u, v, out) => {
+    const z = lerp(-1.85, -2.35, u);
+    const theta = v * Math.PI * 2;
+    const wx = lerp(0.09, 0.042, u);
+    const wy = lerp(0.095, 0.055, u);
+    out.set(Math.sin(theta) * wx, 0.25 + Math.cos(theta) * wy, z);
+  }, { closedV: true, flipNormal: true });
+  rwEndplates.push(rearCrash);
+
+  // 8. Cockpit Halo (Swept Parametric Titanium-Carbon Hoop + Front Pylon)
+  const haloGeos = [];
+  const haloFrontCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.61, 0.62),
+    new THREE.Vector3(0, 0.79, 0.50),
+    new THREE.Vector3(0, 0.88, 0.36)
+  ]);
+  haloGeos.push(new THREE.TubeGeometry(haloFrontCurve, 12, 0.025, 10, false));
+  for (const s of [-1, 1]) {
+    const hoopCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0.88, 0.36),
+      new THREE.Vector3(s * 0.19, 0.885, 0.28),
+      new THREE.Vector3(s * 0.295, 0.84, 0.06),
+      new THREE.Vector3(s * 0.305, 0.72, -0.18),
+      new THREE.Vector3(s * 0.29, 0.63, -0.28)
+    ]);
+    haloGeos.push(new THREE.TubeGeometry(hoopCurve, 18, 0.024, 10, false));
+  }
+  // Overhead T-Cam pod on top of airbox
+  const tCamStem = buildAirfoilStrut(
+    new THREE.Vector3(0, 0.94, -0.28),
+    new THREE.Vector3(0, 1.09, -0.28),
+    0.075, 0.020, 6, 3
+  );
+  const tCamBar = buildAirfoilStrut(
+    new THREE.Vector3(-0.14, 1.09, -0.28),
+    new THREE.Vector3(0.14, 1.09, -0.28),
+    0.055, 0.028, 6, 4
+  );
+  haloGeos.push(tCamStem, tCamBar);
+
+  // Side wing mirrors (aero sculpted stalks)
+  for (const s of [-1, 1]) {
+    haloGeos.push(buildAirfoilStrut(
+      new THREE.Vector3(s * 0.31, 0.62, 0.42),
+      new THREE.Vector3(s * 0.56, 0.67, 0.40),
+      0.06, 0.016, 6, 4
+    ));
+  }
+
+  // 9. Exposed Carbon-Fiber Double-Wishbone Suspension Arms (Front & Rear)
+  const suspGeos = [];
+  const FRONT_Z = 1.68;
+  const REAR_Z = -1.78;
+  const FRONT_X = 0.80;
+  const REAR_X = 0.78;
+  for (const s of [-1, 1]) {
+    // Front double wishbones + pushrod + trackrod
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.20, 0.49, FRONT_Z + 0.22), new THREE.Vector3(s * (FRONT_X - 0.14), 0.46, FRONT_Z + 0.02), 0.055, 0.015, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.24, 0.47, FRONT_Z - 0.32), new THREE.Vector3(s * (FRONT_X - 0.14), 0.46, FRONT_Z - 0.02), 0.055, 0.015, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.18, 0.22, FRONT_Z + 0.18), new THREE.Vector3(s * (FRONT_X - 0.14), 0.25, FRONT_Z + 0.02), 0.055, 0.015, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.23, 0.22, FRONT_Z - 0.28), new THREE.Vector3(s * (FRONT_X - 0.14), 0.25, FRONT_Z - 0.02), 0.055, 0.015, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.21, 0.52, FRONT_Z - 0.05), new THREE.Vector3(s * (FRONT_X - 0.16), 0.27, FRONT_Z), 0.036, 0.014, 6, 4));
+
+    // Rear double wishbones + driveshaft + pullrod
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.16, 0.48, REAR_Z + 0.34), new THREE.Vector3(s * (REAR_X - 0.16), 0.48, REAR_Z + 0.03), 0.06, 0.016, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.12, 0.44, REAR_Z - 0.20), new THREE.Vector3(s * (REAR_X - 0.16), 0.47, REAR_Z - 0.03), 0.06, 0.016, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.16, 0.23, REAR_Z + 0.30), new THREE.Vector3(s * (REAR_X - 0.16), 0.24, REAR_Z + 0.02), 0.06, 0.016, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.11, 0.24, REAR_Z - 0.22), new THREE.Vector3(s * (REAR_X - 0.16), 0.24, REAR_Z - 0.02), 0.06, 0.016, 6, 4));
+    suspGeos.push(buildAirfoilStrut(new THREE.Vector3(s * 0.15, 0.34, REAR_Z + 0.04), new THREE.Vector3(s * (REAR_X - 0.18), 0.36, REAR_Z), 0.042, 0.022, 6, 4));
+  }
+
+  // 10. Helmeted Driver & Sculpted Cockpit Steering Wheel
+  const helmetGeo = buildParametricLoft(22, 20, (u, v, out) => {
+    const phi = u * Math.PI; // 0 top, PI bottom
+    const theta = v * Math.PI * 2;
+    const sinP = Math.sin(phi);
+    const cosP = Math.cos(phi);
+    // Elongated aerodynamic racing helmet with rear aero ducktail
+    const rX = 0.128;
+    const rY = 0.138;
+    const rZ = 0.158;
+    const rearTail = (Math.cos(theta) < -0.2 && sinP > 0.3) ? 0.026 * (-Math.cos(theta) - 0.2) * sinP : 0;
+    const chin = (Math.cos(theta) > 0.3 && cosP < -0.1) ? 0.022 * Math.cos(theta) * (-cosP) : 0;
+    out.set(
+      Math.sin(theta) * sinP * rX,
+      0.665 + cosP * rY,
+      0.01 + Math.cos(theta) * sinP * rZ + chin - rearTail
+    );
+  }, { closedV: true, flipNormal: false });
+
+  // Curved Tinted Visor wrapping front of helmet
+  const visorGeo = buildParametricLoft(10, 18, (u, v, out) => {
+    const phi = lerp(1.18, 1.72, u);
+    const theta = lerp(-1.12, 1.12, v);
+    const sinP = Math.sin(phi);
+    const cosP = Math.cos(phi);
+    out.set(
+      Math.sin(theta) * sinP * 0.134,
+      0.665 + cosP * 0.143,
+      0.015 + Math.cos(theta) * sinP * 0.165
+    );
+  }, { flipNormal: false });
+
+  // Driver shoulders / fireproof suit + HANS collar
+  const driverBodyGeo = buildParametricLoft(14, 16, (u, v, out) => {
+    const y = lerp(0.36, 0.56, u);
+    const theta = v * Math.PI * 2;
+    const wx = lerp(0.22, 0.16, smoothstep(0.4, 1.0, u));
+    const wz = lerp(0.16, 0.12, u);
+    out.set(Math.sin(theta) * wx, y, 0.03 + Math.cos(theta) * wz);
+  }, { closedV: true, flipNormal: true });
+
+  // 11. Parametric Slick Tires (Front & Rear, tread-less smooth racing profile)
+  function buildSlickTireGeo(width, outerR, rimR) {
+    return buildParametricLoft(40, 22, (u, v, out) => {
+      const ang = u * Math.PI * 2;
+      // v in [0,1]: 0..0.28 inner sidewall, 0.28..0.72 flat tread-less slick crown, 0.72..1.0 outer sidewall
+      let x, r;
+      const halfW = width * 0.5;
+      if (v < 0.28) {
+        const t = v / 0.28;
+        const bulge = Math.sin(t * Math.PI) * 0.022;
+        x = -halfW - bulge;
+        r = lerp(rimR, outerR - 0.025, t);
+      } else if (v <= 0.72) {
+        const t = (v - 0.28) / 0.44; // 0..1 across crown
+        const shoulder = Math.sin(t * Math.PI);
+        x = lerp(-halfW, halfW, t);
+        r = outerR - 0.025 * Math.pow(1 - shoulder, 2.2);
+      } else {
+        const t = (v - 0.72) / 0.28;
+        const bulge = Math.sin(t * Math.PI) * 0.022;
+        x = halfW + bulge;
+        r = lerp(outerR - 0.025, rimR, t);
+      }
+      out.set(x, Math.cos(ang) * r, Math.sin(ang) * r);
+    }, { closedU: true, flipNormal: false });
+  }
+
+  // Sculpted Multi-Spoke Glossy Alloy Rim
+  function buildRimGeo(width, rimR) {
+    const parts = [];
+    // Outer barrel + lip
+    const barrel = buildParametricLoft(28, 8, (u, v, out) => {
+      const ang = u * Math.PI * 2;
+      const x = lerp(-width * 0.44, width * 0.46, v);
+      const r = rimR + (v > 0.85 ? 0.010 : -0.012);
+      out.set(x, Math.cos(ang) * r, Math.sin(ang) * r);
+    }, { closedU: true, flipNormal: false });
+    parts.push(barrel);
+
+    // Central wheel-nut hub boss
+    const hub = new THREE.CylinderGeometry(0.058, 0.068, width * 0.55, 14);
+    hub.rotateZ(Math.PI / 2);
+    hub.translate(width * 0.10, 0, 0);
+    parts.push(hub);
+
+    // 10 sculpted Y-spokes connecting hub to outer rim barrel (leaving gaps so glowing brake disc shines through!)
+    const nSpokes = 10;
+    for (let k = 0; k < nSpokes; k++) {
+      const a = (k / nSpokes) * Math.PI * 2;
+      const p1 = new THREE.Vector3(width * 0.24, Math.cos(a) * 0.055, Math.sin(a) * 0.055);
+      const p2 = new THREE.Vector3(width * 0.36, Math.cos(a) * (rimR - 0.008), Math.sin(a) * (rimR - 0.008));
+      parts.push(buildAirfoilStrut(p1, p2, 0.028, 0.014, 6, 3));
+    }
+    return mergeGeometries(parts);
+  }
+
+  // Merge static sub-meshes by material for ultra-low draw calls!
+  const paintedBodyGeo = mergeGeometries([
+    monocoqueGeo,
+    sidepodL,
+    sidepodR,
+    sharkFinGeo,
+    fwFlap1Painted,
+    fwFlap2Painted
+  ]);
+
+  const accentBodyGeo = mergeGeometries([
+    accentStripeGeo,
+    fwFlap3Accent
+  ]);
+
+  const carbonBodyGeo = mergeGeometries([
+    ...floorGeos,
+    fwMainCarbon,
+    ...fwEndplates,
+    rwMainCarbon,
+    rwBeamCarbon,
+    ...rwEndplates,
+    ...haloGeos,
+    ...suspGeos,
+    ...inletGeos
+  ]);
+
+  // Exhaust tailpipe & titanium underfloor skid block
+  const exhaustPipe = new THREE.CylinderGeometry(0.052, 0.056, 0.36, 14, 1, true);
+  exhaustPipe.rotateX(Math.PI / 2);
+  exhaustPipe.translate(0, 0.44, -2.14);
+
+  // Brake disc & sculpted curved multi-piston caliper (mounted on non-rotating upright)
+  const brakeDiscGeo = new THREE.CylinderGeometry(0.168, 0.168, 0.036, 22);
+  brakeDiscGeo.rotateZ(Math.PI / 2);
+
+  const caliperGeo = buildParametricLoft(12, 10, (u, v, out) => {
+    const arcAng = lerp(-0.58, 0.58, u);
+    const theta = v * Math.PI * 2;
+    const r = 0.155 + Math.cos(theta) * 0.032;
+    const x = Math.sin(theta) * 0.036;
+    out.set(x, Math.sin(arcAng) * r - 0.015, Math.cos(arcAng) * r);
+  }, { closedV: true, flipNormal: false });
+
+  // Simplified distant LOD bodywork shell (for cars > 110 m away)
+  const lodShellGeo = buildParametricLoft(16, 10, (u, v, out) => {
+    const z = lerp(2.62, -2.26, u);
+    const theta = v * Math.PI * 2;
+    const halfW = lerp(0.14, 0.68, Math.sin(u * Math.PI)) * 0.92;
+    const yTop = lerp(0.28, 0.94, Math.sin(u * Math.PI * 0.85));
+    const yMid = 0.5 * (0.12 + yTop);
+    const yRad = 0.5 * (yTop - 0.12);
+    out.set(Math.sin(theta) * halfW, yMid + Math.cos(theta) * yRad, z);
+  }, { closedV: true, flipNormal: true });
+
+  return {
+    paintedBodyGeo,
+    accentBodyGeo,
+    carbonBodyGeo,
+    drsFlapGeo,
+    drsGlowStripGeo,
+    drsPivotY,
+    drsPivotZ,
+    helmetGeo,
+    visorGeo,
+    driverBodyGeo,
+    exhaustPipe,
+    brakeDiscGeo,
+    caliperGeo,
+    lodShellGeo,
+    frontTireGeo: buildSlickTireGeo(0.305, 0.360, 0.228),
+    rearTireGeo: buildSlickTireGeo(0.405, 0.365, 0.228),
+    frontRimGeo: buildRimGeo(0.305, 0.228),
+    rearRimGeo: buildRimGeo(0.405, 0.228)
+  };
+}
+
+const carGeos = buildSharedCarGeometries();
+
+// Custom Heat-Shimmer Exhaust Plume Shader
+function createHeatShimmerMaterial() {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uIntensity: { value: 0.7 }
+    },
+    vertexShader: /* glsl */ `
+      uniform float uTime;
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        vec3 p = position;
+        float dist = uv.y;
+        // High-frequency turbulent thermal flutter behind exhaust
+        float w1 = sin(dist * 18.0 - uTime * 34.0) * 0.055 * dist;
+        float w2 = cos(dist * 27.0 - uTime * 46.0 + position.x * 8.0) * 0.035 * dist;
+        p.x += w1;
+        p.y += w2 + 0.08 * dist * dist;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      uniform float uIntensity;
+      varying vec2 vUv;
+      void main() {
+        float radial = 1.0 - abs(vUv.x * 2.0 - 1.0);
+        radial = smoothstep(0.0, 0.85, radial);
+        float along = smoothstep(0.0, 0.14, vUv.y) * (1.0 - smoothstep(0.28, 1.0, vUv.y));
+        float wave = 0.55 + 0.45 * sin(vUv.y * 32.0 - uTime * 42.0 + sin(vUv.x * 12.0) * 2.0);
+        float alpha = radial * along * wave * 0.22 * uIntensity;
+        vec3 col = mix(vec3(1.0, 0.72, 0.36), vec3(0.95, 0.85, 0.75), vUv.y);
+        gl_FragColor = vec4(col, alpha);
+      }
+    `
+  });
+}
+
+function createFormulaCar(livery) {
+  const root = new THREE.Group();
+  const chassisPivot = new THREE.Group(); // Handles dynamic body roll, pitch & curb heave
+  root.add(chassisPivot);
+
+  // Calibrated multi-layer clearcoat paint PBR materials with procedural geometric livery graphics
+  const liveryTex = createCarLiveryTexture(livery);
+  const paintMat = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    map: liveryTex,
+    metalness: livery.metalness,
+    roughness: livery.roughness,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.045,
+    reflectivity: 0.96
+  });
+
+  const accentMat = new THREE.MeshPhysicalMaterial({
+    color: livery.accent,
+    metalness: 0.28,
+    roughness: 0.18,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.06
+  });
+
+  const rimMat = new THREE.MeshStandardMaterial({
+    color: livery.rimColor,
+    metalness: 0.88,
+    roughness: 0.18,
+    side: THREE.DoubleSide
+  });
+
+  const helmetMat = new THREE.MeshPhysicalMaterial({
+    color: livery.helmetColor,
+    metalness: 0.38,
+    roughness: 0.14,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.04
+  });
+
+  const suitMat = new THREE.MeshStandardMaterial({
+    color: livery.secondary,
+    roughness: 0.82,
+    metalness: 0.05
+  });
+
+  // High-detail car group + distant LOD shell
+  const lod = new THREE.LOD();
+  const hiGroup = new THREE.Group();
+  const loGroup = new THREE.Group();
+
+  const bodyMesh = new THREE.Mesh(carGeos.paintedBodyGeo, paintMat);
+  bodyMesh.castShadow = true;
+  bodyMesh.receiveShadow = true;
+  hiGroup.add(bodyMesh);
+
+  const accentMesh = new THREE.Mesh(carGeos.accentBodyGeo, accentMat);
+  accentMesh.castShadow = true;
+  hiGroup.add(accentMesh);
+
+  const carbonMesh = new THREE.Mesh(carGeos.carbonBodyGeo, sharedCarbonMat);
+  carbonMesh.castShadow = true;
+  carbonMesh.receiveShadow = true;
+  hiGroup.add(carbonMesh);
+
+  const exhaustMesh = new THREE.Mesh(carGeos.exhaustPipe, sharedExhaustMat);
+  hiGroup.add(exhaustMesh);
+
+  // Driver & Helmet
+  const helmetMesh = new THREE.Mesh(carGeos.helmetGeo, helmetMat);
+  helmetMesh.castShadow = true;
+  hiGroup.add(helmetMesh);
+  hiGroup.add(new THREE.Mesh(carGeos.visorGeo, sharedVisorMat));
+  hiGroup.add(new THREE.Mesh(carGeos.driverBodyGeo, suitMat));
+
+  // Cockpit Steering Wheel (rotates with steering input)
+  const steeringPivot = new THREE.Group();
+  steeringPivot.position.set(0, 0.56, 0.44);
+  steeringPivot.rotation.x = -0.32;
+  const wheelGrip = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.125, 0.028), sharedMatteCarbonMat);
+  steeringPivot.add(wheelGrip);
+  const shiftLedMat = new THREE.MeshStandardMaterial({
+    color: 0x30ff88,
+    emissive: 0x20ff70,
+    emissiveIntensity: 2.2
+  });
+  const shiftBar = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.012, 0.032), shiftLedMat);
+  shiftBar.position.set(0, 0.045, 0);
+  steeringPivot.add(shiftBar);
+  hiGroup.add(steeringPivot);
+
+  // Hinged Upper DRS Flap + Glowing DRS Accent Strip
+  const drsPivot = new THREE.Group();
+  drsPivot.position.set(0, carGeos.drsPivotY, carGeos.drsPivotZ);
+  const drsFlapMesh = new THREE.Mesh(carGeos.drsFlapGeo, paintMat);
+  drsFlapMesh.castShadow = true;
+  drsPivot.add(drsFlapMesh);
+
+  const drsGlowMat = new THREE.MeshStandardMaterial({
+    color: livery.drsGlow,
+    emissive: livery.drsGlow,
+    emissiveIntensity: 1.2,
+    roughness: 0.2
+  });
+  const drsGlowMesh = new THREE.Mesh(carGeos.drsGlowStripGeo, drsGlowMat);
+  drsPivot.add(drsGlowMesh);
+  hiGroup.add(drsPivot);
+
+  // Rear Rain Light (glowing crimson LED beacon)
+  const rainLightMat = new THREE.MeshStandardMaterial({
+    color: 0xff2222,
+    emissive: 0xff1612,
+    emissiveIntensity: 2.8,
+    roughness: 0.15
+  });
+  const rainLight = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.082, 0.022), rainLightMat);
+  rainLight.position.set(0, 0.25, -2.355);
+  hiGroup.add(rainLight);
+
+  // Exhaust Heat Shimmer Plume (crossed vertical & horizontal shimmer planes)
+  const shimmerMat = createHeatShimmerMaterial();
+  const shimmerGroup = new THREE.Group();
+  shimmerGroup.position.set(0, 0.44, -2.32);
+  const sPlaneGeo = new THREE.PlaneGeometry(0.46, 2.35, 2, 12);
+  sPlaneGeo.translate(0, 1.175, 0);
+  sPlaneGeo.rotateX(-Math.PI / 2);
+  const sMesh1 = new THREE.Mesh(sPlaneGeo, shimmerMat);
+  const sMesh2 = new THREE.Mesh(sPlaneGeo, shimmerMat);
+  sMesh2.rotation.z = Math.PI / 2;
+  shimmerGroup.add(sMesh1, sMesh2);
+  hiGroup.add(shimmerGroup);
+
+  // Distant LOD simplified car mesh
+  const loBody = new THREE.Mesh(carGeos.lodShellGeo, paintMat);
+  loBody.castShadow = true;
+  loGroup.add(loBody);
+
+  lod.addLevel(hiGroup, 0);
+  lod.addLevel(loGroup, 135);
+  chassisPivot.add(lod);
+
+  // 4 Wheel Assemblies (Slick tires + glossy rims + motion-blur disc + glowing brake discs)
+  const tireTex = createSlickRubberTextures(livery.tireStripe);
+  const tireMat = new THREE.MeshStandardMaterial({
+    map: tireTex.map,
+    roughnessMap: tireTex.roughnessMap,
+    roughness: 0.86,
+    metalness: 0.04
+  });
+
+  const blurTex = createMotionBlurWheelTexture(livery.rimBlur);
+  const blurDiscMat = new THREE.MeshBasicMaterial({
+    map: blurTex,
+    transparent: true,
+    opacity: 0.0,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+
+  const frontBrakeMat = new THREE.MeshStandardMaterial({
+    color: 0x26282e,
+    emissive: 0xff4206,
+    emissiveIntensity: 0.0,
+    metalness: 0.55,
+    roughness: 0.48
+  });
+  const rearBrakeMat = frontBrakeMat.clone();
+  const caliperMat = new THREE.MeshStandardMaterial({
+    color: livery.accent,
+    metalness: 0.65,
+    roughness: 0.25
+  });
+
+  const wheelDefs = [
+    { name: 'FL', x: 0.81, y: 0.360, z: 1.68, front: true, side: 1 },
+    { name: 'FR', x: -0.81, y: 0.360, z: 1.68, front: true, side: -1 },
+    { name: 'RL', x: 0.79, y: 0.365, z: -1.78, front: false, side: 1 },
+    { name: 'RR', x: -0.79, y: 0.365, z: -1.78, front: false, side: -1 }
+  ];
+
+  const wheels = [];
+  const blurDiscGeo = new THREE.CircleGeometry(0.224, 24);
+
+  for (const wd of wheelDefs) {
+    const steerGroup = new THREE.Group();
+    steerGroup.position.set(wd.x, wd.y, wd.z);
+    root.add(steerGroup);
+
+    // Non-rotating upright brake disc & caliper (visible through glossy spokes)
+    const bDisc = new THREE.Mesh(carGeos.brakeDiscGeo, wd.front ? frontBrakeMat : rearBrakeMat);
+    bDisc.position.x = -wd.side * 0.055;
+    steerGroup.add(bDisc);
+
+    const cal = new THREE.Mesh(carGeos.caliperGeo, caliperMat);
+    cal.position.x = -wd.side * 0.055;
+    steerGroup.add(cal);
+
+    // Spinning tire + glossy rim + motion blur overlay
+    const spinGroup = new THREE.Group();
+    steerGroup.add(spinGroup);
+
+    const tireMesh = new THREE.Mesh(wd.front ? carGeos.frontTireGeo : carGeos.rearTireGeo, tireMat);
+    tireMesh.castShadow = true;
+    tireMesh.receiveShadow = true;
+    spinGroup.add(tireMesh);
+
+    const rimMesh = new THREE.Mesh(wd.front ? carGeos.frontRimGeo : carGeos.rearRimGeo, rimMat);
+    if (wd.side < 0) rimMesh.scale.x = -1;
+    spinGroup.add(rimMesh);
+
+    const blurMesh = new THREE.Mesh(blurDiscGeo, blurDiscMat);
+    blurMesh.rotation.y = wd.side > 0 ? Math.PI / 2 : -Math.PI / 2;
+    blurMesh.position.x = wd.side * (wd.front ? 0.145 : 0.192);
+    spinGroup.add(blurMesh);
+
+    wheels.push({
+      steerGroup,
+      spinGroup,
+      front: wd.front,
+      side: wd.side,
+      radius: wd.front ? 0.360 : 0.365
+    });
+  }
+
+  scene.add(root);
+
+  return {
+    livery,
+    root,
+    chassisPivot,
+    steeringPivot,
+    drsPivot,
+    drsGlowMat,
+    rainLightMat,
+    shimmerMat,
+    frontBrakeMat,
+    rearBrakeMat,
+    blurDiscMat,
+    wheels,
+    lod
+  };
+}
+
+// ============================================================================
+// 9. FOUR-CAR RACE SIMULATION (SLIPSTREAM, OVERTAKES, BRAKING, DYNAMICS)
+// ============================================================================
+const cars = LIVERIES.map((livery, idx) => {
+  const visual = createFormulaCar(livery);
+  // Start in a tight electrifying 4-car pack accelerating down the main straight!
+  const startS = START_FINISH_S - 45 - idx * 9.5;
+  const startLat = (idx % 2 === 0 ? -2.2 : 2.2);
+  return {
+    id: idx,
+    visual,
+    s: wrapMod(startS, TRACK_LENGTH),
+    totalDist: startS,
+    lat: startLat,
+    targetLat: startLat,
+    latVel: 0,
+    speed: 74 - idx * 0.6,
+    prevSpeed: 74 - idx * 0.6,
+    accel: 0,
+    brakeHeat: 0,
+    drsOpen: 0,
+    steerAngle: 0,
+    rollAngle: 0,
+    pitchAngle: 0,
+    wheelRot: 0,
+    pacePhase: idx * 1.62 + 0.4,
+    paceFreq: 0.16 + idx * 0.023,
+    overtakeSide: idx % 2 === 0 ? 1 : -1,
+    overtakeTimer: 0,
+    worldPos: new THREE.Vector3(),
+    worldVel: new THREE.Vector3(),
+    worldQuat: new THREE.Quaternion(),
+    forward: new THREE.Vector3(0, 0, 1),
+    up: new THREE.Vector3(0, 1, 0),
+    right: new THREE.Vector3(-1, 0, 0),
+    onCurb: false,
+    curbSide: 0,
+    slipstream: 0,
+    rpm: 10500,
+    gear: 6
+  };
+});
+
+const _sampleNow = {};
+const _sampleAhead = {};
+const _rotMat = new THREE.Matrix4();
+const _targetQuat = new THREE.Quaternion();
+
+function updateRaceSimulation(dt, elapsed) {
+  // 1. Sort ranking order by totalDist (for slipstream, chasing & camera director)
+  const ranked = [...cars].sort((a, b) => b.totalDist - a.totalDist);
+  const leaderDist = ranked[0].totalDist;
+
+  for (let i = 0; i < cars.length; i++) {
+    const car = cars[i];
+    sampleTrack(car.s, _sampleNow);
+    sampleTrack(car.s + 38, _sampleAhead);
+
+    // Organic pace rhythm + subtle rubber-band keeps all 4 cars in thrilling wheel-to-wheel battles!
+    const paceWave = Math.sin(elapsed * car.paceFreq + car.pacePhase) * 2.8
+      + Math.cos(elapsed * 0.075 + car.id * 2.1) * 1.6;
+    const gapToLeader = leaderDist - car.totalDist;
+    const packTension = clamp((gapToLeader - 10) * 0.16, -2.0, 5.2);
+
+    // Slipstream draft & overtaking logic against cars ahead
+    let slipBoost = 0;
+    let blockingCar = null;
+    let minGapAhead = 999;
+
+    for (let j = 0; j < cars.length; j++) {
+      if (i === j) continue;
+      const other = cars[j];
+      const deltaS = other.totalDist - car.totalDist;
+      const latGap = Math.abs(other.lat - car.lat);
+
+      // Aerodynamic slipstream tow when 5..30 m behind and roughly aligned
+      if (deltaS > 4.5 && deltaS < 32 && latGap < 2.5) {
+        const align = 1 - latGap / 2.5;
+        const distFactor = smoothstep(32, 8, deltaS);
+        slipBoost = Math.max(slipBoost, align * distFactor * 6.4);
+      }
+
+      if (deltaS > 0.5 && deltaS < minGapAhead && deltaS < 18) {
+        minGapAhead = deltaS;
+        blockingCar = other;
+      }
+    }
+    car.slipstream = lerp(car.slipstream, slipBoost / 6.4, Math.min(1, dt * 5));
+
+    // Decide desired lateral line (ideal apex line vs clean overtaking lane)
+    let desiredLat = _sampleNow.idealLine;
+    if (blockingCar && minGapAhead < 16.5) {
+      const latDiff = car.lat - blockingCar.lat;
+      if (Math.abs(latDiff) < 3.1) {
+        if (car.overtakeTimer <= 0) {
+          // Pick whichever side has more open track space
+          car.overtakeSide = (blockingCar.lat > 0.4) ? -1 : (blockingCar.lat < -0.4 ? 1 : -car.overtakeSide);
+          car.overtakeTimer = 2.8;
+        }
+        desiredLat = clamp(blockingCar.lat + car.overtakeSide * 3.45, -TRACK_HALF_W + 1.85, TRACK_HALF_W - 1.85);
+      }
+    }
+    car.overtakeTimer = Math.max(0, car.overtakeTimer - dt);
+
+    // Hard lateral separation so side-by-side battles never touch or clip
+    for (let j = 0; j < cars.length; j++) {
+      if (i === j) continue;
+      const other = cars[j];
+      const dS = Math.abs(other.totalDist - car.totalDist);
+      if (dS < 6.4) {
+        const dLat = car.lat - other.lat;
+        const minLat = 2.55;
+        if (Math.abs(dLat) < minLat) {
+          const pushDir = dLat >= 0 ? 1 : -1;
+          desiredLat = clamp(other.lat + pushDir * (minLat + 0.35), -TRACK_HALF_W + 1.6, TRACK_HALF_W - 1.6);
+        }
+      }
+    }
+
+    // Target speed with corner profile, slipstream & DRS
+    const wantsDRS = _sampleNow.isStraight && car.speed > 62 && (slipBoost > 0.6 || _sampleNow.isMainStraight);
+    car.drsOpen = lerp(car.drsOpen, wantsDRS ? 1.0 : 0.0, Math.min(1, dt * 6.5));
+    const drsBonus = car.drsOpen * 3.6;
+
+    let desiredSpeed = _sampleNow.targetSpeed + paceWave + packTension + slipBoost + drsBonus;
+    // Prevent rear-ending if directly lined up behind a car in a tight corner
+    if (blockingCar && minGapAhead < 8.5 && Math.abs(blockingCar.lat - car.lat) < 2.2) {
+      desiredSpeed = Math.min(desiredSpeed, blockingCar.speed - 2.0);
+    }
+    desiredSpeed = clamp(desiredSpeed, 26, 95);
+
+    // Realistic acceleration & heavy corner braking
+    const speedErr = desiredSpeed - car.speed;
+    const maxRate = speedErr >= 0 ? 19.5 : 46.0;
+    const dv = clamp(speedErr * 3.2, -maxRate, maxRate);
+    car.prevSpeed = car.speed;
+    car.speed = Math.max(22, car.speed + dv * dt);
+    car.accel = (car.speed - car.prevSpeed) / Math.max(dt, 0.001);
+
+    // Smooth lateral steering dynamics
+    const latErr = desiredLat - car.lat;
+    const latForce = clamp(latErr * 6.2 - car.latVel * 4.2, -16, 16);
+    car.latVel += latForce * dt;
+    car.lat = clamp(car.lat + car.latVel * dt, -TRACK_HALF_W + 1.25, TRACK_HALF_W - 1.25);
+
+    // Advance along spline
+    car.s = wrapMod(car.s + car.speed * dt, TRACK_LENGTH);
+    car.totalDist += car.speed * dt;
+
+    // Sample updated exact 3D track pose
+    sampleTrack(car.s, _sampleNow);
+    const prevPos = car.worldPos.clone();
+    car.worldPos.copy(_sampleNow.pos)
+      .addScaledVector(_sampleNow.right, car.lat)
+      .addScaledVector(_sampleNow.up, 0.04);
+
+    // Smooth world velocity (used for Doppler audio & particle launch velocity)
+    if (elapsed > 0.05) {
+      car.worldVel.subVectors(car.worldPos, prevPos).divideScalar(Math.max(dt, 0.001));
+    } else {
+      car.worldVel.copy(_sampleNow.tangent).multiplyScalar(car.speed);
+    }
+
+    // Yaw heading includes subtle lateral slip / lane-change angle
+    const latHeadingAngle = clamp(-car.latVel / Math.max(car.speed, 18), -0.14, 0.14);
+    car.forward.copy(_sampleNow.tangent).addScaledVector(_sampleNow.right, -latHeadingAngle).normalize();
+    car.up.copy(_sampleNow.up);
+    car.right.crossVectors(car.forward, car.up).normalize();
+    car.up.crossVectors(car.right, car.forward).normalize();
+
+    // Basis matrix: local +Z = forward, +Y = up, +X = left (-right)
+    const left = car.right.clone().negate();
+    _rotMat.makeBasis(left, car.up, car.forward);
+    _targetQuat.setFromRotationMatrix(_rotMat);
+    car.worldQuat.slerp(_targetQuat, Math.min(1, dt * 16));
+
+    // Curb contact detection
+    const nearRightCurb = _sampleNow.curbRight && car.lat > TRACK_HALF_W - 2.35;
+    const nearLeftCurb = _sampleNow.curbLeft && car.lat < -(TRACK_HALF_W - 2.35);
+    car.onCurb = nearRightCurb || nearLeftCurb;
+    car.curbSide = nearRightCurb ? 1 : (nearLeftCurb ? -1 : 0);
+
+    // Braking thermal glow (heats fiercely under heavy corner braking, cools smoothly)
+    const brakeIntensity = clamp(-car.accel / 26.0, 0, 1);
+    if (brakeIntensity > 0.12) {
+      car.brakeHeat = Math.min(1.0, car.brakeHeat + brakeIntensity * dt * 2.8);
+    } else {
+      car.brakeHeat = Math.max(0.0, car.brakeHeat - dt * 0.62);
+    }
+
+    // Steering input & dynamic body roll / pitch / curb vibration
+    const targetSteer = clamp(-_sampleNow.curvature * 14.5 - latHeadingAngle * 1.4, -0.38, 0.38);
+    car.steerAngle = lerp(car.steerAngle, targetSteer, Math.min(1, dt * 12));
+
+    const latG = car.speed * car.speed * _sampleNow.curvature;
+    const targetRoll = clamp(latG * 0.0014, -0.048, 0.048);
+    const targetPitch = clamp(-car.accel * 0.0011, -0.032, 0.036);
+    car.rollAngle = lerp(car.rollAngle, targetRoll, Math.min(1, dt * 10));
+    car.pitchAngle = lerp(car.pitchAngle, targetPitch, Math.min(1, dt * 10));
+
+    const curbVib = car.onCurb ? Math.sin(elapsed * 92 + car.id) * 0.022 : 0;
+    const aeroSquat = -smoothstep(40, 92, car.speed) * 0.024;
+
+    // Virtual 8-speed gearbox RPM curve (for audio & steering wheel shift LEDs)
+    const speedNorm = clamp((car.speed - 20) / 74, 0, 1);
+    const gearFloat = 1 + speedNorm * 7.0;
+    car.gear = clamp(Math.floor(gearFloat), 1, 8);
+    const gearFrac = gearFloat - Math.floor(gearFloat);
+    car.rpm = 7800 + gearFrac * 4900 + (car.gear === 8 ? speedNorm * 950 : 0);
+
+    // Apply transforms & materials to visual rig
+    const v = car.visual;
+    v.root.position.copy(car.worldPos);
+    v.root.quaternion.copy(car.worldQuat);
+
+    v.chassisPivot.position.y = aeroSquat + curbVib;
+    v.chassisPivot.rotation.z = car.rollAngle + (car.onCurb ? curbVib * 1.4 : 0);
+    v.chassisPivot.rotation.x = car.pitchAngle;
+
+    // Steering wheel & front wheel upright steering
+    v.steeringPivot.rotation.z = car.steerAngle * 2.4;
+    car.wheelRot += (car.speed / 0.362) * dt;
+    const blurAlpha = smoothstep(14, 52, car.speed) * 0.84;
+    v.blurDiscMat.opacity = blurAlpha;
+
+    for (const w of v.wheels) {
+      w.spinGroup.rotation.x = car.wheelRot;
+      if (w.front) {
+        w.steerGroup.rotation.y = car.steerAngle;
+      }
+    }
+
+    // Glowing DRS flap articulation & emissive glow
+    v.drsPivot.rotation.x = -car.drsOpen * 0.48;
+    v.drsGlowMat.emissiveIntensity = 0.8 + car.drsOpen * 3.8;
+
+    // Pulsing rear LED rain light (brightens/flashes under heavy braking & harvest)
+    const rainPulse = brakeIntensity > 0.25 ? (0.5 + 0.5 * Math.sin(elapsed * 26)) : 0.35;
+    v.rainLightMat.emissiveIntensity = 1.6 + rainPulse * 3.2;
+
+    // Glowing brake discs (front discs glow hotter than rears, blackbody shift from cherry to incandescent orange)
+    const heatF = car.brakeHeat;
+    const heatR = car.brakeHeat * 0.72;
+    v.frontBrakeMat.emissive.setHSL(lerp(0.015, 0.085, heatF), 1.0, lerp(0.32, 0.56, heatF));
+    v.frontBrakeMat.emissiveIntensity = heatF * heatF * 6.2;
+    v.rearBrakeMat.emissive.setHSL(lerp(0.012, 0.072, heatR), 1.0, lerp(0.28, 0.50, heatR));
+    v.rearBrakeMat.emissiveIntensity = heatR * heatR * 4.5;
+
+    // Exhaust heat shimmer shader uniforms
+    v.shimmerMat.uniforms.uTime.value = elapsed + car.id * 1.7;
+    v.shimmerMat.uniforms.uIntensity.value = clamp(0.45 + (car.speed / 90) * 0.75 + (car.accel > 0 ? 0.35 : 0), 0.35, 1.35);
+  }
+
+  return ranked;
+}
+
+// ============================================================================
+// 10. VFX SYSTEMS: UNDERFLOOR SPARKS, TIRE SMOKE & CURB DUST (POOLED)
+// ============================================================================
+// 10.1 Titanium Underfloor Sparks (Instanced glowing streaks with gravity & ground bounce)
+const MAX_SPARKS = 320;
+const sparkGeo = new THREE.BoxGeometry(0.022, 0.022, 0.58);
+const sparkMat = new THREE.MeshBasicMaterial({
+  color: 0xffd27a,
+  blending: THREE.AdditiveBlending,
+  transparent: true,
+  opacity: 0.95,
+  depthWrite: false
+});
+const sparkInst = new THREE.InstancedMesh(sparkGeo, sparkMat, MAX_SPARKS);
+sparkInst.frustumCulled = false;
+scene.add(sparkInst);
+
+const sparks = [];
+for (let i = 0; i < MAX_SPARKS; i++) {
+  sparks.push({
+    active: false,
+    life: 0,
+    maxLife: 0.35,
+    pos: new THREE.Vector3(),
+    vel: new THREE.Vector3(),
+    groundY: 0
+  });
+}
+let sparkCursor = 0;
+
+function emitSpark(pos, vel, groundY) {
+  const sp = sparks[sparkCursor];
+  sparkCursor = (sparkCursor + 1) % MAX_SPARKS;
+  sp.active = true;
+  sp.life = 0;
+  sp.maxLife = 0.22 + rng() * 0.26;
+  sp.pos.copy(pos);
+  sp.vel.copy(vel);
+  sp.groundY = groundY;
+}
+
+// 10.2 Tire Smoke & Curb Dust Puffs (Instanced soft billboard quads)
+const MAX_SMOKE = 180;
+const smokeGeo = new THREE.PlaneGeometry(1, 1);
+const smokeMat = new THREE.MeshBasicMaterial({
+  map: softSmokeTex,
+  transparent: true,
+  opacity: 0.19,
+  depthWrite: false,
+  color: 0xe2d9cc
+});
+const smokeInst = new THREE.InstancedMesh(smokeGeo, smokeMat, MAX_SMOKE);
+smokeInst.frustumCulled = false;
+scene.add(smokeInst);
+
+const smokePuffs = [];
+for (let i = 0; i < MAX_SMOKE; i++) {
+  smokePuffs.push({
+    active: false,
+    life: 0,
+    maxLife: 0.85,
+    pos: new THREE.Vector3(),
+    vel: new THREE.Vector3(),
+    size: 1.0,
+    color: new THREE.Color(0xe2d9cc)
+  });
+}
+let smokeCursor = 0;
+
+function emitSmoke(pos, vel, isDust) {
+  const p = smokePuffs[smokeCursor];
+  smokeCursor = (smokeCursor + 1) % MAX_SMOKE;
+  p.active = true;
+  p.life = 0;
+  p.maxLife = isDust ? (0.65 + rng() * 0.45) : (0.75 + rng() * 0.5);
+  p.pos.copy(pos);
+  p.vel.copy(vel);
+  p.size = isDust ? 1.15 : 0.92;
+  p.color.setHex(isDust ? 0xc2ab88 : 0xd8dde4);
+}
+
+const _vfxMat = new THREE.Matrix4();
+const _vfxQuat = new THREE.Quaternion();
+const _vfxScale = new THREE.Vector3();
+const _vfxDir = new THREE.Vector3();
+const _zAxis = new THREE.Vector3(0, 0, 1);
+const _zeroMat = new THREE.Matrix4().makeScale(0, 0, 0);
+const _sparkCol = new THREE.Color();
+
+function updateVFX(dt, elapsed) {
+  // Emit sparks & curb dust/tire smoke from cars
+  for (let i = 0; i < cars.length; i++) {
+    const car = cars[i];
+    // High-speed underfloor bottoming on bumps, crests & curbs triggers titanium spark showers!
+    const bumpWave = Math.sin(car.s * 0.085) * Math.cos(car.s * 0.21);
+    const sparkChance = (car.speed > 66 && bumpWave > 0.38) || (car.onCurb && car.speed > 46);
+    if (sparkChance && rng() < 0.78) {
+      const burst = car.onCurb ? 4 : 3;
+      for (let b = 0; b < burst; b++) {
+        const origin = car.worldPos.clone()
+          .addScaledVector(car.forward, -0.55 - rng() * 0.9)
+          .addScaledVector(car.right, (rng() - 0.5) * 0.42)
+          .addScaledVector(car.up, 0.07);
+        const vel = car.worldVel.clone().multiplyScalar(0.32)
+          .addScaledVector(car.forward, -(14 + rng() * 14))
+          .addScaledVector(car.right, (rng() - 0.5) * 6.5)
+          .addScaledVector(car.up, 1.8 + rng() * 4.2);
+        emitSpark(origin, vel, car.worldPos.y + 0.03);
+      }
+    }
+
+    // Curb dust & lock-up braking tire smoke
+    if (car.onCurb && rng() < 0.65) {
+      const wheelPos = car.worldPos.clone()
+        .addScaledVector(car.forward, -1.65)
+        .addScaledVector(car.right, car.curbSide * 0.82)
+        .addScaledVector(car.up, 0.16);
+      const vel = car.worldVel.clone().multiplyScalar(0.15)
+        .addScaledVector(car.right, car.curbSide * (1.8 + rng() * 2.2))
+        .addScaledVector(car.up, 1.4 + rng() * 1.8);
+      emitSmoke(wheelPos, vel, true);
+    } else if (car.brakeHeat > 0.58 && car.accel < -16 && rng() < 0.45) {
+      // Heavy braking front tire smoke puff
+      const side = rng() < 0.5 ? 1 : -1;
+      const wheelPos = car.worldPos.clone()
+        .addScaledVector(car.forward, 1.55)
+        .addScaledVector(car.right, side * 0.80)
+        .addScaledVector(car.up, 0.14);
+      const vel = car.worldVel.clone().multiplyScalar(0.18)
+        .addScaledVector(car.up, 1.2 + rng() * 1.4);
+      emitSmoke(wheelPos, vel, false);
+    }
+  }
+
+  // Integrate sparks
+  for (let i = 0; i < MAX_SPARKS; i++) {
+    const sp = sparks[i];
+    if (!sp.active) {
+      sparkInst.setMatrixAt(i, _zeroMat);
+      continue;
+    }
+    sp.life += dt;
+    if (sp.life >= sp.maxLife) {
+      sp.active = false;
+      sparkInst.setMatrixAt(i, _zeroMat);
+      continue;
+    }
+    sp.vel.y -= 18.0 * dt;
+    sp.pos.addScaledVector(sp.vel, dt);
+    if (sp.pos.y < sp.groundY) {
+      sp.pos.y = sp.groundY;
+      sp.vel.y = Math.abs(sp.vel.y) * 0.45;
+      sp.vel.x *= 0.85;
+      sp.vel.z *= 0.85;
+    }
+
+    const fade = 1 - sp.life / sp.maxLife;
+    _vfxDir.copy(sp.vel);
+    const spd = _vfxDir.length();
+    if (spd > 0.01) _vfxDir.divideScalar(spd);
+    else _vfxDir.set(0, 0, 1);
+    _vfxQuat.setFromUnitVectors(_zAxis, _vfxDir);
+    _vfxScale.set(fade, fade, clamp(spd * 0.045, 0.4, 2.4) * fade);
+    _vfxMat.compose(sp.pos, _vfxQuat, _vfxScale);
+    sparkInst.setMatrixAt(i, _vfxMat);
+    _sparkCol.setRGB(2.8 * fade, 1.65 * fade * fade, 0.55 * fade * fade);
+    sparkInst.setColorAt(i, _sparkCol);
+  }
+  sparkInst.instanceMatrix.needsUpdate = true;
+  if (sparkInst.instanceColor) sparkInst.instanceColor.needsUpdate = true;
+
+  // Integrate billboarded smoke & curb dust puffs
+  for (let i = 0; i < MAX_SMOKE; i++) {
+    const p = smokePuffs[i];
+    if (!p.active) {
+      smokeInst.setMatrixAt(i, _zeroMat);
+      continue;
+    }
+    p.life += dt;
+    if (p.life >= p.maxLife) {
+      p.active = false;
+      smokeInst.setMatrixAt(i, _zeroMat);
+      continue;
+    }
+    p.vel.multiplyScalar(1 - dt * 2.2);
+    p.vel.y += 1.4 * dt;
+    p.pos.addScaledVector(p.vel, dt);
+
+    const t = p.life / p.maxLife;
+    const sc = p.size * (0.8 + t * 3.1) * Math.sin(Math.min(1, t * 1.15) * Math.PI);
+    _vfxScale.set(sc, sc, sc);
+    _vfxMat.compose(p.pos, camera.quaternion, _vfxScale);
+    smokeInst.setMatrixAt(i, _vfxMat);
+    smokeInst.setColorAt(i, p.color);
+  }
+  smokeInst.instanceMatrix.needsUpdate = true;
+  if (smokeInst.instanceColor) smokeInst.instanceColor.needsUpdate = true;
+}
+
+// ============================================================================
+// 11. CINEMATIC BROADCAST CAMERA SYSTEM + DAMPED ORBITCONTROLS FREE MODE
+// ============================================================================
+const CAM_MODES = ['helicopter', 'trackside', 'chase', 'onboard'];
+let broadcastModeIdx = 0;
+let shotTimer = 0;
+let shotDuration = 7.2;
+let freeCamActive = false;
+let onboardCarIdx = 0;
+
+// Trackside crane state
+const tracksidePos = new THREE.Vector3();
+let tracksideSide = 1;
+const smoothCamPos = new THREE.Vector3(24, 14, 30);
+const smoothCamTarget = new THREE.Vector3(0, 1, 0);
+const prevCamPos = new THREE.Vector3().copy(camera.position);
+const camVelocity = new THREE.Vector3();
+const prevPackCenter = new THREE.Vector3();
+let packCenterInitialized = false;
+let currentFocusDist = 18.0;
+
+function pickTracksideStation(leadCar) {
+  // Place virtual broadcast camera crane 85m ahead of lead car on an unobstructed outer vantage
+  const aheadSample = sampleTrack(leadCar.s + 88);
+  tracksideSide = aheadSample.curvature >= 0 ? -1 : 1;
+  if (aheadSample.isMainStraight) tracksideSide = -1; // Grandstand side
+  const distOut = aheadSample.isMainStraight ? 11.5 : 13.5;
+  tracksidePos.copy(aheadSample.pos)
+    .addScaledVector(aheadSample.right, tracksideSide * distOut)
+    .addScaledVector(worldUp, 3.1);
+}
+
+function cutToBroadcastMode(modeIdx, ranked) {
+  broadcastModeIdx = modeIdx % CAM_MODES.length;
+  shotTimer = 0;
+  const mode = CAM_MODES[broadcastModeIdx];
+  const leader = ranked[0];
+  const packCenter = new THREE.Vector3();
+  for (const c of cars) packCenter.add(c.worldPos);
+  packCenter.multiplyScalar(0.25);
+
+  if (mode === 'helicopter') {
+    shotDuration = 8.0;
+    const orbitAng = elapsed * 0.22 + 2.55;
+    const heliP = packCenter.clone().add(new THREE.Vector3(
+      Math.cos(orbitAng) * 38,
+      19.0,
+      Math.sin(orbitAng) * 38
+    ));
+    smoothCamPos.copy(heliP);
+    smoothCamTarget.copy(packCenter).add(new THREE.Vector3(0, 1.4, 0));
+    camera.position.copy(heliP);
+    camera.lookAt(smoothCamTarget);
+    camera.fov = 46;
+    camera.updateProjectionMatrix();
+  } else if (mode === 'trackside') {
+    shotDuration = 6.2;
+    pickTracksideStation(leader);
+    smoothCamPos.copy(tracksidePos);
+    camera.position.copy(tracksidePos);
+    camera.fov = 34; // Telephoto broadcast lens compression!
+    camera.updateProjectionMatrix();
+  } else if (mode === 'chase') {
+    shotDuration = 7.6;
+    const chaseP = leader.worldPos.clone()
+      .addScaledVector(leader.forward, -9.2)
+      .addScaledVector(leader.up, 2.75);
+    smoothCamPos.copy(chaseP);
+    camera.position.copy(chaseP);
+    camera.fov = 52;
+    camera.updateProjectionMatrix();
+  } else if (mode === 'onboard') {
+    shotDuration = 6.8;
+    // Choose P2 (chasing the leader right ahead!) for maximum wheel-to-wheel drama
+    onboardCarIdx = ranked[1].id;
+    camera.fov = 62;
+    camera.updateProjectionMatrix();
+  }
+}
+
+// Seamless transition into smooth damped OrbitControls on user pointer drag or scroll
+let pointerDownPos = { x: 0, y: 0 };
+let pointerIsDown = false;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  pointerIsDown = true;
+  pointerDownPos.x = e.clientX;
+  pointerDownPos.y = e.clientY;
+  unlockAudio();
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!pointerIsDown || freeCamActive) return;
+  const moved = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+  if (moved > 6) {
+    enterFreeOrbitMode();
+  }
+});
+
+renderer.domElement.addEventListener('pointerup', () => {
+  pointerIsDown = false;
+});
+
+renderer.domElement.addEventListener('wheel', () => {
+  unlockAudio();
+  if (!freeCamActive) enterFreeOrbitMode();
+}, { passive: true });
+
+renderer.domElement.addEventListener('dblclick', () => {
+  if (freeCamActive) {
+    freeCamActive = false;
+    controls.enabled = false;
+    const ranked = [...cars].sort((a, b) => b.totalDist - a.totalDist);
+    cutToBroadcastMode((broadcastModeIdx + 1) % CAM_MODES.length, ranked);
+  }
+});
+
+// Silent keyboard shortcuts (no UI overlays): 1-4 broadcast shots, 5 free orbit, Space/C resume broadcast
+window.addEventListener('keydown', (e) => {
+  unlockAudio();
+  const ranked = [...cars].sort((a, b) => b.totalDist - a.totalDist);
+  if (e.key === '1') { freeCamActive = false; controls.enabled = false; cutToBroadcastMode(0, ranked); }
+  else if (e.key === '2') { freeCamActive = false; controls.enabled = false; cutToBroadcastMode(1, ranked); }
+  else if (e.key === '3') { freeCamActive = false; controls.enabled = false; cutToBroadcastMode(2, ranked); }
+  else if (e.key === '4') { freeCamActive = false; controls.enabled = false; cutToBroadcastMode(3, ranked); }
+  else if (e.key === '5') { enterFreeOrbitMode(); }
+  else if (e.key === ' ' || e.key.toLowerCase() === 'c') {
+    freeCamActive = false;
+    controls.enabled = false;
+    cutToBroadcastMode((broadcastModeIdx + 1) % CAM_MODES.length, ranked);
+  }
+});
+
+function enterFreeOrbitMode() {
+  freeCamActive = true;
+  controls.enabled = true;
+  camera.fov = 46;
+  camera.updateProjectionMatrix();
+  const packCenter = new THREE.Vector3();
+  for (const c of cars) packCenter.add(c.worldPos);
+  packCenter.multiplyScalar(0.25);
+  packCenter.y += 0.9;
+  controls.target.copy(packCenter);
+  // If coming from tight onboard cam, pull smoothly back to an ideal orbit distance
+  if (camera.position.distanceTo(packCenter) < 6.0) {
+    camera.position.copy(packCenter).add(new THREE.Vector3(12, 6.5, -14));
+  }
+  prevPackCenter.copy(packCenter);
+  packCenterInitialized = true;
+  controls.update();
+}
+
+function updateCameraAndShadows(dt, elapsed, ranked) {
+  const leader = ranked[0];
+  const packCenter = new THREE.Vector3();
+  for (const c of cars) packCenter.add(c.worldPos);
+  packCenter.multiplyScalar(0.25);
+
+  if (!packCenterInitialized) {
+    prevPackCenter.copy(packCenter);
+    packCenterInitialized = true;
+  }
+
+  prevCamPos.copy(camera.position);
+
+  if (freeCamActive) {
+    // Carry OrbitControls smoothly alongside the 300 km/h pack so free-orbiting stays locked to the race!
+    const deltaPack = new THREE.Vector3().subVectors(packCenter, prevPackCenter);
+    camera.position.add(deltaPack);
+    controls.target.add(deltaPack);
+    controls.update();
+    currentFocusDist = camera.position.distanceTo(controls.target);
+  } else {
+    shotTimer += dt;
+    if (shotTimer >= shotDuration) {
+      cutToBroadcastMode((broadcastModeIdx + 1) % CAM_MODES.length, ranked);
+    }
+
+    const mode = CAM_MODES[broadcastModeIdx];
+    if (mode === 'helicopter') {
+      const orbitAng = elapsed * 0.22 + 2.55;
+      const rad = 38 + Math.sin(elapsed * 0.4) * 4.5;
+      const desiredPos = packCenter.clone().add(new THREE.Vector3(
+        Math.cos(orbitAng) * rad,
+        19.0 + Math.sin(elapsed * 0.35) * 3.0,
+        Math.sin(orbitAng) * rad
+      ));
+      const desiredTarget = packCenter.clone().add(new THREE.Vector3(0, 1.4, 0));
+      smoothCamPos.lerp(desiredPos, Math.min(1, dt * 4.0));
+      smoothCamTarget.lerp(desiredTarget, Math.min(1, dt * 6.5));
+      camera.position.copy(smoothCamPos);
+      camera.lookAt(smoothCamTarget);
+      currentFocusDist = camera.position.distanceTo(smoothCamTarget);
+
+    } else if (mode === 'trackside') {
+      // If the entire pack has passed far beyond the crane, relocate to a fresh ahead vantage
+      if (tracksidePos.distanceTo(packCenter) > 140) {
+        pickTracksideStation(leader);
+      }
+      camera.position.copy(tracksidePos);
+      const desiredTarget = packCenter.clone().add(new THREE.Vector3(0, 0.75, 0));
+      smoothCamTarget.lerp(desiredTarget, Math.min(1, dt * 9.5));
+      camera.lookAt(smoothCamTarget);
+      // Dynamic telephoto zoom tightening as cars approach
+      const dist = camera.position.distanceTo(smoothCamTarget);
+      const targetFov = clamp(24 + (dist / 110) * 18, 24, 44);
+      camera.fov = lerp(camera.fov, targetFov, Math.min(1, dt * 4));
+      camera.updateProjectionMatrix();
+      currentFocusDist = dist;
+
+    } else if (mode === 'chase') {
+      const hero = leader;
+      const sway = Math.sin(elapsed * 0.75) * 1.45;
+      const desiredPos = hero.worldPos.clone()
+        .addScaledVector(hero.forward, -8.8)
+        .addScaledVector(hero.up, 2.55)
+        .addScaledVector(hero.right, sway);
+      const desiredTarget = hero.worldPos.clone()
+        .addScaledVector(hero.forward, 8.5)
+        .addScaledVector(hero.up, 0.85);
+      smoothCamPos.lerp(desiredPos, Math.min(1, dt * 8.5));
+      smoothCamTarget.lerp(desiredTarget, Math.min(1, dt * 10.5));
+      camera.position.copy(smoothCamPos);
+      camera.lookAt(smoothCamTarget);
+      const speedFov = 48 + smoothstep(35, 92, hero.speed) * 11;
+      camera.fov = lerp(camera.fov, speedFov, Math.min(1, dt * 4));
+      camera.updateProjectionMatrix();
+      currentFocusDist = camera.position.distanceTo(hero.worldPos);
+
+    } else if (mode === 'onboard') {
+      const car = cars[onboardCarIdx];
+      // Classic T-Cam perspective mounted above airbox looking over helmet, halo & rival ahead
+      const tCamPos = car.worldPos.clone()
+        .addScaledVector(car.forward, -0.34)
+        .addScaledVector(car.up, 1.18)
+        .addScaledVector(car.right, 0.04);
+      const lookAhead = car.worldPos.clone()
+        .addScaledVector(car.forward, 18.0)
+        .addScaledVector(car.up, 0.62);
+      camera.position.copy(tCamPos);
+      camera.up.lerp(car.up, Math.min(1, dt * 14));
+      camera.lookAt(lookAhead);
+      currentFocusDist = 14.0;
+    }
+
+    if (mode !== 'onboard') {
+      camera.up.lerp(worldUp, Math.min(1, dt * 8));
+    }
+  }
+
+  prevPackCenter.copy(packCenter);
+  camVelocity.subVectors(camera.position, prevCamPos).divideScalar(Math.max(dt, 0.001));
+
+  // Keep sky dome centered around camera so horizon is infinite
+  skyMesh.position.copy(camera.position);
+
+  // Dynamically center crisp directional sun shadows on the active pack (texel-snapped to eliminate shimmer)
+  const snap = (SHADOW_EXTENT * 2) / 2048;
+  const focusX = Math.round(packCenter.x / snap) * snap;
+  const focusY = Math.round(packCenter.y / snap) * snap;
+  const focusZ = Math.round(packCenter.z / snap) * snap;
+  sunLight.target.position.set(focusX, focusY, focusZ);
+  sunLight.position.set(
+    focusX + SUN_DIR.x * 165,
+    focusY + SUN_DIR.y * 165,
+    focusZ + SUN_DIR.z * 165
+  );
+  sunLight.target.updateMatrixWorld();
+}
+
+// ============================================================================
+// 12. POST-PROCESSING: BLOOM, REAL DEPTH-OF-FIELD & SUBTLE FILM GRAIN
+// ============================================================================
+const rtWidth = Math.floor(window.innerWidth * renderer.getPixelRatio());
+const rtHeight = Math.floor(window.innerHeight * renderer.getPixelRatio());
+
+function makeHDRDepthTarget(w, h) {
+  const depthTex = new THREE.DepthTexture(w, h);
+  depthTex.type = THREE.UnsignedIntType;
+  depthTex.format = THREE.DepthFormat;
+  return new THREE.WebGLRenderTarget(w, h, {
+    type: THREE.HalfFloatType,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: true,
+    depthTexture: depthTex
+  });
+}
+
+const composerTarget = makeHDRDepthTarget(rtWidth, rtHeight);
+const composer = new EffectComposer(renderer, composerTarget);
+// Ensure secondary target also carries a depth texture just in case of swaps
+composer.renderTarget2.depthTexture = new THREE.DepthTexture(rtWidth, rtHeight);
+composer.renderTarget2.depthTexture.type = THREE.UnsignedIntType;
+composer.renderTarget2.depthTexture.format = THREE.DepthFormat;
+
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.30, // calibrated golden-hour bloom strength
+  0.48, // smooth optical bloom radius
+  1.12  // HDR threshold so brake glow, sparks, DRS, rain light & floodlights bloom cleanly without washing paint
+);
+composer.addPass(bloomPass);
+
+class CinematicFinishPass extends Pass {
+  constructor() {
+    super();
+    this.uniforms = {
+      tDiffuse: { value: null },
+      tDepth: { value: null },
+      uResolution: { value: new THREE.Vector2(rtWidth, rtHeight) },
+      uNear: { value: camera.near },
+      uFar: { value: camera.far },
+      uFocusDist: { value: 22.0 },
+      uDofStrength: { value: 1.0 },
+      uTime: { value: 0.0 }
+    };
+    this.material = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        #include <packing>
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tDepth;
+        uniform vec2 uResolution;
+        uniform float uNear;
+        uniform float uFar;
+        uniform float uFocusDist;
+        uniform float uDofStrength;
+        uniform float uTime;
+        varying vec2 vUv;
+
+        float linearizeDepth(float depthSample) {
+          float viewZ = perspectiveDepthToViewZ(depthSample, uNear, uFar);
+          return -viewZ;
+        }
+
+        // Narkowicz ACES Filmic Tone Mapping
+        vec3 acesFilm(vec3 x) {
+          const float a = 2.51;
+          const float b = 0.03;
+          const float c = 2.43;
+          const float d = 0.59;
+          const float e = 0.14;
+          return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+        }
+
+        float grainHash(vec2 p) {
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
+
+        void main() {
+          float rawDepth = texture2D(tDepth, vUv).x;
+          float dist = linearizeDepth(rawDepth);
+
+          // Subtle cinematic Depth-of-Field circle of confusion
+          float focusBand = max(uFocusDist * 0.45, 7.0);
+          float coc = clamp((abs(dist - uFocusDist) - focusBand * 0.35) / (focusBand * 2.2), 0.0, 1.0);
+          // Keep sky crisp enough while gently softening far background & close foreground edge
+          if (rawDepth > 0.9995) coc *= 0.35;
+          float radiusPx = coc * 2.65 * uDofStrength;
+
+          vec3 col = texture2D(tDiffuse, vUv).rgb;
+          if (radiusPx > 0.18) {
+            vec2 texel = radiusPx / uResolution;
+            vec3 acc = col * 1.4;
+            float wSum = 1.4;
+            // 8-tap golden-angle circular bokeh disk
+            const vec2 taps[8] = vec2[8](
+              vec2( 0.85,  0.12), vec2(-0.62,  0.58),
+              vec2(-0.18, -0.84), vec2( 0.56, -0.64),
+              vec2( 0.32,  0.42), vec2(-0.48, -0.18),
+              vec2(-0.12,  0.52), vec2( 0.44, -0.26)
+            );
+            for (int i = 0; i < 8; i++) {
+              vec2 sampleUv = clamp(vUv + taps[i] * texel, vec2(0.001), vec2(0.999));
+              acc += texture2D(tDiffuse, sampleUv).rgb;
+              wSum += 1.0;
+            }
+            col = acc / wSum;
+          }
+
+          // Calibrated golden-hour exposure & ACES Filmic tone mapping
+          col = clamp(col, vec3(0.0), vec3(64.0));
+          col *= 0.96;
+          col = acesFilm(col);
+
+          // Subtle warm golden highlights & rich shadow contrast
+          vec3 lumaW = vec3(0.2126, 0.7152, 0.0722);
+          float luma = dot(col, lumaW);
+          col = mix(col, col * vec3(1.03, 1.00, 0.96), smoothstep(0.35, 0.95, luma) * 0.45);
+          col = mix(col, col * vec3(0.97, 0.98, 1.03), (1.0 - smoothstep(0.0, 0.35, luma)) * 0.25);
+
+          // Gentle broadcast optical vignette
+          vec2 vigUv = vUv * 2.0 - 1.0;
+          float vig = 1.0 - dot(vigUv, vigUv) * 0.14;
+          col *= clamp(vig, 0.74, 1.0);
+
+          // Linear -> sRGB gamma encoding (strictly positive base -> zero NaN)
+          col = pow(max(col, vec3(0.00001)), vec3(1.0 / 2.2));
+
+          // Subtle photographic animated film grain
+          float g = grainHash(gl_FragCoord.xy + fract(uTime * 17.31) * 913.7) - 0.5;
+          col += g * (0.022 + 0.014 * (1.0 - luma));
+
+          gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+        }
+      `
+    });
+    this.fsQuad = new FullScreenQuad(this.material);
+    this.needsSwap = false;
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    this.uniforms.tDiffuse.value = readBuffer.texture;
+    this.uniforms.tDepth.value = readBuffer.depthTexture || composer.renderTarget1.depthTexture;
+    if (this.renderToScreen) {
+      renderer.setRenderTarget(null);
+      this.fsQuad.render(renderer);
+    } else {
+      renderer.setRenderTarget(writeBuffer);
+      this.fsQuad.render(renderer);
+    }
+  }
+}
+
+const finishPass = new CinematicFinishPass();
+composer.addPass(finishPass);
+
+// ============================================================================
+// 13. SYNTHESIZED WEBAUDIO ENGINE WHINE + REAL-TIME DOPPLER EFFECT
+// ============================================================================
+let audioCtx = null;
+let audioMaster = null;
+let audioUnlocked = false;
+const engineVoices = [];
+
+function makeExhaustWaveshaper(ctx) {
+  const shaper = ctx.createWaveShaper();
+  const samples = 256;
+  const curve = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const x = (i * 2) / samples - 1;
+    curve[i] = Math.tanh(x * 2.6);
+  }
+  shaper.curve = curve;
+  return shaper;
+}
+
+function unlockAudio() {
+  if (audioUnlocked) {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    return;
+  }
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    audioCtx = new AudioContextClass();
+    audioUnlocked = true;
+
+    audioMaster = audioCtx.createGain();
+    audioMaster.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    audioMaster.gain.exponentialRampToValueAtTime(0.32, audioCtx.currentTime + 0.6);
+    audioMaster.connect(audioCtx.destination);
+
+    // Build 4 individual harmonic Formula engine voices (one per car!)
+    for (let i = 0; i < cars.length; i++) {
+      const oscMain = audioCtx.createOscillator();
+      const oscHarm = audioCtx.createOscillator();
+      const oscTurbo = audioCtx.createOscillator();
+
+      oscMain.type = 'sawtooth';
+      oscHarm.type = 'triangle';
+      oscTurbo.type = 'sine';
+
+      const gMain = audioCtx.createGain();
+      const gHarm = audioCtx.createGain();
+      const gTurbo = audioCtx.createGain();
+      gMain.gain.value = 0.42;
+      gHarm.gain.value = 0.28;
+      gTurbo.gain.value = 0.14;
+
+      const shaper = makeExhaustWaveshaper(audioCtx);
+      const formant = audioCtx.createBiquadFilter();
+      formant.type = 'bandpass';
+      formant.frequency.value = 680;
+      formant.Q.value = 1.35;
+
+      const lp = audioCtx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 2600;
+
+      const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+      const voiceGain = audioCtx.createGain();
+      voiceGain.gain.value = 0.0001;
+
+      oscMain.connect(gMain).connect(shaper);
+      oscHarm.connect(gHarm).connect(shaper);
+      shaper.connect(formant).connect(lp).connect(voiceGain);
+      oscTurbo.connect(gTurbo).connect(lp);
+
+      if (panner) {
+        voiceGain.connect(panner).connect(audioMaster);
+      } else {
+        voiceGain.connect(audioMaster);
+      }
+
+      const t0 = audioCtx.currentTime;
+      oscMain.start(t0);
+      oscHarm.start(t0);
+      oscTurbo.start(t0);
+
+      engineVoices.push({
+        oscMain,
+        oscHarm,
+        oscTurbo,
+        formant,
+        lp,
+        panner,
+        voiceGain,
+        detuneScale: 0.96 + i * 0.028 // Distinct engine harmonic timbre per car
+      });
+    }
+  } catch (_) {
+    // WebAudio unavailable
+  }
+}
+
+const _camRight = new THREE.Vector3();
+const _toCar = new THREE.Vector3();
+const _relVel = new THREE.Vector3();
+
+function updateEngineAudio() {
+  if (!audioUnlocked || !audioCtx || audioCtx.state !== 'running') return;
+
+  const now = audioCtx.currentTime;
+  const SPEED_OF_SOUND = 343.0;
+  _camRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+
+  for (let i = 0; i < cars.length; i++) {
+    const car = cars[i];
+    const voice = engineVoices[i];
+    if (!voice) continue;
+
+    _toCar.subVectors(car.worldPos, camera.position);
+    const dist = Math.max(_toCar.length(), 1.8);
+    _toCar.divideScalar(dist);
+
+    // Real physical Doppler pitch factor: c / (c + v_radial)
+    _relVel.subVectors(car.worldVel, camVelocity);
+    const radialVel = _relVel.dot(_toCar); // > 0 moving away, < 0 approaching
+    const doppler = clamp(SPEED_OF_SOUND / (SPEED_OF_SOUND + radialVel), 0.62, 1.58);
+
+    // High-revving Formula firing frequency scaled by RPM + Doppler shift
+    const baseFreq = (car.rpm / 60) * 3.0 * voice.detuneScale; // 3 firings/rev (V6/V10 bark)
+    const fMain = clamp(baseFreq * doppler, 90, 1400);
+    const fHarm = clamp(fMain * 1.5, 130, 2200);
+    const fTurbo = clamp((950 + car.speed * 26) * doppler, 600, 4800);
+
+    voice.oscMain.frequency.setTargetAtTime(fMain, now, 0.025);
+    voice.oscHarm.frequency.setTargetAtTime(fHarm, now, 0.025);
+    voice.oscTurbo.frequency.setTargetAtTime(fTurbo, now, 0.03);
+
+    // Exhaust filter opens dramatically on full throttle & narrows with distance
+    const throttleOpen = car.accel > -2 ? 1.0 : 0.45;
+    const distAirAbsorb = clamp(1.0 / (1.0 + dist * 0.015), 0.18, 1.0);
+    voice.formant.frequency.setTargetAtTime(clamp(fMain * 1.65, 280, 1900), now, 0.04);
+    voice.lp.frequency.setTargetAtTime(clamp((1200 + 2800 * throttleOpen) * distAirAbsorb, 350, 4400), now, 0.04);
+
+    // Distance attenuation & stereo panning
+    const gain = clamp(1.0 / (1.0 + 0.0085 * dist * dist * 0.18 + 0.045 * dist), 0.0, 0.48)
+      * (0.55 + 0.45 * throttleOpen);
+    voice.voiceGain.gain.setTargetAtTime(gain, now, 0.03);
+
+    if (voice.panner) {
+      const pan = clamp(_toCar.dot(_camRight), -0.92, 0.92);
+      voice.panner.pan.setTargetAtTime(pan, now, 0.03);
+    }
+  }
+}
+
+// ============================================================================
+// 14. RESIZE HANDLER & MAIN 60 FPS ANIMATION LOOP
+// ============================================================================
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio, 1.75);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setPixelRatio(dpr);
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  const pw = Math.floor(w * dpr);
+  const ph = Math.floor(h * dpr);
+  if (composer.renderTarget1.depthTexture) {
+    composer.renderTarget1.depthTexture.dispose();
+    composer.renderTarget1.depthTexture = new THREE.DepthTexture(pw, ph);
+    composer.renderTarget1.depthTexture.type = THREE.UnsignedIntType;
+    composer.renderTarget1.depthTexture.format = THREE.DepthFormat;
+  }
+  if (composer.renderTarget2.depthTexture) {
+    composer.renderTarget2.depthTexture.dispose();
+    composer.renderTarget2.depthTexture = new THREE.DepthTexture(pw, ph);
+    composer.renderTarget2.depthTexture.type = THREE.UnsignedIntType;
+    composer.renderTarget2.depthTexture.format = THREE.DepthFormat;
+  }
+  bloomPass.resolution.set(w, h);
+  finishPass.uniforms.uResolution.value.set(pw, ph);
+});
+
+let lastTime = performance.now();
+let elapsed = 0;
+
+// Initialize initial poses & launch directly into dramatic helicopter broadcast shot
+const initialRanked = updateRaceSimulation(0.016, 0.016);
+cutToBroadcastMode(0, initialRanked);
+updateCameraAndShadows(0.016, 0.016, initialRanked);
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - lastTime) * 0.001, 0.05);
+  lastTime = now;
+  elapsed += dt;
+
+  // 1. Update 4-car Grand Prix race physics, overtakes, slipstream, braking, DRS & wheels
+  const ranked = updateRaceSimulation(dt, elapsed);
+
+  // 2. Update pooled sparks, tire smoke & curb dust VFX
+  updateVFX(dt, elapsed);
+
+  // 3. Update cinematic broadcast camera (or damped OrbitControls) & dynamic sun shadows
+  updateCameraAndShadows(dt, elapsed, ranked);
+
+  // 4. Update car LODs against active camera
+  for (let i = 0; i < cars.length; i++) {
+    cars[i].visual.lod.update(camera);
+  }
+
+  // 5. Update synthesized WebAudio engine whine + Doppler shift
+  updateEngineAudio();
+
+  // 6. Update wind foliage/flag animation & post-processing uniforms, then render
+  foliageWindUniform.value = elapsed;
+  finishPass.uniforms.uFocusDist.value = lerp(finishPass.uniforms.uFocusDist.value, currentFocusDist, Math.min(1, dt * 8));
+  finishPass.uniforms.uTime.value = elapsed;
+  composer.render();
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

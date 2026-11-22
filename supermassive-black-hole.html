@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supermassive Black Hole</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000000;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+    // -------------------------------------------------------------------------
+    // Renderer & Scene Setup
+    // -------------------------------------------------------------------------
+    const renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      powerPreference: 'high-performance',
+      stencil: false,
+      depth: true
+    });
+    const maxDpr = Math.min(window.devicePixelRatio || 1, 1.75);
+    renderer.setPixelRatio(maxDpr);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000, 1);
+    renderer.toneMapping = THREE.NoToneMapping; // Handled in final cinema pass
+    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(
+      44,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      600
+    );
+    // Start slightly pulled back and slowly drift inward toward the black hole
+    camera.position.set(0.0, 1.4, 28.5);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.045;
+    controls.enablePan = false;
+    controls.rotateSpeed = 0.65;
+    controls.zoomSpeed = 0.85;
+    controls.minDistance = 7.8;
+    controls.maxDistance = 58.0;
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    let autoDriftActive = true;
+    let userDragging = false;
+    controls.addEventListener('start', () => {
+      userDragging = true;
+    });
+    controls.addEventListener('end', () => {
+      userDragging = false;
+    });
+    renderer.domElement.addEventListener('wheel', () => {
+      // Yield inward camera drift immediately if user manually zooms
+      autoDriftActive = false;
+    }, { passive: true });
+
+    // -------------------------------------------------------------------------
+    // Deep Space Background Dome (Subtle Cosmic Dust + Faint Distant Galaxies)
+    // -------------------------------------------------------------------------
+    const skyVertexShader = /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const skyFragmentShader = /* glsl */ `
+      precision highp float;
+      varying vec3 vDir;
+      uniform float uTime;
+
+      float hash31(vec3 p) {
+        p = fract(p * vec3(443.897, 441.423, 437.195));
+        p += dot(p, p.yzx + 19.19);
+        return fract((p.x + p.y) * p.z);
+      }
+
+      vec3 hash33(vec3 p) {
+        p = fract(p * vec3(443.897, 441.423, 437.195));
+        p += dot(p, p.yxz + 19.19);
+        return fract((p.xxy + p.yxx) * p.zyx);
+      }
+
+      float noise3(vec3 p) {
+        vec3 i = floor(p);
+        vec3 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float n000 = hash31(i + vec3(0,0,0));
+        float n100 = hash31(i + vec3(1,0,0));
+        float n010 = hash31(i + vec3(0,1,0));
+        float n110 = hash31(i + vec3(1,1,0));
+        float n001 = hash31(i + vec3(0,0,1));
+        float n101 = hash31(i + vec3(1,0,1));
+        float n011 = hash31(i + vec3(0,1,1));
+        float n111 = hash31(i + vec3(1,1,1));
+        return mix(
+          mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+          mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+          f.z
+        );
+      }
+
+      float fbm(vec3 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += a * noise3(p);
+          p = p * 2.04 + vec3(17.3, 9.2, 23.7);
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      // Faint procedural distant galaxies scattered across the celestial sphere
+      vec3 distantGalaxies(vec3 dir, float scale) {
+        vec3 p = dir * scale;
+        vec3 cell = floor(p);
+        vec3 acc = vec3(0.0);
+
+        for (int x = -1; x <= 1; x++) {
+          for (int y = -1; y <= 1; y++) {
+            for (int z = -1; z <= 1; z++) {
+              vec3 c = cell + vec3(float(x), float(y), float(z));
+              vec3 rnd = hash33(c);
+              if (rnd.x > 0.90) {
+                vec3 center = normalize(c + 0.15 + 0.7 * rnd);
+                float cosAng = dot(dir, center);
+                if (cosAng > 0.996) {
+                  vec3 up = abs(center.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+                  vec3 t1 = normalize(cross(up, center));
+                  vec3 t2 = cross(center, t1);
+                  vec3 diff = dir - center * cosAng;
+                  vec2 local = vec2(dot(diff, t1), dot(diff, t2));
+
+                  // Random orientation and inclination
+                  float rot = rnd.y * 6.2831853;
+                  float cr = cos(rot), sr = sin(rot);
+                  local = mat2(cr, -sr, sr, cr) * local;
+
+                  float tilt = 1.3 + rnd.z * 3.8;
+                  vec2 ell = vec2(local.x, local.y * tilt);
+                  float sz = (0.008 + 0.016 * fract(rnd.x * 37.1));
+                  float r = length(ell) / sz;
+
+                  if (r < 2.2) {
+                    float core = exp(-r * r * 14.0);
+                    float ang = atan(ell.y, ell.x);
+                    float spiral = 0.68 + 0.32 * cos(2.0 * ang + log(r + 0.08) * 5.2);
+                    float disk = exp(-r * 2.6) * spiral;
+
+                    vec3 colWarm = vec3(0.95, 0.80, 0.62);
+                    vec3 colCool = vec3(0.62, 0.76, 1.00);
+                    vec3 colDust = vec3(0.82, 0.66, 0.74);
+                    vec3 gCol = mix(colWarm, colCool, fract(rnd.y * 13.7));
+                    gCol = mix(gCol, colDust, 0.25 * fract(rnd.z * 19.3));
+
+                    float intensity = (0.055 + 0.095 * fract(rnd.x * 71.3));
+                    acc += (gCol * disk * 0.65 + vec3(1.0, 0.95, 0.88) * core) * intensity;
+                  }
+                }
+              }
+            }
+          }
+        }
+        return acc;
+      }
+
+      void main() {
+        vec3 d = normalize(vDir);
+
+        // Deep cosmic void base
+        vec3 col = vec3(0.0018, 0.0022, 0.0042);
+
+        // Faint tilted galactic dust plane
+        vec3 galPlaneDir = normalize(vec3(0.28, 0.88, -0.38));
+        float band = exp(-pow(dot(d, galPlaneDir) * 3.4, 2.0));
+        float n1 = fbm(d * 3.2 + vec3(1.4, -0.7, 2.1));
+        float n2 = fbm(d * 7.8 + vec3(-4.2, 3.1, 0.8));
+        float dustRift = smoothstep(0.36, 0.68, fbm(d * 5.6 + vec3(2.0)));
+
+        vec3 mwColor = mix(vec3(0.012, 0.016, 0.032), vec3(0.034, 0.025, 0.020), n2);
+        col += mwColor * band * n1 * (1.0 - 0.55 * dustRift);
+
+        // Subtle deep-field nebula variations
+        float neb = fbm(d * 2.4 + vec3(7.1, -3.2, 4.5));
+        col += vec3(0.006, 0.008, 0.016) * pow(neb, 3.0);
+
+        // Faint procedural background galaxies (two angular scales)
+        col += distantGalaxies(d, 10.5);
+        col += distantGalaxies(d + vec3(0.37, -0.21, 0.14), 19.0) * 0.65;
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `;
+
+    const skyDome = new THREE.Mesh(
+      new THREE.SphereGeometry(290, 48, 32),
+      new THREE.ShaderMaterial({
+        vertexShader: skyVertexShader,
+        fragmentShader: skyFragmentShader,
+        uniforms: { uTime: { value: 0 } },
+        side: THREE.BackSide,
+        depthWrite: false
+      })
+    );
+    scene.add(skyDome);
+
+    // -------------------------------------------------------------------------
+    // Hero Faint Distant Galaxies (Placed on Deep Sky Sphere for Crisp Lensing)
+    // -------------------------------------------------------------------------
+    const galaxyVertexShader = /* glsl */ `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const galaxyFragmentShader = /* glsl */ `
+      precision highp float;
+      varying vec2 vUv;
+      uniform vec3 uColorCore;
+      uniform vec3 uColorArm;
+      uniform float uArms;
+      uniform float uTwist;
+      uniform float uTilt;
+      uniform float uSeed;
+      uniform float uOpacity;
+
+      float hash21(vec2 p) {
+        p = fract(p * vec2(234.34, 435.345));
+        p += dot(p, p + 34.23);
+        return fract(p.x * p.y);
+      }
+
+      float noise2(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      }
+
+      void main() {
+        vec2 p = (vUv - 0.5) * 2.0;
+        p.y *= uTilt;
+        float r = length(p);
+        if (r > 1.0) discard;
+
+        float theta = atan(p.y, p.x);
+        float spiral = 0.5 + 0.5 * cos(uArms * theta + log(r + 0.06) * uTwist + uSeed);
+        spiral = pow(spiral, 1.6);
+
+        float clump = 0.72 + 0.28 * noise2(vec2(cos(theta + r * 4.0), sin(theta + r * 4.0)) * 4.5 + uSeed);
+        float core = exp(-r * r * 26.0);
+        float halo = exp(-r * 4.2) * (0.35 + 0.65 * spiral) * clump;
+        float edgeFade = smoothstep(1.0, 0.35, r);
+
+        vec3 col = (uColorArm * halo + uColorCore * core * 1.4) * edgeFade * uOpacity;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `;
+
+    // Deterministic seeded PRNG for consistent cinematic sky composition
+    function mulberry32(seed) {
+      return function () {
+        let t = (seed += 0x6d2b79f5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    const rng = mulberry32(421337);
+
+    const galaxyGroup = new THREE.Group();
+    const galaxyGeo = new THREE.PlaneGeometry(1, 1);
+    const galaxyCount = 22;
+    for (let i = 0; i < galaxyCount; i++) {
+      // Place several galaxies near the backdrop of the black hole so lensing warps them
+      let dir;
+      if (i < 7) {
+        const az = (rng() - 0.5) * 0.95;
+        const el = (rng() - 0.5) * 0.72;
+        dir = new THREE.Vector3(Math.sin(az), Math.sin(el), -Math.cos(az)).normalize();
+      } else {
+        const u = rng() * 2 - 1;
+        const phi = rng() * Math.PI * 2;
+        const s = Math.sqrt(1 - u * u);
+        dir = new THREE.Vector3(s * Math.cos(phi), u, s * Math.sin(phi));
+      }
+      const dist = 235 + rng() * 35;
+      const size = 5.5 + rng() * 14.5;
+      const warmMix = rng();
+      const coreCol = new THREE.Color().setRGB(
+        1.0,
+        0.90 + 0.08 * warmMix,
+        0.74 + 0.22 * warmMix
+      );
+      const armCol = new THREE.Color().setRGB(
+        0.52 + 0.35 * (1.0 - warmMix),
+        0.60 + 0.16 * warmMix,
+        0.72 + 0.28 * warmMix
+      );
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: galaxyVertexShader,
+        fragmentShader: galaxyFragmentShader,
+        uniforms: {
+          uColorCore: { value: coreCol },
+          uColorArm: { value: armCol },
+          uArms: { value: rng() > 0.35 ? 2.0 : 3.0 },
+          uTwist: { value: 3.5 + rng() * 4.5 },
+          uTilt: { value: 1.4 + rng() * 2.8 },
+          uSeed: { value: rng() * 6.283 },
+          uOpacity: { value: 0.11 + rng() * 0.16 }
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const mesh = new THREE.Mesh(galaxyGeo, mat);
+      mesh.position.copy(dir).multiplyScalar(dist);
+      mesh.lookAt(0, 0, 0);
+      mesh.rotateZ(rng() * Math.PI * 2);
+      mesh.scale.set(size, size, 1);
+      galaxyGroup.add(mesh);
+    }
+    scene.add(galaxyGroup);
+
+    // -------------------------------------------------------------------------
+    // Dense Procedural Starfield (15,000 Spectral Stars)
+    // -------------------------------------------------------------------------
+    const STAR_COUNT = 15000;
+    const starPositions = new Float32Array(STAR_COUNT * 3);
+    const starColors = new Float32Array(STAR_COUNT * 3);
+    const starSizes = new Float32Array(STAR_COUNT);
+    const starPhases = new Float32Array(STAR_COUNT);
+
+    // Spectral palette from O/B blue to K/M warm orange
+    const spectralPalette = [
+      new THREE.Color(0.68, 0.82, 1.00), // Blue-white
+      new THREE.Color(0.86, 0.92, 1.00), // Crisp blue-white
+      new THREE.Color(1.00, 0.98, 0.95), // Pure white
+      new THREE.Color(1.00, 0.91, 0.76), // Warm yellow-white
+      new THREE.Color(1.00, 0.78, 0.56), // Pale orange
+      new THREE.Color(0.95, 0.62, 0.45)  // Faint red-orange
+    ];
+
+    for (let i = 0; i < STAR_COUNT; i++) {
+      // Uniform distribution on sphere with slight concentration toward galactic band
+      let x, y, z;
+      if (rng() < 0.28) {
+        const theta = rng() * Math.PI * 2;
+        const lat = (rng() + rng() + rng() - 1.5) * 0.28;
+        const cl = Math.cos(lat);
+        // Align loosely with sky dome galactic plane
+        const vx = cl * Math.cos(theta);
+        const vy = Math.sin(lat);
+        const vz = cl * Math.sin(theta);
+        // Slight tilt
+        x = vx * 0.92 - vy * 0.39;
+        y = vx * 0.39 + vy * 0.92;
+        z = vz;
+      } else {
+        const u = rng() * 2 - 1;
+        const phi = rng() * Math.PI * 2;
+        const s = Math.sqrt(1 - u * u);
+        x = s * Math.cos(phi);
+        y = u;
+        z = s * Math.sin(phi);
+      }
+      const radius = 175 + rng() * 90;
+      starPositions[i * 3] = x * radius;
+      starPositions[i * 3 + 1] = y * radius;
+      starPositions[i * 3 + 2] = z * radius;
+
+      // Power-law brightness & size
+      const mag = Math.pow(rng(), 4.2);
+      const size = 0.75 + mag * 3.4;
+      const brightness = 0.16 + Math.pow(rng(), 2.4) * 0.95 + mag * 0.9;
+
+      const cIdx = Math.min(
+        spectralPalette.length - 1,
+        Math.floor(Math.pow(rng(), 0.95) * spectralPalette.length)
+      );
+      const col = spectralPalette[cIdx];
+      starColors[i * 3] = col.r * brightness;
+      starColors[i * 3 + 1] = col.g * brightness;
+      starColors[i * 3 + 2] = col.b * brightness;
+
+      starSizes[i] = size;
+      starPhases[i] = rng() * Math.PI * 2;
+    }
+
+    const starGeo = new THREE.BufferGeometry();
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+    starGeo.setAttribute('aColor', new THREE.BufferAttribute(starColors, 3));
+    starGeo.setAttribute('aSize', new THREE.BufferAttribute(starSizes, 1));
+    starGeo.setAttribute('aPhase', new THREE.BufferAttribute(starPhases, 1));
+
+    const starMat = new THREE.ShaderMaterial({
+      vertexShader: /* glsl */ `
+        attribute vec3 aColor;
+        attribute float aSize;
+        attribute float aPhase;
+        varying vec3 vColor;
+        varying float vTwinkle;
+        uniform float uTime;
+        uniform float uPixelRatio;
+
+        void main() {
+          vColor = aColor;
+          vTwinkle = 0.88 + 0.12 * sin(uTime * (0.9 + fract(aPhase) * 1.6) + aPhase * 7.0);
+          vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mvPos;
+          gl_PointSize = clamp(aSize * uPixelRatio * (210.0 / max(-mvPos.z, 1.0)), 1.0, 9.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision mediump float;
+        varying vec3 vColor;
+        varying float vTwinkle;
+
+        void main() {
+          vec2 uv = gl_PointCoord - 0.5;
+          float d = length(uv) * 2.0;
+          if (d > 1.0) discard;
+          float core = exp(-d * d * 9.0);
+          float halo = exp(-d * 3.8) * 0.25;
+          float alpha = (core + halo) * vTwinkle;
+          gl_FragColor = vec4(vColor * alpha, alpha);
+        }
+      `,
+      uniforms: {
+        uTime: { value: 0 },
+        uPixelRatio: { value: maxDpr }
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const starField = new THREE.Points(starGeo, starMat);
+    scene.add(starField);
+
+    // -------------------------------------------------------------------------
+    // Black Hole System (Tilted ~20° Toward Camera)
+    // -------------------------------------------------------------------------
+    const blackHoleSystem = new THREE.Group();
+    // Tilt ~20 degrees toward camera around X, with subtle cinematic roll on Z
+    blackHoleSystem.rotation.x = THREE.MathUtils.degToRad(20);
+    blackHoleSystem.rotation.z = THREE.MathUtils.degToRad(-8.5);
+    scene.add(blackHoleSystem);
+
+    // Slowly rotating disk & tidal stream container
+    const rotatingDiskGroup = new THREE.Group();
+    blackHoleSystem.add(rotatingDiskGroup);
+
+    // 1. Pure-Black Event Horizon Sphere (core horizon inside the photon sphere)
+    const eventHorizonMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1.48, 64, 48),
+      new THREE.MeshBasicMaterial({ color: 0x000000 })
+    );
+    eventHorizonMesh.renderOrder = 1;
+    blackHoleSystem.add(eventHorizonMesh);
+
+    // 2. Thin Outer Wisps & Tidal Streams of Gas Trailing Off the Disk's Edge
+    function createTidalStreamsGeometry() {
+      const positions = [];
+      const uvs = [];
+      const streamSeeds = [];
+      const indices = [];
+      let vertexOffset = 0;
+
+      const streamCount = 9;
+      const segLen = 56;
+
+      for (let s = 0; s < streamCount; s++) {
+        const baseAngle = (s / streamCount) * Math.PI * 2 + (rng() - 0.5) * 0.45;
+        const startR = 9.2 + rng() * 2.4;
+        const endR = 16.5 + rng() * 8.5;
+        const arcSpan = 1.45 + rng() * 1.45; // Trailing spiral wrap
+        const widthBase = 0.65 + rng() * 1.25;
+        const yAmp = (rng() - 0.5) * 2.1;
+        const yFreq = 1.1 + rng() * 1.4;
+        const tiltRoll = (rng() - 0.5) * 0.55;
+        const seedVal = rng() * 100.0;
+
+        for (let i = 0; i <= segLen; i++) {
+          const u = i / segLen;
+          // Trailing spiral: outer radius lags behind in +theta (since rotation is -theta)
+          const r = startR + (endR - startR) * Math.pow(u, 1.12);
+          const angle = baseAngle + arcSpan * Math.pow(u, 0.92);
+
+          const cx = Math.cos(angle) * r;
+          const cz = Math.sin(angle) * r;
+          const cy = Math.sin(u * Math.PI * yFreq) * yAmp * Math.pow(u, 1.25);
+
+          // Width flares softly in middle and tapers at tip
+          const halfW = widthBase * (0.45 + 0.95 * Math.sin(u * Math.PI * 0.85)) * (1.0 - 0.45 * u);
+
+          const rx = Math.cos(angle);
+          const rz = Math.sin(angle);
+          const wy = Math.sin(tiltRoll) * halfW;
+          const wr = Math.cos(tiltRoll) * halfW;
+
+          // Inner & outer ribbon edge vertices
+          positions.push(cx - rx * wr, cy - wy, cz - rz * wr);
+          uvs.push(u, 0.0);
+          streamSeeds.push(seedVal);
+
+          positions.push(cx + rx * wr, cy + wy, cz + rz * wr);
+          uvs.push(u, 1.0);
+          streamSeeds.push(seedVal);
+
+          if (i < segLen) {
+            const a = vertexOffset + i * 2;
+            const b = a + 1;
+            const c = a + 2;
+            const d = a + 3;
+            indices.push(a, b, c, b, d, c);
+          }
+        }
+        vertexOffset += (segLen + 1) * 2;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(streamSeeds, 1));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    const tidalStreamsMat = new THREE.ShaderMaterial({
+      vertexShader: /* glsl */ `
+        attribute float aSeed;
+        varying vec2 vUv;
+        varying float vSeed;
+        varying vec3 vLocalPos;
+        varying vec3 vWorldPos;
+
+        void main() {
+          vUv = uv;
+          vSeed = aSeed;
+          vLocalPos = position;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorldPos = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        varying vec2 vUv;
+        varying float vSeed;
+        varying vec3 vLocalPos;
+        varying vec3 vWorldPos;
+
+        uniform float uTime;
+        uniform float uPulse;
+        uniform vec3 uLocalCamPos;
+
+        float hash21(vec2 p) {
+          p = fract(p * vec2(127.1, 311.7));
+          p += dot(p, p + 34.12);
+          return fract(p.x * p.y);
+        }
+
+        float noise2(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+            mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x),
+            f.y
+          );
+        }
+
+        float fbm2(vec2 p) {
+          float v = 0.0;
+          float a = 0.5;
+          for (int i = 0; i < 4; i++) {
+            v += a * noise2(p);
+            p = p * 2.08 + vec2(13.1, 7.7);
+            a *= 0.5;
+          }
+          return v;
+        }
+
+        void main() {
+          float u = vUv.x;
+          float v = vUv.y;
+
+          // Soft feathered edges along width and length
+          float across = sin(v * 3.14159265);
+          across = pow(max(across, 0.0), 1.75);
+          float along = smoothstep(0.0, 0.16, u) * smoothstep(1.0, 0.18, u);
+
+          // Flowing stretched wispy filaments drifting slowly along the tidal tail
+          vec2 flowUv = vec2(u * 3.2 - uTime * 0.055 + vSeed, (v - 0.5) * 4.8 + vSeed * 0.37);
+          float n1 = fbm2(flowUv);
+          float n2 = fbm2(flowUv * vec2(2.4, 3.6) + vec2(-uTime * 0.03, n1 * 1.4));
+          float streak = smoothstep(0.28, 0.82, n1 * 0.55 + n2 * 0.45);
+
+          // Subtle Doppler asymmetry matching disk orbital velocity
+          vec3 tangent = normalize(vec3(vLocalPos.z, 0.0, -vLocalPos.x));
+          vec3 toCam = normalize(uLocalCamPos - vLocalPos);
+          float dopp = 0.78 + 0.38 * dot(tangent, toCam);
+
+          // Copper-amber at disk junction cooling into dim dusty grey-blue wisps
+          vec3 innerCol = vec3(0.72, 0.34, 0.14);
+          vec3 midCol   = vec3(0.36, 0.22, 0.17);
+          vec3 outerCol = vec3(0.19, 0.20, 0.25);
+          vec3 col = mix(innerCol, midCol, smoothstep(0.0, 0.45, u));
+          col = mix(col, outerCol, smoothstep(0.35, 1.0, u));
+
+          float alpha = across * along * streak * dopp * (0.42 + 0.06 * uPulse);
+          gl_FragColor = vec4(col * alpha, alpha);
+        }
+      `,
+      uniforms: {
+        uTime: { value: 0 },
+        uPulse: { value: 1.0 },
+        uLocalCamPos: { value: new THREE.Vector3() }
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    const tidalStreamsMesh = new THREE.Mesh(createTidalStreamsGeometry(), tidalStreamsMat);
+    tidalStreamsMesh.renderOrder = 2;
+    rotatingDiskGroup.add(tidalStreamsMesh);
+
+    // Wispy outer gas/dust particle filaments trailing off the outer rim
+    const WISP_COUNT = 2200;
+    const wispPos = new Float32Array(WISP_COUNT * 3);
+    const wispAttr = new Float32Array(WISP_COUNT * 3); // [radius, baseAngle, size]
+    const wispColors = new Float32Array(WISP_COUNT * 3);
+
+    for (let i = 0; i < WISP_COUNT; i++) {
+      const arm = i % 4;
+      const t = Math.pow(rng(), 0.85);
+      const r = 9.8 + t * 12.5;
+      // Trailing spiral arm alignment
+      const baseAngle = (arm / 4) * Math.PI * 2 + Math.log(r / 9.8) * 2.9 + (rng() - 0.5) * (0.55 + t * 0.9);
+      const y = (rng() - 0.5) * (0.35 + t * 2.4);
+
+      wispPos[i * 3] = Math.cos(baseAngle) * r;
+      wispPos[i * 3 + 1] = y;
+      wispPos[i * 3 + 2] = Math.sin(baseAngle) * r;
+
+      wispAttr[i * 3] = r;
+      wispAttr[i * 3 + 1] = baseAngle;
+      wispAttr[i * 3 + 2] = 0.6 + rng() * 2.2;
+
+      const fade = (1.0 - t * 0.72) * (0.35 + 0.65 * rng());
+      // Dim amber-copper fading to smoky grey
+      wispColors[i * 3] = (0.48 * (1.0 - t) + 0.16 * t) * fade;
+      wispColors[i * 3 + 1] = (0.24 * (1.0 - t) + 0.15 * t) * fade;
+      wispColors[i * 3 + 2] = (0.12 * (1.0 - t) + 0.17 * t) * fade;
+    }
+
+    const wispGeo = new THREE.BufferGeometry();
+    wispGeo.setAttribute('position', new THREE.BufferAttribute(wispPos, 3));
+    wispGeo.setAttribute('aWisp', new THREE.BufferAttribute(wispAttr, 3));
+    wispGeo.setAttribute('aColor', new THREE.BufferAttribute(wispColors, 3));
+
+    const wispMat = new THREE.ShaderMaterial({
+      vertexShader: /* glsl */ `
+        attribute vec3 aWisp;
+        attribute vec3 aColor;
+        varying vec3 vColor;
+        uniform float uTime;
+        uniform float uPixelRatio;
+
+        void main() {
+          float r = aWisp.x;
+          float ang0 = aWisp.y;
+          float sz = aWisp.z;
+
+          // Differential slow Keplerian orbit (negative theta matches disk velocity)
+          float omega = 0.55 * pow(r / 10.0, -1.4);
+          float ang = ang0 - uTime * omega;
+          vec3 pos = vec3(cos(ang) * r, position.y, sin(ang) * r);
+
+          vColor = aColor;
+          vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
+          gl_Position = projectionMatrix * mvPos;
+          gl_PointSize = clamp(sz * uPixelRatio * (46.0 / max(-mvPos.z, 1.0)), 1.0, 20.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision mediump float;
+        varying vec3 vColor;
+        void main() {
+          vec2 uv = gl_PointCoord - 0.5;
+          float d = length(uv) * 2.0;
+          if (d > 1.0) discard;
+          float g = exp(-d * d * 4.5) * smoothstep(1.0, 0.2, d);
+          gl_FragColor = vec4(vColor * g * 0.42, g * 0.42);
+        }
+      `,
+      uniforms: {
+        uTime: { value: 0 },
+        uPixelRatio: { value: maxDpr }
+      },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+
+    const wispParticles = new THREE.Points(wispGeo, wispMat);
+    wispParticles.renderOrder = 2;
+    rotatingDiskGroup.add(wispParticles);
+
+    // -------------------------------------------------------------------------
+    // 3. Relativistically Lensed Accretion Disk & Photon Ring Custom ShaderMaterial
+    //    Uses Schwarzschild Null-Geodesic Velocity-Verlet Integration:
+    //    d²r/dλ² = -1.5 * rs * h² * r / |r|^5
+    //    Automatically bends far side of the disk up over the top & under the bottom,
+    //    forms the razor-sharp photon ring around the pure-black event horizon,
+    //    and applies differential inward-spiraling noise + relativistic Doppler beaming.
+    // -------------------------------------------------------------------------
+    const diskVertexShader = /* glsl */ `
+      varying vec3 vLocalPos;
+      void main() {
+        vLocalPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const diskFragmentShader = /* glsl */ `
+      precision highp float;
+
+      varying vec3 vLocalPos;
+
+      uniform float uTime;
+      uniform float uPulse;
+      uniform vec3 uLocalCamPos;
+
+      const float R_BOUND  = 14.6;
+      const float R_HORIZ  = 1.48;
+      const float R_PHOTON = 1.50;
+      const float R_INNER  = 1.92;
+      const float R_OUTER  = 12.2;
+      const int   MAX_STEPS = 104;
+
+      // Fast, smooth 3D value noise (zero-seam for polar/spiral coordinates)
+      float hash31(vec3 p) {
+        p = fract(p * vec3(443.8975, 397.2973, 491.1871));
+        p += dot(p, p.yxz + 19.19);
+        return fract((p.x + p.y) * p.z);
+      }
+
+      float noise3(vec3 p) {
+        vec3 i = floor(p);
+        vec3 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+
+        float n000 = hash31(i + vec3(0.0, 0.0, 0.0));
+        float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+        float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+        float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+        float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+        float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+        float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+        float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+
+        return mix(
+          mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+          mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+          f.z
+        );
+      }
+
+      // Layered spiral filament FBM: zero seam at theta = +-PI
+      float spiralFbm(float r, float theta, float phase, float omega, float vIn) {
+        // Inward radial advection + faster Keplerian inner angular advection
+        float rAdv = max(r + phase * vIn, 1.05);
+        float logR = log(rAdv);
+
+        // Trailing logarithmic spiral coordinate (inner leads outer in -theta direction)
+        float phi1 = theta - 4.6 * logR + phase * omega + uTime * 0.22;
+        float phi2 = theta - 7.8 * logR + phase * omega * 1.25 + uTime * 0.34;
+
+        // Along constant phi (spiral track), z changes slowly; across phi, x/y change fast -> long sharp streaks!
+        vec3 q1 = vec3(cos(phi1) * 3.8, sin(phi1) * 3.8, logR * 2.2);
+        float f1 = noise3(q1);
+
+        // Domain-warped finer streaks
+        vec3 q2 = vec3(cos(phi2 + f1 * 0.75) * 7.4, sin(phi2 + f1 * 0.75) * 7.4, logR * 4.4 + f1 * 1.1);
+        float f2 = noise3(q2);
+
+        // High-frequency crisp concentric plasma wisps
+        float phi3 = theta - 10.5 * logR + phase * omega * 1.55 + uTime * 0.48;
+        vec3 q3 = vec3(cos(phi3) * 12.5, sin(phi3) * 12.5, logR * 7.2);
+        float f3 = noise3(q3);
+
+        return f1 * 0.50 + f2 * 0.34 + f3 * 0.16;
+      }
+
+      // Multi-stop cinematic accretion disk color gradient:
+      // Cool blue-white (inner) -> white-gold -> gold -> amber -> dim copper -> smoky grey (outer)
+      vec3 diskColorRamp(float temp) {
+        // temp = 0.0 (coolest outer grey) .. 1.0+ (hottest inner blue-white)
+        vec3 cGrey   = vec3(0.14, 0.135, 0.15);
+        vec3 cCopper = vec3(0.46, 0.175, 0.075);
+        vec3 cAmber  = vec3(0.88, 0.40,  0.11);
+        vec3 cGold   = vec3(1.08, 0.72,  0.28);
+        vec3 cWarmW  = vec3(1.06, 0.98,  0.88);
+        vec3 cBlueW  = vec3(0.68, 0.94,  1.42);
+
+        vec3 col = mix(cGrey, cCopper, smoothstep(0.00, 0.22, temp));
+        col = mix(col, cAmber,  smoothstep(0.20, 0.44, temp));
+        col = mix(col, cGold,   smoothstep(0.42, 0.65, temp));
+        col = mix(col, cWarmW,  smoothstep(0.64, 0.80, temp));
+        col = mix(col, cBlueW,  smoothstep(0.76, 1.05, temp));
+        return col;
+      }
+
+      // Evaluate accretion disk emission & opacity at an equatorial plane crossing
+      void sampleDisk(
+        vec3 pos,
+        vec3 rayDir,
+        float hitWeight,
+        out vec3 emission,
+        out float opacity
+      ) {
+        float r = length(pos.xz);
+        emission = vec3(0.0);
+        opacity = 0.0;
+
+        if (r < 1.55 || r > R_OUTER) return;
+
+        // Normalized radial coordinate: 0 at inner edge, 1 at outer edge
+        float radT = clamp((r - R_INNER) / (R_OUTER - R_INNER), 0.0, 1.0);
+        float theta = atan(pos.z, pos.x);
+
+        // Keplerian differential speeds increasing strongly toward center
+        float omega = 3.1 * pow(max(r / 2.2, 0.55), -1.42);
+        float vIn   = 0.58 * pow(max(r / 2.2, 0.55), -0.90);
+
+        // Seamless dual-phase temporal advection (prevents spiral wind-up while keeping rapid inner motion)
+        float cycle = uTime * 0.17;
+        float p0 = fract(cycle);
+        float p1 = fract(cycle + 0.5);
+        float w0 = 0.5 - 0.5 * cos(6.2831853 * p0);
+        float w1 = 1.0 - w0;
+
+        float n0 = spiralFbm(r, theta, p0, omega, vIn);
+        float n1 = spiralFbm(r, theta, p1, omega, vIn);
+        float baseNoise = n0 * w0 + n1 * w1;
+
+        // Sharp concentric/spiral filament ridges + dark dust lanes
+        float ridge = 1.0 - abs(baseNoise * 2.0 - 1.0);
+        ridge = pow(ridge, 2.05);
+        float filaments = mix(baseNoise, ridge, 0.68);
+
+        // Fine turbulent radial rings for delicate banded texture
+        float bands = 0.5 + 0.5 * sin(log(r) * 28.0 - theta * 2.0 + baseNoise * 4.5 + uTime * 0.55);
+        float dustLanes = smoothstep(0.14, 0.80, filaments * 0.76 + bands * 0.24);
+
+        // Radial density envelope: bright luminous inner rim, smooth tapered outer dusty edge
+        float innerCut = smoothstep(1.56, 2.08, r);
+        float outerFade = pow(1.0 - smoothstep(0.24, 1.0, radT), 1.38);
+        float edgeWisp = smoothstep(1.0, 0.60, radT + (baseNoise - 0.5) * 0.24);
+        float density = innerCut * outerFade * edgeWisp;
+
+        // Intense inner plasma ring just outside ISCO
+        float innerSurge = exp(-pow((r - 2.12) / 0.46, 2.0)) * 0.92;
+
+        // Relativistic Doppler beaming
+        // Gas orbits in -theta direction -> tangent = (z, 0, -x) / r (approaching on viewer's left)
+        vec3 velDir = normalize(vec3(pos.z, 0.0, -pos.x));
+        float beta = clamp(sqrt(0.46 / max(r, 1.55)), 0.13, 0.48);
+        // Photon travels along -rayDir toward camera
+        float cosAlpha = dot(velDir, -rayDir);
+        float gamma = inversesqrt(max(0.25, 1.0 - beta * beta));
+        float doppler = 1.0 / (gamma * (1.0 - beta * cosAlpha));
+        float beaming = pow(clamp(doppler, 0.48, 1.88), 1.92);
+
+        // Local temperature driven by radius + filament heat + relativistic frequency shift
+        float radialTemp = pow(1.0 - radT, 1.38);
+        float temp = radialTemp * 0.92 + (filaments - 0.38) * 0.26 + innerSurge * 0.38;
+        // Doppler frequency shift: approaching side hotter/bluer, receding cooler/amber-copper
+        temp += (doppler - 1.0) * 0.42;
+        temp = clamp(temp, 0.0, 1.18);
+
+        vec3 baseColor = diskColorRamp(temp);
+
+        // Subtle relativistic spectral tint enhancement
+        vec3 blueShiftTint = vec3(0.76, 0.94, 1.30);
+        vec3 redShiftTint  = vec3(1.18, 0.72, 0.50);
+        vec3 dopplerTint = mix(redShiftTint, blueShiftTint, smoothstep(0.68, 1.42, doppler));
+        baseColor *= dopplerTint;
+
+        // Grazing optical thickness boost (clamped so edge-on stays lush, never blown out)
+        float grazing = clamp(1.0 / (abs(rayDir.y) + 0.34), 1.0, 2.1);
+
+        // Subtle pulsing glow concentrated near the energetic inner region
+        float pulseMod = mix(1.0, uPulse, pow(1.0 - radT, 1.8));
+
+        // Soft highlight compression preserves crisp blue-white filament texture on approaching side
+        float rawLum = (0.24 + 1.18 * dustLanes + innerSurge * 0.95) * density * beaming * pulseMod * hitWeight;
+        rawLum *= mix(0.72, 1.08, smoothstep(0.0, 0.65, grazing - 1.0));
+        float lum = rawLum / (1.0 + rawLum * 0.22);
+
+        // Optical opacity: bright dense plasma & outer dust partially occlude background
+        opacity = clamp(density * (0.28 + 0.62 * dustLanes) * grazing * 0.72, 0.0, 0.95);
+        emission = baseColor * lum;
+      }
+
+      // Schwarzschild null geodesic acceleration: a = -1.5 * rs * h² * r / |r|^5 (with rs = 1.0)
+      vec3 geodesicAccel(vec3 p, float h2) {
+        float r2 = dot(p, p);
+        float invR2 = 1.0 / max(r2, 0.04);
+        float invR = sqrt(invR2);
+        return -1.5 * h2 * p * (invR2 * invR2 * invR);
+      }
+
+      void main() {
+        vec3 ro = uLocalCamPos;
+        vec3 rd = normalize(vLocalPos - uLocalCamPos);
+
+        // Intersect bounding sphere to skip empty space
+        float b = dot(ro, rd);
+        float c = dot(ro, ro) - R_BOUND * R_BOUND;
+        float disc = b * b - c;
+        if (disc < 0.0) discard;
+
+        float tStart = max(0.0, -b - sqrt(disc));
+        vec3 pos = ro + rd * tStart;
+        vec3 vel = rd;
+
+        vec3 L = cross(pos, vel);
+        float h2 = dot(L, L);
+        vec3 acc = geodesicAccel(pos, h2);
+
+        vec3 accumColor = vec3(0.0);
+        float transmittance = 1.0;
+        bool hitHorizon = false;
+        float minR = 100.0;
+        float photonRingAccum = 0.0;
+        vec3 closestPos = pos;
+        vec3 closestVel = vel;
+        int diskHits = 0;
+
+        for (int i = 0; i < MAX_STEPS; i++) {
+          float r = length(pos);
+          if (r < minR) {
+            minR = r;
+            closestPos = pos;
+            closestVel = vel;
+          }
+
+          // Event horizon capture
+          if (r < R_HORIZ) {
+            hitHorizon = true;
+            break;
+          }
+
+          // Escaped bounding volume heading outward
+          if (r > R_BOUND + 0.2 && dot(pos, vel) > 0.0) {
+            break;
+          }
+
+          // Adaptive step size: tight near photon sphere, faster far out
+          float dt = clamp(0.052 * r + 0.0022 * r * r, 0.042, 0.44);
+          // Refine step slightly when approaching the equatorial disk plane
+          if (abs(pos.y) < 0.85 && r > R_INNER - 0.3 && r < R_OUTER) {
+            dt = min(dt, 0.14 + 0.22 * abs(pos.y));
+          }
+
+          vec3 prevPos = pos;
+          vec3 prevVel = vel;
+
+          // Symplectic Velocity Verlet step
+          pos += vel * dt + 0.5 * acc * dt * dt;
+          vec3 nextAcc = geodesicAccel(pos, h2);
+          vel += 0.5 * (acc + nextAcc) * dt;
+          acc = nextAcc;
+
+          // Accumulate subtle thin volumetric plasma corona around the disk slab
+          if (r > 1.80 && r < R_OUTER * 0.96 && abs(pos.y) < 0.45) {
+            float yEnv = exp(-pow(pos.y / (0.11 + 0.025 * r), 2.0));
+            float rEnv = smoothstep(1.80, 2.35, r) * pow(1.0 - clamp((r - 1.9) / 10.0, 0.0, 1.0), 2.4);
+            vec3 vDir = normalize(vec3(pos.z, 0.0, -pos.x));
+            float dShift = 0.72 + 0.38 * dot(vDir, -normalize(vel));
+            vec3 hazeCol = mix(vec3(0.75, 0.34, 0.12), vec3(0.72, 0.92, 1.32), smoothstep(4.2, 2.0, r));
+            accumColor += transmittance * hazeCol * yEnv * rEnv * dShift * dt * 0.048 * uPulse;
+          }
+
+          // Accumulate photon-sphere grazing glow for rays skimming r ≈ 1.50
+          if (r < 2.25) {
+            float pr = exp(-pow((r - R_PHOTON) / 0.16, 2.0));
+            photonRingAccum += pr * dt;
+          }
+
+          // Exact equatorial disk plane crossing (handles front disk, upper lensed arch,
+          // lower lensed arch, and secondary photon-ring lensed images!)
+          if (prevPos.y * pos.y <= 0.0 && diskHits < 3) {
+            float denom = abs(prevPos.y) + abs(pos.y) + 1e-6;
+            float frac = abs(prevPos.y) / denom;
+            vec3 hitPos = mix(prevPos, pos, frac);
+            vec3 hitVel = normalize(mix(prevVel, vel, frac));
+
+            // Secondary/tertiary lensed crossings slightly sharpened & concentrated
+            float hitWeight = (diskHits == 0) ? 1.0 : ((diskHits == 1) ? 0.94 : 0.78);
+            vec3 hitCol;
+            float hitAlpha;
+            sampleDisk(hitPos, hitVel, hitWeight, hitCol, hitAlpha);
+
+            accumColor += transmittance * hitCol;
+            transmittance *= (1.0 - hitAlpha);
+            diskHits++;
+
+            if (transmittance < 0.015) {
+              break;
+            }
+          }
+        }
+
+        // Thin, intensely bright photon ring right around the pure-black event horizon shadow
+        if (!hitHorizon) {
+          // Critical curve impact parameter b_crit = 3*sqrt(3)/2 ≈ 2.598076
+          float bImpact = sqrt(h2);
+          float edgeDist = bImpact - 2.598;
+
+          // Razor-sharp primary photon ring + crisp tight outer halo
+          float sharpRing = exp(-pow(max(edgeDist, 0.0) / 0.036, 1.65)) * smoothstep(-0.008, 0.010, edgeDist);
+          float innerGlow = exp(-pow(max(edgeDist, 0.0) / 0.14, 1.35)) * smoothstep(-0.008, 0.025, edgeDist);
+          float grazeBoost = smoothstep(0.18, 1.65, photonRingAccum);
+
+          // Doppler brightening on approaching limb of photon ring
+          vec3 limbTan = normalize(vec3(closestPos.z, 0.0, -closestPos.x) + vec3(0.0, 0.0001, 0.0));
+          float limbDoppler = 0.78 + 0.42 * dot(limbTan, -normalize(closestVel));
+
+          vec3 ringColorCore = vec3(0.95, 1.18, 1.55); // Incandescent cool blue-white
+          vec3 ringColorWarm = vec3(1.18, 0.88, 0.56); // Warm gold rim tint
+          vec3 ringCol = mix(ringColorWarm, ringColorCore, clamp(0.45 + 0.45 * limbDoppler, 0.0, 1.0));
+
+          float ringIntensity = (sharpRing * 2.65 + innerGlow * 0.28 + grazeBoost * sharpRing * 1.10)
+                              * limbDoppler * uPulse;
+          accumColor += transmittance * ringCol * ringIntensity;
+          // Ensure photon ring attenuates direct star punch-through
+          transmittance *= (1.0 - clamp(sharpRing * 0.72, 0.0, 0.72));
+        }
+
+        // Premultiplied alpha output:
+        // - If ray fell into event horizon: alpha = 1.0 -> pure black void behind any front disk!
+        // - Otherwise: alpha = 1.0 - transmittance -> dense disk obscures stars, thin glow adds cleanly!
+        float outAlpha = hitHorizon ? 1.0 : clamp(1.0 - transmittance, 0.0, 1.0);
+        gl_FragColor = vec4(accumColor, outAlpha);
+      }
+    `;
+
+    const accretionDiskMat = new THREE.ShaderMaterial({
+      vertexShader: diskVertexShader,
+      fragmentShader: diskFragmentShader,
+      uniforms: {
+        uTime: { value: 0 },
+        uPulse: { value: 1.0 },
+        uLocalCamPos: { value: new THREE.Vector3() }
+      },
+      transparent: true,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.BackSide
+    });
+
+    const accretionDiskMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(14.6, 64, 48),
+      accretionDiskMat
+    );
+    accretionDiskMesh.renderOrder = 10;
+    rotatingDiskGroup.add(accretionDiskMesh);
+
+    // -------------------------------------------------------------------------
+    // Post-Processing Pipeline (HDR Target -> Screen-Space Lensing -> Bloom -> Cinema)
+    // -------------------------------------------------------------------------
+    const renderTarget = new THREE.WebGLRenderTarget(
+      Math.floor(window.innerWidth * maxDpr),
+      Math.floor(window.innerHeight * maxDpr),
+      {
+        type: THREE.HalfFloatType,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter
+      }
+    );
+
+    const composer = new EffectComposer(renderer, renderTarget);
+    composer.setPixelRatio(maxDpr);
+    composer.setSize(window.innerWidth, window.innerHeight);
+
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    // Pass 2: Screen-Space Gravitational Lensing Post-Process
+    // Warps the starfield, distant galaxies, wisps, and surrounding disk around the horizon
+    const GravitationalLensingShader = {
+      uniforms: {
+        tDiffuse: { value: null },
+        uBHPos: { value: new THREE.Vector2(0.5, 0.5) },
+        uShadowRadius: { value: 0.12 },
+        uAspect: { value: window.innerWidth / window.innerHeight },
+        uBHVisible: { value: 1.0 }
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D tDiffuse;
+        uniform vec2 uBHPos;
+        uniform float uShadowRadius;
+        uniform float uAspect;
+        uniform float uBHVisible;
+        varying vec2 vUv;
+
+        void main() {
+          vec2 delta = vUv - uBHPos;
+          vec2 aspectDelta = vec2(delta.x * uAspect, delta.y);
+          float dist = length(aspectDelta);
+          float rSh = max(uShadowRadius, 0.005);
+
+          // Einstein gravitational lensing field outside the event horizon shadow:
+          // Smoothly deflects the starfield, distant galaxies, and outer disk around the horizon
+          // with a gentle tangential Einstein-ring bend and zero core smearing.
+          float innerGuard = smoothstep(rSh * 1.04, rSh * 1.48, dist);
+          float outerFade  = smoothstep(rSh * 5.8,  rSh * 1.65, dist);
+          float einstein   = (rSh * rSh * 0.19) / (dist + rSh * 0.42);
+          float warpMag    = einstein * innerGuard * outerFade * uBHVisible;
+
+          vec2 dir = dist > 1e-5 ? (aspectDelta / dist) : vec2(0.0);
+          vec2 uvOffset = vec2(dir.x / uAspect, dir.y) * warpMag;
+          vec2 warpedUv = clamp(vUv + uvOffset, vec2(0.001), vec2(0.999));
+
+          vec3 col = texture2D(tDiffuse, warpedUv).rgb;
+
+          // Delicate micro chromatic dispersion along strong lensing gradient
+          float disp = warpMag * 0.035;
+          if (disp > 0.0002) {
+            vec2 dispVec = vec2(dir.x / uAspect, dir.y) * disp;
+            float rCh = texture2D(tDiffuse, clamp(warpedUv + dispVec, vec2(0.001), vec2(0.999))).r;
+            float bCh = texture2D(tDiffuse, clamp(warpedUv - dispVec, vec2(0.001), vec2(0.999))).b;
+            col.r = mix(col.r, rCh, 0.28);
+            col.b = mix(col.b, bCh, 0.28);
+          }
+
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `
+    };
+
+    const lensingPass = new ShaderPass(GravitationalLensingShader);
+    composer.addPass(lensingPass);
+
+    // Pass 3: Selective HDR Bloom around Photon Ring & Hot Inner Accretion Disk
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.34, // strength (tight, crisp HDR bloom without washing out the pure-black event horizon)
+      0.38, // radius
+      0.96  // threshold
+    );
+    composer.addPass(bloomPass);
+
+    // Pass 4: Subtle Optical Lens Glare, ACES Filmic Tone Mapping, Film Grain & Vignette
+    const FinalCinemaShader = {
+      uniforms: {
+        tDiffuse: { value: null },
+        uTime: { value: 0 },
+        uPulse: { value: 1.0 },
+        uBHPos: { value: new THREE.Vector2(0.5, 0.5) },
+        uShadowRadius: { value: 0.12 },
+        uAspect: { value: window.innerWidth / window.innerHeight },
+        uBHVisible: { value: 1.0 }
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform sampler2D tDiffuse;
+        uniform float uTime;
+        uniform float uPulse;
+        uniform vec2 uBHPos;
+        uniform float uShadowRadius;
+        uniform float uAspect;
+        uniform float uBHVisible;
+        varying vec2 vUv;
+
+        // ACES Filmic Tone Mapping (Narkowicz fit)
+        vec3 acesFilm(vec3 x) {
+          const float a = 2.51;
+          const float b = 0.03;
+          const float c = 2.43;
+          const float d = 0.59;
+          const float e = 0.14;
+          return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+        }
+
+        float hash12(vec2 p) {
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
+
+        void main() {
+          vec3 col = texture2D(tDiffuse, vUv).rgb;
+
+          // Subtle Optical Lens Glare centered on the bright photon ring & approaching limb
+          vec2 dUv = vUv - uBHPos;
+          vec2 dAsp = vec2(dUv.x * uAspect, dUv.y);
+          float dist = length(dAsp);
+          float rSh = max(uShadowRadius, 0.01);
+
+          // Bias glare subtly toward the hotter approaching left limb of the photon ring
+          vec2 limbPos = uBHPos + vec2(-rSh * 0.88 / uAspect, 0.0);
+          vec2 dLimb = vec2((vUv.x - limbPos.x) * uAspect, vUv.y - limbPos.y);
+
+          // 1. Tight atmospheric optical halo strictly hugging the photon ring outside the shadow
+          float ringDist = abs(dist - rSh * 1.03);
+          float ringScatter = exp(-ringDist * (5.2 / rSh)) * exp(-dist * 1.8);
+          vec3 scatterCol = mix(vec3(0.58, 0.78, 1.08), vec3(1.0, 0.72, 0.42), smoothstep(rSh * 1.1, rSh * 3.4, dist));
+
+          // 2. Delicate horizontal anamorphic lens streak grazing the photon ring
+          float streakY = exp(-abs(dLimb.y) * (24.0 / max(rSh * 2.2, 0.15)));
+          float streakX = exp(-abs(dLimb.x) * 3.1);
+          float anamorphic = streakY * streakX * 0.058;
+          vec3 anamorphicCol = vec3(0.58, 0.78, 1.15);
+
+          // 3. Faint optical ghost ring opposite the screen center
+          vec2 ghostCenter = vec2(0.5) - (limbPos - vec2(0.5)) * 0.58;
+          float gDist = length(vec2((vUv.x - ghostCenter.x) * uAspect, vUv.y - ghostCenter.y));
+          float ghost = exp(-pow((gDist - rSh * 0.62) / (rSh * 0.22), 2.0)) * 0.014;
+          vec3 ghostCol = vec3(0.52, 0.68, 1.0);
+
+          // Keep the pure-black event horizon void crisp and ink-black
+          float outsideShadow = smoothstep(rSh * 0.78, rSh * 1.08, dist);
+          vec3 glare = (scatterCol * ringScatter * 0.048 * outsideShadow
+                      + anamorphicCol * anamorphic * (0.12 + 0.88 * outsideShadow)
+                      + ghostCol * ghost) * uPulse * uBHVisible;
+
+          col += glare;
+
+          // ACES Filmic tone mapping + gamma encoding
+          col = acesFilm(col * 1.12);
+          col = pow(col, vec3(1.0 / 2.2));
+
+          // Gentle cinematic vignette
+          vec2 vigUv = (vUv - 0.5) * vec2(uAspect * 0.72, 1.0);
+          float vig = 1.0 - smoothstep(0.46, 1.22, length(vigUv)) * 0.36;
+          col *= vig;
+
+          // Gentle animated film grain (stronger in shadows/midtones, subtle in bright highlights)
+          float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+          float grain = hash12(gl_FragCoord.xy + fract(uTime * 17.3) * 1000.0) - 0.5;
+          col += grain * 0.022 * (1.0 - 0.58 * luma);
+
+          gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+        }
+      `
+    };
+
+    const cinemaPass = new ShaderPass(FinalCinemaShader);
+    composer.addPass(cinemaPass);
+
+    // -------------------------------------------------------------------------
+    // Resize Handling
+    // -------------------------------------------------------------------------
+    function onResize() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+
+      renderer.setPixelRatio(dpr);
+      renderer.setSize(w, h);
+      composer.setPixelRatio(dpr);
+      composer.setSize(w, h);
+      bloomPass.setSize(w, h);
+
+      starMat.uniforms.uPixelRatio.value = dpr;
+      wispMat.uniforms.uPixelRatio.value = dpr;
+      lensingPass.uniforms.uAspect.value = w / h;
+      cinemaPass.uniforms.uAspect.value = w / h;
+    }
+    window.addEventListener('resize', onResize);
+
+    // -------------------------------------------------------------------------
+    // Animation Loop (THREE.Clock + requestAnimationFrame)
+    // -------------------------------------------------------------------------
+    const clock = new THREE.Clock();
+    const invDiskMatrix = new THREE.Matrix4();
+    const localCamPos = new THREE.Vector3();
+    const bhWorldCenter = new THREE.Vector3(0, 0, 0);
+    const bhNdc = new THREE.Vector3();
+    const bhView = new THREE.Vector3();
+    const driftTargetDist = 17.2;
+    const R_SHADOW_WORLD = 2.598;
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const elapsed = clock.elapsedTime;
+
+      // Subtle organic multi-harmonic pulsing glow
+      const pulse =
+        1.0 +
+        0.055 * Math.sin(elapsed * 0.85) +
+        0.025 * Math.sin(elapsed * 2.17 + 1.1);
+
+      // Slowly rotate the accretion disk & outer tidal streams in the orbital direction
+      rotatingDiskGroup.rotation.y += dt * 0.048;
+
+      // Gently drift the camera inward toward hero framing unless the user manually zoomed
+      if (autoDriftActive && !userDragging) {
+        const dist = camera.position.length();
+        if (dist > driftTargetDist + 0.02) {
+          const approach = (dist - driftTargetDist) * 0.042;
+          const step = Math.min(dist - driftTargetDist, (0.14 + approach) * dt);
+          camera.position.setLength(dist - step);
+        }
+      }
+
+      controls.update();
+
+      // Update world matrices before computing local-space camera coordinates
+      blackHoleSystem.updateMatrixWorld(true);
+      invDiskMatrix.copy(accretionDiskMesh.matrixWorld).invert();
+      localCamPos.copy(camera.position).applyMatrix4(invDiskMatrix);
+
+      // Update shader uniforms
+      skyDome.material.uniforms.uTime.value = elapsed;
+      starMat.uniforms.uTime.value = elapsed;
+      wispMat.uniforms.uTime.value = elapsed;
+
+      tidalStreamsMat.uniforms.uTime.value = elapsed;
+      tidalStreamsMat.uniforms.uPulse.value = pulse;
+      tidalStreamsMat.uniforms.uLocalCamPos.value.copy(localCamPos);
+
+      accretionDiskMat.uniforms.uTime.value = elapsed;
+      accretionDiskMat.uniforms.uPulse.value = pulse;
+      accretionDiskMat.uniforms.uLocalCamPos.value.copy(localCamPos);
+
+      // Project black hole center & apparent Einstein shadow radius into screen UV space
+      bhView.copy(bhWorldCenter).applyMatrix4(camera.matrixWorldInverse);
+      const camZ = -bhView.z;
+      const visible = THREE.MathUtils.smoothstep(camZ, 1.5, 4.5);
+
+      bhNdc.copy(bhWorldCenter).project(camera);
+      const bhU = bhNdc.x * 0.5 + 0.5;
+      const bhV = bhNdc.y * 0.5 + 0.5;
+
+      const tanHalfFov = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+      const denom = Math.sqrt(Math.max(0.5, camZ * camZ - R_SHADOW_WORLD * R_SHADOW_WORLD));
+      const shadowUvRadius = 0.5 * (R_SHADOW_WORLD / denom) / tanHalfFov;
+
+      lensingPass.uniforms.uBHPos.value.set(bhU, bhV);
+      lensingPass.uniforms.uShadowRadius.value = shadowUvRadius;
+      lensingPass.uniforms.uBHVisible.value = visible;
+
+      cinemaPass.uniforms.uTime.value = elapsed;
+      cinemaPass.uniforms.uPulse.value = pulse;
+      cinemaPass.uniforms.uBHPos.value.set(bhU, bhV);
+      cinemaPass.uniforms.uShadowRadius.value = shadowUvRadius;
+      cinemaPass.uniforms.uBHVisible.value = visible;
+
+      // Subtle breathing bloom modulation synced to photon ring pulse
+      bloomPass.strength = 0.34 + (pulse - 1.0) * 0.45;
+
+      composer.render();
+    }
+
+    animate();
+  </script>
+</body>
+</html>

@@ -1,0 +1,4005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpaceX Starship Launch — Mirror-Polished Stainless Steel 3D Simulation</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #070b16;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #f0f4fa;
+      user-select: none;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+
+    /* HUD Telemetry & Launch Control Bar */
+    #hud-bar {
+      position: fixed;
+      bottom: 22px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 16px;
+      border-radius: 999px;
+      background: rgba(10, 14, 24, 0.76);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+    }
+
+    .hud-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-right: 10px;
+      border-right: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #38bdf8;
+      box-shadow: 0 0 10px #38bdf8;
+      transition: background 0.25s, box-shadow 0.25s;
+    }
+    .status-dot.ignition {
+      background: #fb923c;
+      box-shadow: 0 0 12px #fb923c;
+    }
+    .status-dot.liftoff {
+      background: #22c55e;
+      box-shadow: 0 0 12px #22c55e;
+    }
+    .status-dot.paused {
+      background: #eab308;
+      box-shadow: 0 0 10px #eab308;
+    }
+
+    .hud-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #e2e8f0;
+      white-space: nowrap;
+    }
+
+    .hud-telemetry {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding-right: 10px;
+      border-right: 1px solid rgba(255, 255, 255, 0.14);
+      font-variant-numeric: tabular-nums;
+      font-size: 11.5px;
+      color: #cbd5e1;
+      white-space: nowrap;
+    }
+
+    .tele-item {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+    }
+    .tele-label {
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      text-transform: uppercase;
+    }
+    .tele-val {
+      font-weight: 600;
+      color: #f8fafc;
+      min-width: 52px;
+    }
+
+    .hud-buttons {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ctrl-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      color: #f1f5f9;
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+    }
+    .ctrl-btn:hover {
+      background: rgba(255, 255, 255, 0.18);
+      border-color: rgba(255, 255, 255, 0.36);
+      transform: translateY(-1px);
+    }
+    .ctrl-btn:active {
+      transform: translateY(0);
+    }
+    .ctrl-btn.primary {
+      background: linear-gradient(135deg, rgba(234, 88, 12, 0.85), rgba(249, 115, 22, 0.72));
+      border-color: rgba(251, 146, 60, 0.75);
+      color: #ffffff;
+      box-shadow: 0 4px 16px rgba(234, 88, 12, 0.35);
+    }
+    .ctrl-btn.primary:hover {
+      background: linear-gradient(135deg, rgba(249, 115, 22, 0.96), rgba(251, 146, 60, 0.88));
+      border-color: rgba(253, 186, 116, 0.95);
+      box-shadow: 0 6px 20px rgba(249, 115, 22, 0.5);
+    }
+    .ctrl-btn.active-toggle {
+      background: rgba(56, 189, 248, 0.22);
+      border-color: rgba(56, 189, 248, 0.65);
+      color: #e0f2fe;
+    }
+
+    #cam-hint {
+      position: fixed;
+      top: 16px;
+      right: 18px;
+      z-index: 15;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(10, 14, 24, 0.52);
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      backdrop-filter: blur(8px);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: rgba(226, 232, 240, 0.78);
+      pointer-events: none;
+    }
+
+    @media (max-width: 760px) {
+      #hud-bar {
+        flex-wrap: wrap;
+        justify-content: center;
+        border-radius: 20px;
+        width: calc(100vw - 24px);
+        padding: 10px 12px;
+      }
+      .hud-brand, .hud-telemetry {
+        border-right: none;
+        padding-right: 0;
+      }
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="cam-hint">Drag to Orbit &bull; Scroll to Zoom &bull; Right-Drag to Pan</div>
+
+  <div id="hud-bar">
+    <div class="hud-brand">
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text" class="hud-title">STARSHIP &bull; PAD HOLD</span>
+    </div>
+    <div class="hud-telemetry">
+      <div class="tele-item">
+        <span class="tele-label">CLOCK</span>
+        <span id="tele-time" class="tele-val">T- 00:01.8</span>
+      </div>
+      <div class="tele-item">
+        <span class="tele-label">ALT</span>
+        <span id="tele-alt" class="tele-val">0.0 m</span>
+      </div>
+      <div class="tele-item">
+        <span class="tele-label">VEL</span>
+        <span id="tele-vel" class="tele-val">0.0 m/s</span>
+      </div>
+    </div>
+    <div class="hud-buttons">
+      <button id="btn-launch" class="ctrl-btn primary" title="Trigger or Restart Engine Ignition &amp; Launch">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg>
+        <span id="btn-launch-label">Launch</span>
+      </button>
+      <button id="btn-pause" class="ctrl-btn" title="Pause or Resume Simulation">
+        <svg id="icon-pause" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="5" height="16" rx="1"/><rect x="14" y="4" width="5" height="16" rx="1"/></svg>
+        <span id="btn-pause-label">Pause</span>
+      </button>
+      <button id="btn-reset" class="ctrl-btn" title="Reset Rocket to Launchpad">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        <span>Reset</span>
+      </button>
+    </div>
+  </div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ============================================================================
+// 1. DETERMINISTIC PRNG, NOISE & MATH UTILITIES
+// ============================================================================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+const smootherstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * t * (t * (t * 6 - 15) + 10);
+};
+
+function hash2(ix, iy) {
+  const n = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+  return n - Math.floor(n);
+}
+
+function noise2D(x, y) {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy);
+  const b = hash2(ix + 1, iy);
+  const c = hash2(ix, iy + 1);
+  const d = hash2(ix + 1, iy + 1);
+  return lerp(lerp(a, b, ux), lerp(c, d, ux), uy);
+}
+
+function fbm2D(x, y, octaves = 5) {
+  let sum = 0;
+  let amp = 0.5;
+  let freq = 1.0;
+  let norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += amp * noise2D(x * freq, y * freq);
+    norm += amp;
+    freq *= 2.04;
+    amp *= 0.5;
+  }
+  return sum / norm;
+}
+
+// ============================================================================
+// 2. RENDERER, SCENE, CAMERA, ORBITCONTROLS & LIGHTING SETUP
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance',
+  stencil: false
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.98;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x88a2c4, 0.00018);
+
+// Low-angle hero camera view framing the entire Starship, Mechazilla Launch Holder Tower,
+// upper-left blazing Sun, realistic cumulus clouds, white SUV + crew on the far left, and lone figure on the right
+const HERO_CAM_POS = new THREE.Vector3(0.8, 3.8, 90.0);
+const HERO_CAM_TARGET = new THREE.Vector3(-1.2, 26.0, 0.0);
+
+const camera = new THREE.PerspectiveCamera(
+  46,
+  window.innerWidth / window.innerHeight,
+  0.2,
+  5500
+);
+camera.position.copy(HERO_CAM_POS);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(HERO_CAM_TARGET);
+controls.enableDamping = true;
+controls.dampingFactor = 0.055;
+controls.maxPolarAngle = Math.PI * 0.496; // Keep camera above concrete pad plane
+controls.minDistance = 8;
+controls.maxDistance = 900;
+controls.update();
+controls.saveState();
+
+// Track when the user manually interacts with OrbitControls
+let userInteractingWithCam = false;
+controls.addEventListener('start', () => { userInteractingWithCam = true; });
+controls.addEventListener('end', () => { userInteractingWithCam = false; });
+
+// Primary Lighting: High afternoon/twilight sunlight from upper-right-front
+// so the stainless steel hull gleams with a bright specular spine and the upper-left Moon is softly lit
+const sunLight = new THREE.DirectionalLight(0xfff5e8, 2.55);
+sunLight.position.set(115, 140, 125);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 20;
+sunLight.shadow.camera.far = 420;
+const sBound = 65;
+sunLight.shadow.camera.left = -sBound;
+sunLight.shadow.camera.right = sBound;
+sunLight.shadow.camera.top = sBound + 15;
+sunLight.shadow.camera.bottom = -sBound + 15;
+sunLight.shadow.bias = -0.00035;
+sunLight.shadow.normalBias = 0.025;
+scene.add(sunLight);
+scene.add(sunLight.target);
+
+// Hemisphere fill light matching deep twilight sky top & concrete/horizon bounce bottom
+const hemiLight = new THREE.HemisphereLight(0x6d94cc, 0x454a52, 0.68);
+scene.add(hemiLight);
+
+// Cool sky rim light from behind-left (moon direction)
+const rimLight = new THREE.DirectionalLight(0x88b8ff, 0.72);
+rimLight.position.set(-120, 95, -140);
+scene.add(rimLight);
+
+// Dynamic Point Lights for Engine Ignition & Plasma Plume Reflection
+// 1. Engine Core PointLight (moves with Starship aft skirt, illuminating tail fins & lower hull)
+const engineCoreLight = new THREE.PointLight(0xff7b1a, 0.0, 220, 1.35);
+engineCoreLight.position.set(0, 2.2, 0);
+scene.add(engineCoreLight);
+
+// 2. Pad Deflection Bounce PointLight (stays near concrete launchpad, bathing concrete, SUV, figure & smoke in fiery warmth)
+const padBounceLight = new THREE.PointLight(0xff5e0e, 0.0, 260, 1.35);
+padBounceLight.position.set(0, 2.5, 6.0);
+scene.add(padBounceLight);
+
+// ============================================================================
+// 3. PROCEDURAL TEXTURES (STAINLESS STEEL, FLAG, SPACEX LOGO, CONCRETE, MOON, SMOKE)
+// ============================================================================
+
+// 3A. Mirror-Polished 304L Stainless Steel Ring-Weld Normal & Roughness Maps
+function createStainlessSteelTextures() {
+  const w = 1024, h = 1024;
+
+  // Height map buffer for normal conversion
+  const heightBuf = new Float32Array(w * h);
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = w;
+  roughCanvas.height = h;
+  const rCtx = roughCanvas.getContext('2d');
+  const rImg = rCtx.createImageData(w, h);
+
+  // 16 horizontal circumferential ring bands across texture V, 8 vertical panels across U
+  const numRings = 16;
+  const numCols = 8;
+
+  for (let y = 0; y < h; y++) {
+    const v = y / h;
+    const ringPos = (v * numRings) % 1.0;
+    const ringIndex = Math.floor(v * numRings);
+    // Distance to horizontal weld seam
+    const distH = Math.min(ringPos, 1.0 - ringPos);
+    const weldH = Math.exp(-(distH * distH) / (0.011 * 0.011));
+
+    for (let x = 0; x < w; x++) {
+      const u = x / w;
+      // Stagger vertical weld seams on alternating rings
+      const uShift = (u + (ringIndex % 2) * (0.5 / numCols)) % 1.0;
+      const colPos = (uShift * numCols) % 1.0;
+      const colIndex = Math.floor(uShift * numCols);
+      const distV = Math.min(colPos, 1.0 - colPos);
+      const weldV = Math.exp(-(distV * distV) / (0.008 * 0.008));
+
+      const weld = Math.max(weldH, weldV * 0.75);
+
+      // Subtle "oil-canning" sheet metal pillowing inside each welded panel
+      // so reflections shimmer organically across the mirror-polished rings
+      const pillowH = Math.sin(ringPos * Math.PI);
+      const pillowV = Math.sin(colPos * Math.PI);
+      const panelSeed = hash2(ringIndex * 19 + colIndex * 7, ringIndex * 3 + 11);
+      const microWave =
+        Math.sin(ringPos * Math.PI * 2.0 + panelSeed * 6.28) * 0.18 +
+        (noise2D(u * 36.0, v * 72.0) - 0.5) * 0.14;
+
+      const hVal =
+        pillowH * pillowV * (0.32 + 0.15 * panelSeed) +
+        microWave -
+        weld * 0.42;
+
+      heightBuf[y * w + x] = hVal;
+
+      // Roughness: ultra-low mirror polish on panels (base ~14/255 -> 0.055), slightly rougher on weld beads
+      const fineBrush = (hash2(x, y * 0.25) - 0.5) * 6;
+      const rVal = clamp(Math.round(14 + weld * 46 + Math.abs(microWave) * 14 + fineBrush), 8, 95);
+      const idx = (y * w + x) * 4;
+      rImg.data[idx] = rVal;
+      rImg.data[idx + 1] = rVal;
+      rImg.data[idx + 2] = rVal;
+      rImg.data[idx + 3] = 255;
+    }
+  }
+  rCtx.putImageData(rImg, 0, 0);
+
+  // Convert heightBuf to normal map
+  const normCanvas = document.createElement('canvas');
+  normCanvas.width = w;
+  normCanvas.height = h;
+  const nCtx = normCanvas.getContext('2d');
+  const nImg = nCtx.createImageData(w, h);
+  const strength = 2.6;
+
+  for (let y = 0; y < h; y++) {
+    const ym = (y - 1 + h) % h;
+    const yp = (y + 1) % h;
+    for (let x = 0; x < w; x++) {
+      const xm = (x - 1 + w) % w;
+      const xp = (x + 1) % w;
+      const dX = (heightBuf[y * w + xp] - heightBuf[y * w + xm]) * strength;
+      const dY = (heightBuf[yp * w + x] - heightBuf[ym * w + x]) * strength;
+      let nx = -dX;
+      let ny = -dY;
+      let nz = 1.0;
+      const len = Math.hypot(nx, ny, nz);
+      nx /= len;
+      ny /= len;
+      nz /= len;
+
+      const idx = (y * w + x) * 4;
+      nImg.data[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+      nImg.data[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      nImg.data[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      nImg.data[idx + 3] = 255;
+    }
+  }
+  nCtx.putImageData(nImg, 0, 0);
+
+  const normalMap = new THREE.CanvasTexture(normCanvas);
+  normalMap.wrapS = THREE.RepeatWrapping;
+  normalMap.wrapT = THREE.RepeatWrapping;
+  normalMap.repeat.set(2, 2);
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
+  roughnessMap.repeat.set(2, 2);
+
+  return { normalMap, roughnessMap };
+}
+
+// 3B. Crisp United States Flag Decal Texture (Mid-Body)
+function createUSFlagTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 540;
+  const ctx = canvas.getContext('2d');
+
+  const pad = 16;
+  const fw = canvas.width - pad * 2;
+  const fh = canvas.height - pad * 2;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Subtle dark border bezel
+  ctx.fillStyle = 'rgba(20, 24, 30, 0.35)';
+  ctx.fillRect(pad - 3, pad - 3, fw + 6, fh + 6);
+
+  // 13 Horizontal Stripes (7 Red, 6 White)
+  const stripeH = fh / 13;
+  for (let i = 0; i < 13; i++) {
+    ctx.fillStyle = (i % 2 === 0) ? '#b31942' : '#f4f6fa';
+    ctx.fillRect(pad, pad + i * stripeH, fw, Math.ceil(stripeH + 0.5));
+  }
+
+  // Blue Union Canton (spans 7 stripes high, 0.4 * flag width)
+  const unionW = fw * 0.4;
+  const unionH = stripeH * 7;
+  ctx.fillStyle = '#0a3161';
+  ctx.fillRect(pad, pad, unionW, unionH);
+
+  // 50 White 5-Pointed Stars (9 staggered rows: 6-5-6-5-6-5-6-5-6)
+  ctx.fillStyle = '#ffffff';
+  const rowStep = unionH / 10;
+  const colStep = unionW / 12;
+  const starR = stripeH * 0.31;
+
+  function drawStar(cx, cy, rOuter) {
+    const rInner = rOuter * 0.382;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const r = (i % 2 === 0) ? rOuter : rInner;
+      const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+      const sx = cx + Math.cos(ang) * r;
+      const sy = cy + Math.sin(ang) * r;
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  for (let row = 0; row < 9; row++) {
+    const isSix = (row % 2 === 0);
+    const count = isSix ? 6 : 5;
+    const cy = pad + rowStep * (row + 1);
+    for (let c = 0; c < count; c++) {
+      const cx = pad + colStep * (isSix ? (1 + c * 2) : (2 + c * 2));
+      drawStar(cx, cy, starR);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+// 3C. Vertical Dark "SPACEX" Lettering Decal Texture (Lower Fuselage)
+function createVerticalSpaceXTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 2048;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw crisp geometric vector letters S, P, A, C, E, X stacked vertically
+  ctx.fillStyle = '#151922';
+  ctx.strokeStyle = '#151922';
+
+  const cx = 256;
+  const letterW = 195;
+  const letterH = 175;
+  const bar = 34;
+
+  // Helper to draw stylized geometric SpaceX characters at vertical center yCenter
+  function drawLetterS(y0) {
+    const left = cx - letterW * 0.5;
+    const right = cx + letterW * 0.5;
+    ctx.beginPath();
+    // Top bar
+    ctx.roundRect(left, y0, letterW, bar, [14, 0, 0, 14]);
+    // Upper-left vertical
+    ctx.fillRect(left, y0, bar, letterH * 0.54);
+    // Middle bar
+    ctx.roundRect(left, y0 + (letterH - bar) * 0.5, letterW, bar, 10);
+    // Lower-right vertical
+    ctx.fillRect(right - bar, y0 + (letterH - bar) * 0.5, bar, letterH * 0.54);
+    // Bottom bar
+    ctx.roundRect(left, y0 + letterH - bar, letterW, bar, [0, 14, 14, 0]);
+    ctx.fill();
+  }
+
+  function drawLetterP(y0) {
+    const left = cx - letterW * 0.5;
+    ctx.beginPath();
+    // Left stem
+    ctx.fillRect(left, y0, bar, letterH);
+    // Top bar
+    ctx.roundRect(left, y0, letterW * 0.92, bar, [0, 18, 0, 0]);
+    // Mid bar
+    ctx.roundRect(left + bar * 1.35, y0 + letterH * 0.5 - bar * 0.5, letterW * 0.92 - bar * 1.35, bar, [0, 0, 18, 0]);
+    // Right bowl vertical
+    ctx.roundRect(left + letterW * 0.92 - bar, y0, bar, letterH * 0.5 + bar * 0.5, [0, 18, 18, 0]);
+    ctx.fill();
+  }
+
+  function drawLetterA(y0) {
+    const left = cx - letterW * 0.52;
+    const right = cx + letterW * 0.52;
+    ctx.beginPath();
+    // Left diagonal leg
+    ctx.moveTo(cx - bar * 0.55, y0);
+    ctx.lineTo(cx + bar * 0.55, y0);
+    ctx.lineTo(left + bar * 1.15, y0 + letterH);
+    ctx.lineTo(left, y0 + letterH);
+    ctx.closePath();
+    // Right diagonal leg
+    ctx.moveTo(cx - bar * 0.55, y0);
+    ctx.lineTo(cx + bar * 0.55, y0);
+    ctx.lineTo(right, y0 + letterH);
+    ctx.lineTo(right - bar * 1.15, y0 + letterH);
+    ctx.closePath();
+    ctx.fill();
+    // Stylized inner crossbar / delta chevron
+    ctx.fillRect(cx - letterW * 0.22, y0 + letterH * 0.58, letterW * 0.44, bar * 0.9);
+  }
+
+  function drawLetterC(y0) {
+    const left = cx - letterW * 0.5;
+    ctx.beginPath();
+    ctx.roundRect(left, y0, letterW, bar, [18, 0, 0, 0]);
+    ctx.roundRect(left, y0, bar, letterH, [18, 0, 0, 18]);
+    ctx.roundRect(left, y0 + letterH - bar, letterW, bar, [0, 0, 0, 18]);
+    ctx.fill();
+  }
+
+  function drawLetterE(y0) {
+    const left = cx - letterW * 0.5;
+    ctx.beginPath();
+    ctx.fillRect(left, y0, letterW, bar);
+    ctx.fillRect(left, y0 + (letterH - bar) * 0.5, letterW * 0.84, bar);
+    ctx.fillRect(left, y0 + letterH - bar, letterW, bar);
+    ctx.fillRect(left, y0, bar * 1.05, letterH);
+    ctx.fill();
+  }
+
+  function drawLetterX(y0) {
+    const left = cx - letterW * 0.52;
+    const right = cx + letterW * 0.52;
+    // Upper-left to lower-right leg (split with SpaceX gap)
+    ctx.beginPath();
+    ctx.moveTo(left, y0);
+    ctx.lineTo(left + bar * 1.25, y0);
+    ctx.lineTo(cx - bar * 0.15, y0 + letterH * 0.43);
+    ctx.lineTo(cx - bar * 1.25, y0 + letterH * 0.43);
+    ctx.closePath();
+
+    ctx.moveTo(cx + bar * 0.15, y0 + letterH * 0.57);
+    ctx.lineTo(cx + bar * 1.28, y0 + letterH * 0.57);
+    ctx.lineTo(right, y0 + letterH);
+    ctx.lineTo(right - bar * 1.25, y0 + letterH);
+    ctx.closePath();
+    ctx.fill();
+
+    // Signature SpaceX sweeping arc from lower-left through upper-right!
+    ctx.beginPath();
+    ctx.moveTo(left - 6, y0 + letterH);
+    ctx.quadraticCurveTo(
+      cx - 10,
+      y0 + letterH * 0.36,
+      right + 42,
+      y0 - 14
+    );
+    ctx.lineTo(right + 42, y0 + 18);
+    ctx.quadraticCurveTo(
+      cx + 18,
+      y0 + letterH * 0.48,
+      left + bar * 1.22,
+      y0 + letterH
+    );
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  const startY = 140;
+  const stepY = 305;
+  drawLetterS(startY + stepY * 0);
+  drawLetterP(startY + stepY * 1);
+  drawLetterA(startY + stepY * 2);
+  drawLetterC(startY + stepY * 3);
+  drawLetterE(startY + stepY * 4);
+  drawLetterX(startY + stepY * 5);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+// 3D. Photorealistic Concrete Launch Apron Texture (Slabs, Expansion Joints, Scorch & Aggregate)
+function createConcretePadTextures() {
+  const size = 1024;
+  const diffCanvas = document.createElement('canvas');
+  diffCanvas.width = size;
+  diffCanvas.height = size;
+  const dCtx = diffCanvas.getContext('2d');
+  const dImg = dCtx.createImageData(size, size);
+
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = size;
+  roughCanvas.height = size;
+  const rCtx = roughCanvas.getContext('2d');
+  const rImg = rCtx.createImageData(size, size);
+
+  const gridCells = 8; // 8x8 poured concrete slabs per tile
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    const cellY = (v * gridCells) % 1.0;
+    const slabIY = Math.floor(v * gridCells);
+    const jointY = Math.min(cellY, 1.0 - cellY);
+
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const cellX = (u * gridCells) % 1.0;
+      const slabIX = Math.floor(u * gridCells);
+      const jointX = Math.min(cellX, 1.0 - cellX);
+
+      // Expansion joint dark groove
+      const jointDist = Math.min(jointX, jointY);
+      const isJoint = smoothstep(0.018, 0.004, jointDist);
+
+      // Per-slab subtle tone variation
+      const slabTint = (hash2(slabIX * 13 + 5, slabIY * 29 + 7) - 0.5) * 12;
+
+      // Multi-scale concrete weathering & aggregate
+      const nCoarse = fbm2D(u * 14.0, v * 14.0, 4);
+      const nFine = noise2D(u * 95.0, v * 95.0);
+      const grit = (hash2(x, y) - 0.5) * 14;
+
+      const baseGray = 148 + slabTint + (nCoarse - 0.5) * 32 + (nFine - 0.5) * 14 + grit - isJoint * 52;
+      const r = clamp(Math.round(baseGray * 1.01), 45, 220);
+      const g = clamp(Math.round(baseGray * 1.00), 45, 218);
+      const b = clamp(Math.round(baseGray * 0.97), 42, 214);
+
+      const idx = (y * size + x) * 4;
+      dImg.data[idx] = r;
+      dImg.data[idx + 1] = g;
+      dImg.data[idx + 2] = b;
+      dImg.data[idx + 3] = 255;
+
+      const rough = clamp(Math.round(205 - (nCoarse - 0.5) * 35 + isJoint * 35 + grit * 0.6), 130, 248);
+      rImg.data[idx] = rough;
+      rImg.data[idx + 1] = rough;
+      rImg.data[idx + 2] = rough;
+      rImg.data[idx + 3] = 255;
+    }
+  }
+  dCtx.putImageData(dImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(diffCanvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(22, 22);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
+  roughnessMap.repeat.set(22, 22);
+  roughnessMap.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  return { map, roughnessMap };
+}
+
+// 3E. High-Definition Ridged Cauliflower Smoke & Cloud Billow Normal + Alpha Texture (512x512)
+function createVolumetricPuffTexture() {
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+
+  // Ridged cellular billow function: creates crisp rounded cauliflower folds with deep creases
+  function billowFBM(x, y, octaves = 5) {
+    let sum = 0.0;
+    let amp = 0.52;
+    let freq = 1.0;
+    let norm = 0.0;
+    for (let i = 0; i < octaves; i++) {
+      const n = noise2D(x * freq, y * freq);
+      // Invert ridges so lobes are rounded and crevices are sharp
+      const billow = 1.0 - Math.abs(n * 2.0 - 1.0);
+      sum += amp * Math.pow(billow, 0.85);
+      norm += amp;
+      freq *= 2.07;
+      amp *= 0.5;
+    }
+    return sum / norm;
+  }
+
+  // Multi-lobe cauliflower puff structure
+  const subLobes = [
+    { cx: 0.0,   cy: 0.0,   r: 0.62, w: 1.0 },
+    { cx: -0.26, cy: -0.18, r: 0.46, w: 0.92 },
+    { cx: 0.27,  cy: -0.15, r: 0.45, w: 0.90 },
+    { cx: -0.22, cy: 0.24,  r: 0.44, w: 0.88 },
+    { cx: 0.24,  cy: 0.22,  r: 0.45, w: 0.90 },
+    { cx: 0.0,   cy: -0.30, r: 0.42, w: 0.94 }
+  ];
+
+  const densGrid = new Float32Array(size * size);
+  const creaseGrid = new Float32Array(size * size);
+
+  for (let y = 0; y < size; y++) {
+    const ny = (y / (size - 1)) * 2.0 - 1.0;
+    for (let x = 0; x < size; x++) {
+      const nx = (x / (size - 1)) * 2.0 - 1.0;
+
+      // Domain warp for organic turbulent curl
+      const wx = nx + (fbm2D(nx * 2.2 + 1.9, ny * 2.2 + 3.7, 3) - 0.5) * 0.24;
+      const wy = ny + (fbm2D(nx * 2.2 + 6.1, ny * 2.2 + 2.3, 3) - 0.5) * 0.24;
+
+      let lobeMask = 0.0;
+      for (let i = 0; i < subLobes.length; i++) {
+        const L = subLobes[i];
+        const d = Math.hypot(wx - L.cx, wy - L.cy) / L.r;
+        lobeMask = Math.max(lobeMask, smoothstep(1.0, 0.15, d) * L.w);
+      }
+
+      const bCoarse = billowFBM(wx * 2.6 + 4.2, wy * 2.6 + 7.1, 4);
+      const bFine   = billowFBM(wx * 6.4 + 1.5, wy * 6.4 + 8.3, 4);
+      const cauliflower = 0.62 * bCoarse + 0.38 * bFine;
+
+      const density = clamp(lobeMask * (0.48 + 0.82 * cauliflower), 0.0, 1.0);
+      densGrid[y * size + x] = density;
+      creaseGrid[y * size + x] = cauliflower;
+    }
+  }
+
+  for (let y = 0; y < size; y++) {
+    const ny = (y / (size - 1)) * 2.0 - 1.0;
+    const ym = Math.max(0, y - 2);
+    const yp = Math.min(size - 1, y + 2);
+    for (let x = 0; x < size; x++) {
+      const nx = (x / (size - 1)) * 2.0 - 1.0;
+      const xm = Math.max(0, x - 2);
+      const xp = Math.min(size - 1, x + 2);
+
+      const d = densGrid[y * size + x];
+      const alpha = smoothstep(0.14, 0.62, d);
+
+      // Finite-difference normal of the cauliflower folds for sharp 3D self-shadowing
+      const dX = (densGrid[y * size + xp] - densGrid[y * size + xm]) * 3.4;
+      const dY = (densGrid[yp * size + x] - densGrid[ym * size + x]) * 3.4;
+
+      let vx = nx * 0.55 - dX;
+      let vy = -ny * 0.55 + dY;
+      let vz = Math.sqrt(Math.max(0.06, 1.0 - Math.min(0.94, vx * vx + vy * vy)));
+      const vLen = Math.hypot(vx, vy, vz);
+      vx /= vLen;
+      vy /= vLen;
+      vz /= vLen;
+
+      // Pack normal (X, Y) in R, G; pack internal cauliflower crease AO in B; pack density alpha in A
+      const creaseAO = clamp(creaseGrid[y * size + x], 0.05, 1.0);
+      const idx = (y * size + x) * 4;
+      img.data[idx] = Math.round((vx * 0.5 + 0.5) * 255);
+      img.data[idx + 1] = Math.round((vy * 0.5 + 0.5) * 255);
+      img.data[idx + 2] = Math.round(creaseAO * 255);
+      img.data[idx + 3] = Math.round(alpha * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  return tex;
+}
+
+const steelMaps = createStainlessSteelTextures();
+const usFlagTex = createUSFlagTexture();
+const spaceXLogoTex = createVerticalSpaceXTexture();
+const concreteMaps = createConcretePadTextures();
+const puffNormalAlphaTex = createVolumetricPuffTexture();
+
+// ============================================================================
+// 4. REALISTIC DAYLIGHT ATMOSPHERIC SKY DOME, BLAZING SUN & VOLUMETRIC CLOUDS
+// ============================================================================
+// Position the visible blazing Sun in the upper-left sky so it is prominently
+// visible in the hero camera view and physically drives the scene's daylight!
+const SUN_WORLD_POS = new THREE.Vector3(-285, 315, -940);
+const SUN_DIR_VEC = SUN_WORLD_POS.clone().normalize();
+
+const skyDomeGeo = new THREE.SphereGeometry(2400, 64, 48);
+const skyDomeMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  depthWrite: false,
+  uniforms: {
+    uSunDir: { value: SUN_DIR_VEC },
+    uTime: { value: 0 },
+    uRocketAlt: { value: 0 }
+  },
+  vertexShader: /* glsl */ `
+    varying vec3 vWorldPos;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    varying vec3 vWorldPos;
+    uniform vec3 uSunDir;
+    uniform float uTime;
+    uniform float uRocketAlt;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    vec2 hash22(vec2 p) {
+      p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+      return fract(sin(p) * 43758.5453123);
+    }
+
+    // C2-continuous quintic value noise (zero grid derivative discontinuities)
+    float smoothNoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+      return mix(
+        mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+        u.y
+      );
+    }
+
+    // Isotropic Jittered Euclidean Round Puff Noise: builds clouds out of 100% round spherical lobes
+    // so there are NEVER any square/boxy grid lines or rectangular seams!
+    float roundPuffLayer(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      float acc = 0.0;
+      for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+          vec2 nb = vec2(float(x), float(y));
+          vec2 rnd = hash22(i + nb);
+          vec2 center = nb + 0.5 + 0.36 * sin(rnd * 6.2831853);
+          float dist = length(f - center);
+          float rad = 0.64 + 0.28 * rnd.x;
+          float puff = smoothstep(rad, rad * 0.08, dist);
+          // Smooth polynomial union of round cloud puffs
+          acc = max(acc, puff * (0.78 + 0.22 * rnd.y));
+        }
+      }
+      return acc;
+    }
+
+    float fbmSmooth(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
+      for (int i = 0; i < 5; i++) {
+        p = rot * p;
+        v += a * smoothNoise(p);
+        p *= 2.03;
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    // Multi-octave round cauliflower cumulus puff field
+    float cumulusPuffFbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.54;
+      float norm = 0.0;
+      mat2 rot = mat2(0.78, 0.625, -0.625, 0.78);
+      for (int i = 0; i < 4; i++) {
+        p = rot * p;
+        v += a * roundPuffLayer(p);
+        norm += a;
+        p *= 2.08;
+        a *= 0.50;
+      }
+      return v / norm;
+    }
+
+    // Evaluates realistic 3D perspective cumulus cloud deck at ray direction dir
+    float sampleSkyClouds(vec3 dir, out float outPuffRelief) {
+      float elev = dir.y;
+      if (elev <= -0.01 || elev >= 0.48) {
+        outPuffRelief = 0.0;
+        return 0.0;
+      }
+
+      // Project view ray onto a curved 3D atmospheric cloud ceiling so clouds naturally
+      // foreshorten in true 3D perspective toward the distant horizon!
+      float curvedY = max(elev, 0.0) + 0.11;
+      vec2 planeUV = dir.xz / curvedY;
+      planeUV += vec2(uTime * 0.0025, -uTime * 0.0015 - uRocketAlt * 0.0005);
+
+      // Soft organic domain warp
+      vec2 warp = vec2(
+        fbmSmooth(planeUV * 0.45 + vec2(1.4, 2.8)),
+        fbmSmooth(planeUV * 0.45 + vec2(6.1, 3.9))
+      ) - 0.5;
+      vec2 q = planeUV * 0.72 + warp * 0.36;
+
+      // Macro cumulus cluster distribution (creates distinct cloud formations with clear blue sky between them)
+      float macro = roundPuffLayer(q * 0.68 + vec2(0.4, 1.7)) * 0.62 +
+                    fbmSmooth(q * 0.85) * 0.38;
+
+      // Multi-scale round cauliflower puffs
+      float puffsCoarse = cumulusPuffFbm(q * 1.65);
+      float puffsFine   = fbmSmooth(q * 5.2);
+      outPuffRelief = clamp(puffsCoarse * 0.74 + puffsFine * 0.26, 0.0, 1.0);
+
+      // Keep a natural clear-sky opening around the blazing Sun disc so the Sun shines cleanly
+      float sunCos = max(dot(dir, uSunDir), 0.0);
+      float sunClearing = 1.0 - smoothstep(0.965, 0.994, sunCos) * 0.78;
+
+      // Fade smoothly at the far horizon and high zenith
+      float horizonFade = smoothstep(-0.005, 0.022, elev);
+      float zenithFade  = smoothstep(0.46, 0.14, elev);
+
+      float raw = (macro * 0.60 + outPuffRelief * 0.58 - 0.56) * horizonFade * zenithFade * sunClearing;
+      return clamp(raw * 2.65, 0.0, 1.0);
+    }
+
+    void main() {
+      vec3 dir = normalize(vWorldPos - cameraPosition);
+      float elev = dir.y;
+
+      // Physically inspired Rayleigh + Mie daylight sky gradient
+      float spaceBlend = clamp(uRocketAlt / 1800.0, 0.0, 0.65);
+      vec3 colHorizon = mix(vec3(0.72, 0.84, 0.96), vec3(0.45, 0.62, 0.84), spaceBlend);
+      vec3 colLower   = mix(vec3(0.24, 0.49, 0.83), vec3(0.14, 0.30, 0.62), spaceBlend);
+      vec3 colMid     = mix(vec3(0.09, 0.25, 0.58), vec3(0.04, 0.11, 0.32), spaceBlend);
+      vec3 colZenith  = mix(vec3(0.04, 0.12, 0.36), vec3(0.01, 0.025, 0.09), spaceBlend);
+
+      float h0 = clamp(elev, 0.0, 1.0);
+      vec3 sky = mix(colHorizon, colLower, smoothstep(0.0, 0.12, h0));
+      sky = mix(sky, colMid, smoothstep(0.10, 0.30, h0));
+      sky = mix(sky, colZenith, smoothstep(0.28, 0.78, h0));
+
+      // Mie & Rayleigh solar atmospheric scattering around the blazing Sun
+      vec3 sunDir = normalize(uSunDir);
+      float sunCos = max(dot(dir, sunDir), 0.0);
+      vec3 mieGlow = vec3(1.0, 0.84, 0.56) * pow(sunCos, 10.0) * 0.28;
+      vec3 solarAureole = vec3(1.0, 0.93, 0.74) * pow(sunCos, 85.0) * 0.95;
+      vec3 solarDisc = vec3(2.2, 2.05, 1.75) * smoothstep(0.9990, 0.99965, sunCos) * 2.8;
+      sky += mieGlow + solarAureole + solarDisc;
+
+      // Volumetric 3D Perspective Cumulus Clouds with 3-step Directional Solar Raymarching
+      if (elev > -0.005 && elev < 0.47) {
+        float puffRelief;
+        float dens = sampleSkyClouds(dir, puffRelief);
+
+        if (dens > 0.004) {
+          // 3-step directional light march toward the Sun to compute realistic 3D cloud self-shadowing
+          float dummyP;
+          vec3 toSunStep = normalize(sunDir - dir * dot(sunDir, dir)) * 0.014 + vec3(0.0, 0.008, 0.0);
+          float s1 = sampleSkyClouds(normalize(dir + toSunStep * 0.8), dummyP);
+          float s2 = sampleSkyClouds(normalize(dir + toSunStep * 1.9), dummyP);
+          float s3 = sampleSkyClouds(normalize(dir + toSunStep * 3.4), dummyP);
+          float opticalDepth = (s1 * 0.45 + s2 * 0.35 + s3 * 0.20) * 1.95;
+
+          // Beer-Lambert solar transmittance + dual-scattering powder effect
+          float sunTrans = exp(-opticalDepth * 1.85);
+          float powder = 1.0 - exp(-dens * 3.2);
+          float directLight = clamp(sunTrans * (0.38 + 0.72 * puffRelief) + powder * 0.20, 0.0, 1.0);
+
+          // Mie forward-scattered golden silver-lining near the Sun
+          float silverLining = (0.18 + 1.45 * pow(sunCos, 7.0)) * exp(-opticalDepth * 0.85) * (1.0 - dens * 0.42);
+
+          vec3 cDeepShadow = vec3(0.42, 0.53, 0.69);
+          vec3 cMidShadow  = vec3(0.71, 0.79, 0.89);
+          vec3 cSunlit     = vec3(1.00, 0.99, 0.97) + vec3(1.0, 0.90, 0.68) * silverLining;
+
+          vec3 cCol = mix(cDeepShadow, cMidShadow, smoothstep(0.06, 0.45, directLight));
+          cCol = mix(cCol, cSunlit, smoothstep(0.40, 0.84, directLight));
+
+          // Subtle internal cauliflower relief shading & distant atmospheric perspective blend
+          cCol *= 0.86 + 0.20 * puffRelief;
+          float distHaze = smoothstep(0.05, 0.002, elev);
+          cCol = mix(cCol, colHorizon * 0.96, distHaze * 0.42);
+
+          float cloudAlpha = smoothstep(0.01, 0.42, dens) * 0.95;
+          sky = mix(sky, cCol, cloudAlpha);
+        }
+      }
+
+      // Ground hemisphere below horizon (smoothly blends from atmospheric horizon haze)
+      if (elev < 0.0) {
+        vec3 horizonRim = mix(colHorizon, vec3(0.46, 0.52, 0.48), 0.35);
+        vec3 padBounce  = vec3(0.48, 0.51, 0.55);
+        sky = mix(colHorizon, horizonRim, smoothstep(0.0, -0.06, elev));
+        sky = mix(sky, padBounce, smoothstep(-0.06, -0.28, elev));
+      }
+
+      gl_FragColor = vec4(sky, 1.0);
+    }
+  `
+});
+const skyDome = new THREE.Mesh(skyDomeGeo, skyDomeMat);
+scene.add(skyDome);
+
+// Blazing 3D Sun Corona & Starburst Diffraction Rays in the Upper-Left Sky
+function createBlazingSun() {
+  const sunGroup = new THREE.Group();
+  sunGroup.position.copy(SUN_WORLD_POS);
+
+  // Crisp Golden Solar Corona & 16-Point Starburst Ray Sprite Texture (AdditiveBlending so it never darkens)
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const cx = size / 2, cy = size / 2;
+
+  const grad = ctx.createRadialGradient(cx, cy, 8, cx, cy, cx);
+  grad.addColorStop(0.0, 'rgba(255, 255, 248, 1.0)');
+  grad.addColorStop(0.09, 'rgba(255, 246, 210, 0.95)');
+  grad.addColorStop(0.22, 'rgba(255, 204, 115, 0.44)');
+  grad.addColorStop(0.50, 'rgba(255, 168, 70, 0.10)');
+  grad.addColorStop(1.0, 'rgba(255, 140, 40, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  for (let i = 0; i < 16; i++) {
+    const ang = (i * Math.PI) / 8 + 0.12;
+    const isMajor = (i % 2 === 0);
+    const len = isMajor ? 248 : 145;
+    const w = isMajor ? 4.8 : 2.5;
+    const rGrad = ctx.createLinearGradient(0, -len, 0, len);
+    rGrad.addColorStop(0.0, 'rgba(255, 220, 140, 0.0)');
+    rGrad.addColorStop(0.32, 'rgba(255, 235, 185, 0.24)');
+    rGrad.addColorStop(0.5, 'rgba(255, 255, 245, 0.75)');
+    rGrad.addColorStop(0.68, 'rgba(255, 235, 185, 0.24)');
+    rGrad.addColorStop(1.0, 'rgba(255, 220, 140, 0.0)');
+
+    ctx.save();
+    ctx.rotate(ang);
+    ctx.fillStyle = rGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, w, len, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+
+  const coronaSprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(canvas),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    })
+  );
+  coronaSprite.scale.set(270, 270, 1);
+  sunGroup.add(coronaSprite);
+
+  return sunGroup;
+}
+const blazingSunGroup = createBlazingSun();
+scene.add(blazingSunGroup);
+
+// ============================================================================
+// 5. ROCKET LAUNCH HOLDER TOWER ("MECHAZILLA"), HOLD-DOWN CLAMPS & LAUNCH COMPLEX
+// ============================================================================
+const ROCKET_R = 4.5;
+const SKIRT_Y = 3.8;
+const CYL_TOP_Y = 31.8;
+const NOSE_APEX_Y = 53.8;
+const NOSE_H = NOSE_APEX_Y - CYL_TOP_Y; // 22.0m
+
+function createRocketHolderAndLaunchTower() {
+  const holderRoot = new THREE.Group();
+
+  const towerSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x262d38,
+    roughness: 0.46,
+    metalness: 0.78
+  });
+  const trussSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x333c4a,
+    roughness: 0.50,
+    metalness: 0.72
+  });
+  const clampYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xe5a01d,
+    roughness: 0.38,
+    metalness: 0.45
+  });
+  const chromePistonMat = new THREE.MeshStandardMaterial({
+    color: 0xdce4ee,
+    roughness: 0.18,
+    metalness: 0.92
+  });
+  const cryoPipeMat = new THREE.MeshStandardMaterial({
+    color: 0xe6ecf4,
+    roughness: 0.32,
+    metalness: 0.55
+  });
+  const concretePlinthMat = new THREE.MeshStandardMaterial({
+    color: 0x9aa2ad,
+    roughness: 0.85,
+    metalness: 0.08
+  });
+  const padCushionMat = new THREE.MeshStandardMaterial({
+    color: 0x171a20,
+    roughness: 0.75,
+    metalness: 0.20
+  });
+
+  // --------------------------------------------------------------------------
+  // 5A. ORBITAL LAUNCH MOUNT (OLM) BASE RING & 6 HYDRAULIC HOLD-DOWN CLAMPS
+  // --------------------------------------------------------------------------
+  const olmGroup = new THREE.Group();
+
+  // Heavy circular steel launch table collar ring around the base skirt (leaves open flame trench beneath nozzles)
+  const ringPts = [
+    new THREE.Vector2(4.72, 2.15),
+    new THREE.Vector2(5.78, 2.15),
+    new THREE.Vector2(5.88, 3.25),
+    new THREE.Vector2(4.68, 3.25),
+    new THREE.Vector2(4.72, 2.15)
+  ];
+  const olmRingGeo = new THREE.LatheGeometry(ringPts, 36);
+  const olmRingMesh = new THREE.Mesh(olmRingGeo, towerSteelMat);
+  olmRingMesh.castShadow = true;
+  olmRingMesh.receiveShadow = true;
+  olmGroup.add(olmRingMesh);
+
+  // 6 Heavy Angled Steel Support Columns anchoring the Launch Mount Ring to the concrete pad
+  // Placed at azimuths midway between the 3 sweeping tail fins (-55°, +65°, +185°)
+  const colAzimuths = [-0.42, 0.10, 1.66, 2.18, 3.75, 4.28];
+  for (let i = 0; i < colAzimuths.length; i++) {
+    const az = colAzimuths[i];
+    const colMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.42, 0.54, 2.35, 12),
+      towerSteelMat
+    );
+    colMesh.position.set(Math.sin(az) * 5.35, 1.12, Math.cos(az) * 5.35);
+    colMesh.castShadow = true;
+    olmGroup.add(colMesh);
+
+    const baseFoot = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.72, 0.82, 0.25, 12),
+      concretePlinthMat
+    );
+    baseFoot.position.set(Math.sin(az) * 5.35, 0.12, Math.cos(az) * 5.35);
+    olmGroup.add(baseFoot);
+  }
+
+  // 6 Articulated Hydraulic Hold-Down Clamp Arms on top of the Launch Mount Ring
+  // They physically grip the Starship's lower fuselage skirt (r = 4.5m, y = 3.8m) until Liftoff!
+  const baseClamps = [];
+  for (let i = 0; i < 6; i++) {
+    const az = (i * Math.PI) / 3 + 0.08;
+    const clampBase = new THREE.Group();
+    clampBase.position.set(Math.sin(az) * 5.25, 3.25, Math.cos(az) * 5.25);
+    clampBase.rotation.y = az;
+
+    // Stationary housing block on OLM ring
+    const housing = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.45, 0.82), towerSteelMat);
+    housing.position.set(0, 0.22, 0);
+    clampBase.add(housing);
+
+    // Pivoting Hydraulic Hold-Down Jaw that clamps inward (-Z in local frame points toward rocket center)
+    const pivot = new THREE.Group();
+    pivot.position.set(0, 0.38, -0.15);
+
+    const armBeam = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.85, 0.78), clampYellowMat);
+    armBeam.position.set(0, 0.35, -0.28);
+    armBeam.castShadow = true;
+    pivot.add(armBeam);
+
+    const gripJaw = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.36, 0.35), padCushionMat);
+    gripJaw.position.set(0, 0.62, -0.62);
+    pivot.add(gripJaw);
+
+    const piston = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.72, 10), chromePistonMat);
+    piston.position.set(0, 0.18, 0.12);
+    piston.rotation.x = -0.45;
+    pivot.add(piston);
+
+    clampBase.add(pivot);
+    olmGroup.add(clampBase);
+    baseClamps.push(pivot);
+  }
+  holderRoot.add(olmGroup);
+
+  // --------------------------------------------------------------------------
+  // 5B. 64-METER TRUSSED LAUNCH INTEGRATION TOWER ("MECHAZILLA" HOLDER TOWER)
+  // --------------------------------------------------------------------------
+  const towerX = -11.2;
+  const towerZ = -3.4;
+  const towerHalfW = 2.15;
+  const plinthH = 2.6;
+  const towerTopY = 55.2;
+  const numBays = 14;
+  const bayH = (towerTopY - plinthH) / numBays;
+
+  const towerGroup = new THREE.Group();
+  towerGroup.position.set(towerX, 0, towerZ);
+
+  // Concrete Tower Foundation Plinth
+  const plinth = new THREE.Mesh(
+    new THREE.BoxGeometry(6.4, plinthH, 6.4),
+    concretePlinthMat
+  );
+  plinth.position.y = plinthH * 0.5;
+  plinth.castShadow = true;
+  plinth.receiveShadow = true;
+  towerGroup.add(plinth);
+
+  // 4 Heavy Vertical Steel Corner Columns
+  const colH = towerTopY - plinthH;
+  const cornerColGeo = new THREE.CylinderGeometry(0.36, 0.40, colH, 12);
+  const corners = [
+    [-towerHalfW, -towerHalfW],
+    [towerHalfW, -towerHalfW],
+    [towerHalfW, towerHalfW],
+    [-towerHalfW, towerHalfW]
+  ];
+  for (const [cx, cz] of corners) {
+    const col = new THREE.Mesh(cornerColGeo, towerSteelMat);
+    col.position.set(cx, plinthH + colH * 0.5, cz);
+    col.castShadow = true;
+    col.receiveShadow = true;
+    towerGroup.add(col);
+  }
+
+  // Instanced Horizontal Girts & Diagonal X-Bracing Trusses across all 15 Tower Bays
+  const strutSegments = [];
+  function pushStrut(pA, pB, r) {
+    strutSegments.push({ pA, pB, r });
+  }
+
+  for (let b = 0; b < numBays; b++) {
+    const y0 = plinthH + b * bayH;
+    const y1 = y0 + bayH;
+
+    for (let f = 0; f < 4; f++) {
+      const [xA, zA] = corners[f];
+      const [xB, zB] = corners[(f + 1) % 4];
+
+      const p0A = new THREE.Vector3(xA, y0, zA);
+      const p0B = new THREE.Vector3(xB, y0, zB);
+      const p1A = new THREE.Vector3(xA, y1, zA);
+      const p1B = new THREE.Vector3(xB, y1, zB);
+
+      // Horizontal box girt at top of bay
+      pushStrut(p1A, p1B, 0.16);
+      // Diagonal X-bracing struts
+      pushStrut(p0A, p1B, 0.115);
+      pushStrut(p0B, p1A, 0.115);
+    }
+  }
+
+  const unitCylGeo = new THREE.CylinderGeometry(1, 1, 1, 8);
+  unitCylGeo.rotateX(Math.PI / 2);
+  const trussInst = new THREE.InstancedMesh(unitCylGeo, trussSteelMat, strutSegments.length);
+  trussInst.castShadow = true;
+  const dummy = new THREE.Object3D();
+
+  for (let i = 0; i < strutSegments.length; i++) {
+    const { pA, pB, r } = strutSegments[i];
+    const dist = pA.distanceTo(pB);
+    dummy.position.lerpVectors(pA, pB, 0.5);
+    dummy.scale.set(r, r, dist);
+    dummy.lookAt(pB);
+    dummy.updateMatrix();
+    trussInst.setMatrixAt(i, dummy.matrix);
+  }
+  trussInst.instanceMatrix.needsUpdate = true;
+  towerGroup.add(trussInst);
+
+  // Internal Elevator Core & Cryogenic Propellant Riser Pipes on +X face (facing Starship)
+  const elevatorCore = new THREE.Mesh(
+    new THREE.BoxGeometry(1.55, colH, 1.55),
+    trussSteelMat
+  );
+  elevatorCore.position.set(-0.55, plinthH + colH * 0.5, -0.55);
+  towerGroup.add(elevatorCore);
+
+  for (const pipeZ of [-0.85, -0.25, 0.35]) {
+    const pipe = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.18, colH * 0.85, 12),
+      cryoPipeMat
+    );
+    pipe.position.set(towerHalfW + 0.32, plinthH + colH * 0.425, pipeZ);
+    towerGroup.add(pipe);
+  }
+
+  // Tower Roof Machinery Deck, Pulley Sheave Head & Lightning Arrestor Mast
+  const roofDeck = new THREE.Mesh(
+    new THREE.BoxGeometry(5.8, 1.4, 5.4),
+    towerSteelMat
+  );
+  roofDeck.position.set(0.4, towerTopY + 0.7, 0);
+  roofDeck.castShadow = true;
+  towerGroup.add(roofDeck);
+
+  const lightningMast = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.22, 5.4, 10),
+    chromePistonMat
+  );
+  lightningMast.position.set(0, towerTopY + 4.1, 0);
+  towerGroup.add(lightningMast);
+
+  // Red Aviation Obstruction Beacon at Top of Tower
+  const beaconMat = new THREE.MeshBasicMaterial({ color: 0xff3b20 });
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), beaconMat);
+  beacon.position.set(0, towerTopY + 6.9, 0);
+  towerGroup.add(beacon);
+
+  holderRoot.add(towerGroup);
+
+  // --------------------------------------------------------------------------
+  // 5C. DUAL ARTICULATED "CHOPSTICK" ROCKET HOLDER ARMS (MID-BODY AT Y = 26.2m)
+  // --------------------------------------------------------------------------
+  // Mounted on a sliding carriage on the tower and extending across to physically
+  // cradle and clamp the Starship's cylindrical stainless-steel fuselage!
+  const carriageY = 26.2;
+  const carriageGroup = new THREE.Group();
+  carriageGroup.position.set(towerX, carriageY, towerZ);
+
+  // Heavy Sliding Carriage Frame wrapping the 4 tower columns
+  const carriageCollar = new THREE.Mesh(
+    new THREE.BoxGeometry(5.4, 3.8, 5.4),
+    towerSteelMat
+  );
+  carriageCollar.castShadow = true;
+  carriageGroup.add(carriageCollar);
+
+  // Vector from Tower center (-11.2, -3.4) to Starship center (0, 0) in XZ plane
+  const toRocketDX = -towerX; // +11.2m
+  const toRocketDZ = -towerZ; // +3.4m
+  const toRocketDist = Math.hypot(toRocketDX, toRocketDZ); // ~11.705m
+  const toRocketYaw = Math.atan2(toRocketDZ, -toRocketDX); // Aligns +X arm beam toward rocket
+
+  // Align carriage arm mount toward the Starship centerline
+  const armMount = new THREE.Group();
+  armMount.rotation.y = -Math.atan2(toRocketDZ, toRocketDX);
+  carriageGroup.add(armMount);
+
+  // Helper to build one massive trussed Chopstick Holder Arm (side = +1 for Front Arm, -1 for Rear Arm)
+  function buildChopstickArm(side) {
+    const pivotGroup = new THREE.Group();
+    // Hinge pivot at front face of carriage (x = 2.4m along local +X toward rocket, z = side * 2.35m)
+    const hingeX = 2.35;
+    const hingeZ = side * 2.45;
+    pivotGroup.position.set(hingeX, 0, hingeZ);
+
+    const armLen = 13.8; // Reaches past rocket center (at x = 11.7m) so padded gripper embraces hull!
+
+    // Primary lower & upper steel box beams of the Chopstick arm
+    const lowerBeam = new THREE.Mesh(
+      new THREE.BoxGeometry(armLen, 0.62, 0.58),
+      towerSteelMat
+    );
+    lowerBeam.position.set(armLen * 0.5, -0.52, 0);
+    lowerBeam.castShadow = true;
+    pivotGroup.add(lowerBeam);
+
+    const upperBeam = new THREE.Mesh(
+      new THREE.BoxGeometry(armLen * 0.92, 0.44, 0.48),
+      trussSteelMat
+    );
+    upperBeam.position.set(armLen * 0.46, 0.68, 0);
+    upperBeam.castShadow = true;
+    pivotGroup.add(upperBeam);
+
+    // Vertical & diagonal Warren truss struts connecting upper & lower chopstick beams
+    const numTrussPosts = 8;
+    for (let k = 0; k < numTrussPosts; k++) {
+      const px = 1.1 + k * 1.55;
+      const post = new THREE.Mesh(
+        new THREE.BoxGeometry(0.24, 1.2, 0.36),
+        trussSteelMat
+      );
+      post.position.set(px, 0.08, 0);
+      pivotGroup.add(post);
+
+      if (k < numTrussPosts - 1) {
+        const diag = new THREE.Mesh(
+          new THREE.BoxGeometry(1.75, 0.18, 0.28),
+          clampYellowMat
+        );
+        diag.position.set(px + 0.77, 0.08, 0);
+        diag.rotation.z = (k % 2 === 0) ? 0.58 : -0.58;
+        pivotGroup.add(diag);
+      }
+    }
+
+    // Heavy Upper Tension Guy-Rod anchoring the Chopstick arm back to the top of the carriage
+    const cableGeo = new THREE.CylinderGeometry(0.08, 0.08, 9.8, 8);
+    cableGeo.rotateZ(Math.PI / 2);
+    const tensionRod = new THREE.Mesh(cableGeo, chromePistonMat);
+    tensionRod.position.set(4.6, 1.65, 0);
+    tensionRod.rotation.z = -0.22;
+    pivotGroup.add(tensionRod);
+
+    // Hydraulic Swing Actuator Cylinder at Hinge Root
+    const actuator = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.26, 2.8, 12),
+      chromePistonMat
+    );
+    actuator.rotation.z = Math.PI / 2;
+    actuator.position.set(1.2, -0.15, -side * 0.65);
+    actuator.rotation.y = side * 0.28;
+    pivotGroup.add(actuator);
+
+    // Padded Hydraulic Rocket Gripper Cradle & Locking Pin Assembly at x = (toRocketDist - hingeX)
+    // At this X station, the rocket hull outer surface is at z_inner = -side * (ROCKET_R - 2.45)
+    const rocketLocalX = toRocketDist - hingeX; // ~9.35m along the arm
+    const gripperAssembly = new THREE.Group();
+    gripperAssembly.position.set(rocketLocalX, 0.0, -side * 0.42);
+
+    // Yellow Hydraulic Clamp Jaw Frame
+    const jawFrame = new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 1.65, 0.85),
+      clampYellowMat
+    );
+    jawFrame.castShadow = true;
+    gripperAssembly.add(jawFrame);
+
+    // Dark Curved Elastomer Gripper Cushion Pad pressing flush against the Starship's stainless-steel hull!
+    const cushionPad = new THREE.Mesh(
+      new THREE.BoxGeometry(3.8, 1.35, 0.62),
+      padCushionMat
+    );
+    cushionPad.position.z = -side * 0.35;
+    gripperAssembly.add(cushionPad);
+
+    // Two hydraulic shock dampers connecting chopstick beam to the gripper pad
+    for (const dx of [-1.05, 1.05]) {
+      const damper = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.20, 0.95, 10),
+        chromePistonMat
+      );
+      damper.rotation.x = Math.PI / 2;
+      damper.position.set(dx, 0.0, 0.15);
+      gripperAssembly.add(damper);
+    }
+
+    pivotGroup.add(gripperAssembly);
+
+    // Closed angle so the inner gripper cushion presses snugly against the R = 4.5m Starship cylinder
+    const closedAngle = side * 0.195;
+    pivotGroup.rotation.y = closedAngle;
+
+    return { pivotGroup, closedAngle, side };
+  }
+
+  const frontChopstick = buildChopstickArm(1);  // Extends across the front-left side of Starship
+  const rearChopstick = buildChopstickArm(-1);  // Extends behind the rear-left side of Starship
+  armMount.add(frontChopstick.pivotGroup);
+  armMount.add(rearChopstick.pivotGroup);
+  holderRoot.add(carriageGroup);
+
+  // --------------------------------------------------------------------------
+  // 5D. QUICK-DISCONNECT (QD) UMBILICAL HOLDER ARM (Y = 14.5m) & UPPER STABILIZER ARM (Y = 38.0m)
+  // --------------------------------------------------------------------------
+  function buildSwingUmbilicalHolderArm(yElev, armLabelColor) {
+    const mountGroup = new THREE.Group();
+    mountGroup.position.set(towerX, yElev, towerZ);
+    mountGroup.rotation.y = -Math.atan2(toRocketDZ, toRocketDX);
+
+    const pivot = new THREE.Group();
+    pivot.position.set(2.1, 0, 1.4);
+
+    // Distance from pivot to rocket hull surface (toRocketDist - 2.1 - ROCKET_R * 0.85)
+    const reachLen = toRocketDist - 2.1 - ROCKET_R + 0.65;
+
+    // Trussed umbilical boom
+    const boom = new THREE.Mesh(
+      new THREE.BoxGeometry(reachLen, 0.72, 0.68),
+      armLabelColor
+    );
+    boom.position.set(reachLen * 0.5, 0, -0.55);
+    boom.rotation.y = 0.18;
+    boom.castShadow = true;
+    pivot.add(boom);
+
+    // Cryogenic insulated transfer hose along boom
+    const hose = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.16, reachLen * 0.95, 12),
+      cryoPipeMat
+    );
+    hose.rotation.z = Math.PI / 2;
+    hose.position.set(reachLen * 0.48, 0.48, -0.55);
+    hose.rotation.y = 0.18;
+    pivot.add(hose);
+
+    // Curved Quick-Disconnect Clamping Plate pressing against the Starship hull
+    const qdClampPlate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.55, 1.45, 1.85),
+      clampYellowMat
+    );
+    qdClampPlate.position.set(reachLen, 0, -1.12);
+    qdClampPlate.castShadow = true;
+    pivot.add(qdClampPlate);
+
+    const qdSealPad = new THREE.Mesh(
+      new THREE.BoxGeometry(0.45, 1.25, 1.65),
+      padCushionMat
+    );
+    qdSealPad.position.set(reachLen + 0.22, 0, -1.12);
+    pivot.add(qdSealPad);
+
+    mountGroup.add(pivot);
+    holderRoot.add(mountGroup);
+    return pivot;
+  }
+
+  const lowerQDArmPivot = buildSwingUmbilicalHolderArm(14.6, trussSteelMat);
+  const upperStabilizerPivot = buildSwingUmbilicalHolderArm(37.8, towerSteelMat);
+
+  // --------------------------------------------------------------------------
+  // 5E. DYNAMIC HOLDER RELEASE UPDATE FUNCTION (CALLED EVERY FRAME)
+  // --------------------------------------------------------------------------
+  // tRelease = 0 when holding rocket on pad (Pad Hold & Ignition Thrust Build)
+  // tRelease -> 1 right at Liftoff as clamps unclamp and Chopstick arms open wide!
+  function update(simTime, T_IGNITION, T_LIFTOFF) {
+    // Subtle structural Pre-Release Tension tremor during Engine Ignition while holding the rocket down
+    let holdTremor = 0.0;
+    if (simTime >= T_IGNITION && simTime < T_LIFTOFF) {
+      const igFrac = clamp((simTime - T_IGNITION) / (T_LIFTOFF - T_IGNITION), 0.0, 1.0);
+      holdTremor = Math.sin(simTime * 68.0) * 0.008 * igFrac;
+    }
+
+    // Release progress: 0 while holding rocket on pad, smoothly opening at liftoff
+    const clampRelease = smootherstep(T_LIFTOFF - 0.12, T_LIFTOFF + 0.32, simTime);
+    const armOpen = smootherstep(T_LIFTOFF - 0.08, T_LIFTOFF + 1.15, simTime);
+
+    // 1. 6 Base Hydraulic Hold-Down Clamps snap outward by 52° at liftoff
+    for (let i = 0; i < baseClamps.length; i++) {
+      baseClamps[i].rotation.x = holdTremor + clampRelease * 0.92;
+    }
+
+    // 2. Dual Chopstick Rocket Holder Arms open wide (±38°) to release the Starship hull & clear tail fins
+    frontChopstick.pivotGroup.rotation.y =
+      frontChopstick.closedAngle + holdTremor - armOpen * 0.66;
+    rearChopstick.pivotGroup.rotation.y =
+      rearChopstick.closedAngle - holdTremor + armOpen * 0.66;
+
+    // 3. Lower QD Cryogenic Arm & Upper Stabilizer Holder Arm detach & swing back toward tower
+    const qdSwing = smootherstep(T_LIFTOFF - 0.15, T_LIFTOFF + 0.75, simTime);
+    lowerQDArmPivot.rotation.y = holdTremor - qdSwing * 0.78;
+    upperStabilizerPivot.rotation.y = holdTremor - qdSwing * 0.82;
+  }
+
+  return { root: holderRoot, update };
+}
+
+const rocketHolderSystem = createRocketHolderAndLaunchTower();
+scene.add(rocketHolderSystem.root);
+
+function createLaunchComplex() {
+  const padGroup = new THREE.Group();
+
+  // 5A. Wide Flat Concrete Launch Apron (860m x 860m concrete apron + expansive surrounding coastal ground plane)
+  const surroundingGround = new THREE.Mesh(
+    new THREE.CircleGeometry(18000, 64),
+    new THREE.MeshStandardMaterial({
+      color: 0x7e8c78,
+      roughness: 0.92,
+      metalness: 0.02
+    })
+  );
+  surroundingGround.rotation.x = -Math.PI / 2;
+  surroundingGround.position.y = -0.05;
+  surroundingGround.receiveShadow = true;
+  padGroup.add(surroundingGround);
+
+  concreteMaps.map.repeat.set(52, 52);
+  concreteMaps.roughnessMap.repeat.set(52, 52);
+
+  const apronGeo = new THREE.PlaneGeometry(860, 860, 1, 1);
+  const apronMat = new THREE.MeshStandardMaterial({
+    map: concreteMaps.map,
+    roughnessMap: concreteMaps.roughnessMap,
+    roughness: 0.82,
+    metalness: 0.06,
+    color: 0xbec4cc
+  });
+  const apronMesh = new THREE.Mesh(apronGeo, apronMat);
+  apronMesh.rotation.x = -Math.PI / 2;
+  apronMesh.position.y = 0.0;
+  apronMesh.receiveShadow = true;
+  padGroup.add(apronMesh);
+
+  // Paved Asphalt Perimeter Service Road leading past the White SUV toward the Launchpad & Tank Farm
+  const roadMat = new THREE.MeshStandardMaterial({
+    color: 0x383e47,
+    roughness: 0.86,
+    metalness: 0.05
+  });
+  const accessRoad = new THREE.Mesh(new THREE.PlaneGeometry(11.5, 420), roadMat);
+  accessRoad.rotation.x = -Math.PI / 2;
+  accessRoad.rotation.z = 0.12;
+  accessRoad.position.set(-34.0, 0.012, -45.0);
+  accessRoad.receiveShadow = true;
+  padGroup.add(accessRoad);
+
+  // Coastal Sand Dunes & Earthen Blast Berms ringing the outer launch complex perimeter
+  const duneMat = new THREE.MeshStandardMaterial({
+    color: 0x8d8978,
+    roughness: 0.94,
+    metalness: 0.02
+  });
+  const dunePositions = [
+    [-260, -310, 95, 14, 48],
+    [-90,  -340, 115, 16, 52],
+    [85,   -335, 110, 15, 50],
+    [255,  -305, 95, 13, 45],
+    [-310, -140, 65, 11, 85],
+    [310,  -150, 68, 12, 85]
+  ];
+  for (const [dx, dz, sx, sy, sz] of dunePositions) {
+    const dune = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
+      duneMat
+    );
+    dune.position.set(dx, -0.2, dz);
+    dune.scale.set(sx, sy, sz);
+    dune.receiveShadow = true;
+    padGroup.add(dune);
+  }
+
+  // 5B. Pad Blast Scorch Mark & Hazard Ring Decal on Concrete Beneath Starship
+  const scorchCanvas = document.createElement('canvas');
+  scorchCanvas.width = 512;
+  scorchCanvas.height = 512;
+  const sCtx = scorchCanvas.getContext('2d');
+  const cx = 256, cy = 256;
+
+  // Radial dark carbon/exhaust scorch gradient
+  const sGrad = sCtx.createRadialGradient(cx, cy, 8, cx, cy, 220);
+  sGrad.addColorStop(0.0, 'rgba(18, 20, 24, 0.84)');
+  sGrad.addColorStop(0.28, 'rgba(34, 36, 40, 0.56)');
+  sGrad.addColorStop(0.62, 'rgba(65, 68, 72, 0.18)');
+  sGrad.addColorStop(1.0, 'rgba(90, 92, 96, 0.0)');
+  sCtx.fillStyle = sGrad;
+  sCtx.fillRect(0, 0, 512, 512);
+
+  // Crisp yellow octagonal/circular pad safety boundary line
+  sCtx.strokeStyle = 'rgba(228, 178, 38, 0.65)';
+  sCtx.lineWidth = 3.5;
+  sCtx.setLineDash([14, 10]);
+  sCtx.beginPath();
+  sCtx.arc(cx, cy, 175, 0, Math.PI * 2);
+  sCtx.stroke();
+
+  const scorchMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(34, 34),
+    new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(scorchCanvas),
+      transparent: true,
+      depthWrite: false
+    })
+  );
+  scorchMesh.rotation.x = -Math.PI / 2;
+  scorchMesh.position.y = 0.015;
+  padGroup.add(scorchMesh);
+
+  // 5C. Distant Launch-Site Structures on the Horizon (Cryo Tank Farm, High-Bay Assembly Building, Radome & Masts)
+  const structMatWhite = new THREE.MeshStandardMaterial({
+    color: 0xdce2ea,
+    roughness: 0.42,
+    metalness: 0.25
+  });
+  const structMatDark = new THREE.MeshStandardMaterial({
+    color: 0x333b47,
+    roughness: 0.62,
+    metalness: 0.42
+  });
+  const structMatSteel = new THREE.MeshStandardMaterial({
+    color: 0xbac4d0,
+    roughness: 0.25,
+    metalness: 0.82
+  });
+  const bayWindowMat = new THREE.MeshPhysicalMaterial({
+    color: 0x162234,
+    roughness: 0.12,
+    metalness: 0.45,
+    clearcoat: 1.0
+  });
+
+  // Left-horizon Propellant Tank Farm (Cryogenic vertical LOX / LCH4 storage tanks + blast berm)
+  const tankFarm = new THREE.Group();
+  tankFarm.position.set(-135, 0, -165);
+  for (let i = 0; i < 6; i++) {
+    const tR = 2.8;
+    const tH = 14.5;
+    const tank = new THREE.Mesh(
+      new THREE.CylinderGeometry(tR, tR, tH, 20),
+      i % 2 === 0 ? structMatWhite : structMatSteel
+    );
+    tank.position.set(i * 7.5, tH * 0.5, (i % 2) * -6.0);
+    tank.castShadow = true;
+    tankFarm.add(tank);
+
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(tR, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
+      i % 2 === 0 ? structMatWhite : structMatSteel
+    );
+    dome.position.set(i * 7.5, tH, (i % 2) * -6.0);
+    tankFarm.add(dome);
+  }
+  // Horizontal bullet tanks & concrete blast wall
+  for (let i = 0; i < 3; i++) {
+    const hTank = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.1, 2.1, 16, 16),
+      structMatWhite
+    );
+    hTank.rotation.z = Math.PI / 2;
+    hTank.position.set(48 + i * 20, 3.2, -4);
+    tankFarm.add(hTank);
+  }
+  const bermWall = new THREE.Mesh(new THREE.BoxGeometry(96, 3.6, 2.4), structMatDark);
+  bermWall.position.set(38, 1.8, 8);
+  tankFarm.add(bermWall);
+  padGroup.add(tankFarm);
+
+  // Right-horizon Integration Complex: SpaceX Mega-Bay High-Bay Tower, Hangars & Telemetry Radome
+  const rightComplex = new THREE.Group();
+  rightComplex.position.set(125, 0, -175);
+
+  const hangar1 = new THREE.Mesh(new THREE.BoxGeometry(34, 9.5, 22), structMatDark);
+  hangar1.position.set(0, 4.75, 0);
+  hangar1.castShadow = true;
+  rightComplex.add(hangar1);
+
+  const hangar2 = new THREE.Mesh(new THREE.BoxGeometry(24, 6.8, 16), structMatWhite);
+  hangar2.position.set(32, 3.4, 6);
+  rightComplex.add(hangar2);
+
+  // Tall SpaceX High-Bay / Mega-Bay Vertical Integration Building in background
+  const megaBay = new THREE.Mesh(new THREE.BoxGeometry(26, 36, 26), structMatDark);
+  megaBay.position.set(65, 18, -28);
+  megaBay.castShadow = true;
+  rightComplex.add(megaBay);
+
+  const megaBayTopGlass = new THREE.Mesh(new THREE.BoxGeometry(26.4, 5.2, 26.4), bayWindowMat);
+  megaBayTopGlass.position.set(65, 31.8, -28);
+  rightComplex.add(megaBayTopGlass);
+
+  // White spherical telemetry radome on pedestal
+  const radomeBase = new THREE.Mesh(new THREE.CylinderGeometry(2.8, 3.2, 4.0, 16), structMatDark);
+  radomeBase.position.set(-28, 2.0, 10);
+  rightComplex.add(radomeBase);
+  const radome = new THREE.Mesh(new THREE.SphereGeometry(4.2, 20, 16), structMatWhite);
+  radome.position.set(-28, 6.2, 10);
+  rightComplex.add(radome);
+
+  // Distant tall slender lightning / water tower masts flanking the far background
+  const mastOffsets = [
+    [-210, -240],
+    [-85, -260],
+    [95, -255],
+    [220, -230]
+  ];
+  for (const [mx, mz] of mastOffsets) {
+    const mast = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.85, 38, 8),
+      structMatSteel
+    );
+    mast.position.set(mx, 19, mz);
+    padGroup.add(mast);
+  }
+
+  padGroup.add(rightComplex);
+  return padGroup;
+}
+scene.add(createLaunchComplex());
+
+// ============================================================================
+// 6. SCALE ELEMENTS: WHITE SUV + CREW (FAR LEFT) & LONE FIGURE IN WHITE (RIGHT)
+// ============================================================================
+
+// Helper: Build a proportionate human figure (~1.78m tall)
+function createHumanFigure({ suitColor = 0xf4f7fb, accentColor = 0x1e2430, withHelmet = true } = {}) {
+  const fig = new THREE.Group();
+
+  const suitMat = new THREE.MeshStandardMaterial({
+    color: suitColor,
+    roughness: 0.48,
+    metalness: 0.08
+  });
+  const darkMat = new THREE.MeshStandardMaterial({
+    color: accentColor,
+    roughness: 0.35,
+    metalness: 0.25
+  });
+  const visorMat = new THREE.MeshPhysicalMaterial({
+    color: 0x0f172a,
+    roughness: 0.12,
+    metalness: 0.65,
+    clearcoat: 1.0
+  });
+
+  // Boots & Legs
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.84, 10), suitMat);
+    leg.position.set(side * 0.105, 0.44, 0);
+    leg.castShadow = true;
+    fig.add(leg);
+
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.09, 0.21), darkMat);
+    boot.position.set(side * 0.105, 0.045, 0.03);
+    fig.add(boot);
+  }
+
+  // Torso
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.16, 0.62, 12), suitMat);
+  torso.scale.set(1.0, 1.0, 0.68);
+  torso.position.set(0, 1.14, 0);
+  torso.castShadow = true;
+  fig.add(torso);
+
+  // Arms
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.05, 0.58, 10), suitMat);
+    arm.position.set(side * 0.23, 1.10, 0);
+    arm.rotation.z = -side * 0.10;
+    arm.castShadow = true;
+    fig.add(arm);
+  }
+
+  // Head / Helmet tilted slightly upward to gaze at the towering Starship
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, 1.58, 0);
+  headGroup.rotation.x = -0.34; // Looking up toward the rocket
+
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.135, 16, 14), withHelmet ? suitMat : darkMat);
+  helmet.scale.set(0.92, 1.05, 1.0);
+  helmet.castShadow = true;
+  headGroup.add(helmet);
+
+  if (withHelmet) {
+    const visor = new THREE.Mesh(
+      new THREE.SphereGeometry(0.128, 14, 10, -0.8, 1.6, 0.85, 0.8),
+      visorMat
+    );
+    visor.position.set(0, 0.01, 0.02);
+    headGroup.add(visor);
+  }
+  fig.add(headGroup);
+
+  // Soft ground contact shadow disc
+  const shadowDisc = new THREE.Mesh(
+    new THREE.CircleGeometry(0.45, 16),
+    new THREE.MeshBasicMaterial({
+      color: 0x0a0d12,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false
+    })
+  );
+  shadowDisc.rotation.x = -Math.PI / 2;
+  shadowDisc.position.y = 0.018;
+  fig.add(shadowDisc);
+
+  return fig;
+}
+
+// 6A. White SUV with Crew Members on the Far Left
+function createWhiteSUVAndCrew() {
+  const group = new THREE.Group();
+  // Positioned on the far left of the concrete apron in the low-angle hero view
+  group.position.set(-24.5, 0, -1.5);
+  group.rotation.y = 0.36; // Angled inward toward the launchpad center
+
+  const suvGroup = new THREE.Group();
+
+  const whitePaintMat = new THREE.MeshPhysicalMaterial({
+    color: 0xf4f7fb,
+    roughness: 0.16,
+    metalness: 0.12,
+    clearcoat: 0.9,
+    clearcoatRoughness: 0.1
+  });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0x111926,
+    roughness: 0.08,
+    metalness: 0.25,
+    clearcoat: 1.0
+  });
+  const trimMat = new THREE.MeshStandardMaterial({
+    color: 0x1c212b,
+    roughness: 0.65,
+    metalness: 0.25
+  });
+  const tireMat = new THREE.MeshStandardMaterial({
+    color: 0x181b20,
+    roughness: 0.85,
+    metalness: 0.08
+  });
+  const rimMat = new THREE.MeshStandardMaterial({
+    color: 0xd5dce6,
+    roughness: 0.24,
+    metalness: 0.85
+  });
+
+  // Lower SUV Body Chassis (Length: 4.85m along X, Height: 0.78m, Width: 2.02m along Z)
+  const lowerBody = new THREE.Mesh(new THREE.BoxGeometry(4.85, 0.78, 2.02), whitePaintMat);
+  lowerBody.position.set(0, 0.78, 0);
+  lowerBody.castShadow = true;
+  lowerBody.receiveShadow = true;
+  suvGroup.add(lowerBody);
+
+  // Lower black rocker cladding & bumpers
+  const cladding = new THREE.Mesh(new THREE.BoxGeometry(4.92, 0.22, 2.06), trimMat);
+  cladding.position.set(0, 0.45, 0);
+  suvGroup.add(cladding);
+
+  // Upper Cabin Greenhouse
+  const cabinRoof = new THREE.Mesh(new THREE.BoxGeometry(2.95, 0.66, 1.78), whitePaintMat);
+  cabinRoof.position.set(-0.38, 1.46, 0);
+  cabinRoof.castShadow = true;
+  suvGroup.add(cabinRoof);
+
+  // Flush Tinted Cabin Windows (Windshield, Side windows, Rear glass)
+  const windowBlock = new THREE.Mesh(new THREE.BoxGeometry(2.82, 0.54, 1.82), glassMat);
+  windowBlock.position.set(-0.36, 1.44, 0);
+  suvGroup.add(windowBlock);
+
+  // Sloped Front Windshield
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.56, 1.72), glassMat);
+  windshield.position.set(1.08, 1.38, 0);
+  windshield.rotation.z = -0.52;
+  suvGroup.add(windshield);
+
+  // Roof Rails
+  for (const side of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.06, 0.06), trimMat);
+    rail.position.set(-0.42, 1.82, side * 0.76);
+    suvGroup.add(rail);
+  }
+
+  // Front Grille & Headlights (+X front)
+  const grille = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.36, 1.18), trimMat);
+  grille.position.set(2.44, 0.82, 0);
+  suvGroup.add(grille);
+
+  const headLightMat = new THREE.MeshBasicMaterial({ color: 0xe8f4ff });
+  for (const side of [-1, 1]) {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.32), headLightMat);
+    hl.position.set(2.44, 0.92, side * 0.76);
+    suvGroup.add(hl);
+  }
+
+  // Rear Taillights (-X rear)
+  const tailLightMat = new THREE.MeshBasicMaterial({ color: 0xd92626 });
+  for (const side of [-1, 1]) {
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.34), tailLightMat);
+    tl.position.set(-2.44, 0.96, side * 0.78);
+    suvGroup.add(tl);
+  }
+
+  // 4 Wheels & Alloy Rims
+  const wheelCoords = [
+    [1.48, 0.96],
+    [1.48, -0.96],
+    [-1.48, 0.96],
+    [-1.48, -0.96]
+  ];
+  const tireGeo = new THREE.CylinderGeometry(0.41, 0.41, 0.28, 24);
+  tireGeo.rotateX(Math.PI / 2);
+  const rimGeo = new THREE.CylinderGeometry(0.26, 0.26, 0.29, 16);
+  rimGeo.rotateX(Math.PI / 2);
+
+  for (const [wx, wz] of wheelCoords) {
+    const tire = new THREE.Mesh(tireGeo, tireMat);
+    tire.position.set(wx, 0.41, wz);
+    tire.castShadow = true;
+    suvGroup.add(tire);
+
+    const rim = new THREE.Mesh(rimGeo, rimMat);
+    rim.position.set(wx, 0.41, wz);
+    suvGroup.add(rim);
+  }
+
+  // SUV Ground Contact Shadow
+  const suvShadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(5.4, 2.5),
+    new THREE.MeshBasicMaterial({
+      color: 0x080b10,
+      transparent: true,
+      opacity: 0.52,
+      depthWrite: false
+    })
+  );
+  suvShadow.rotation.x = -Math.PI / 2;
+  suvShadow.position.y = 0.018;
+  suvGroup.add(suvShadow);
+
+  group.add(suvGroup);
+
+  // Two Crew Members standing beside the white SUV gazing up at the Starship
+  const crew1 = createHumanFigure({ suitColor: 0xeef3f9, accentColor: 0x1a212d, withHelmet: true });
+  crew1.position.set(2.35, 0, 1.35);
+  crew1.rotation.y = 0.85;
+  group.add(crew1);
+
+  const crew2 = createHumanFigure({ suitColor: 0x263040, accentColor: 0x12161f, withHelmet: false });
+  crew2.position.set(1.25, 0, 1.72);
+  crew2.rotation.y = 0.95;
+  group.add(crew2);
+
+  return group;
+}
+scene.add(createWhiteSUVAndCrew());
+
+// 6B. Lone Figure in White on the Right to Convey Massive Scale
+const loneFigureRight = createHumanFigure({
+  suitColor: 0xf8fafc,
+  accentColor: 0x1e2532,
+  withHelmet: true
+});
+loneFigureRight.position.set(19.5, 0, 1.5);
+loneFigureRight.rotation.y = -0.78; // Facing inward and looking up at the towering Starship
+scene.add(loneFigureRight);
+
+// ============================================================================
+// 7. REAL-TIME CUBE CAMERA + PMREM ENVIRONMENT MAP FOR MIRROR-POLISHED CHROME
+// ============================================================================
+const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(256, {
+  type: THREE.HalfFloatType,
+  generateMipmaps: true,
+  minFilter: THREE.LinearMipmapLinearFilter
+});
+const cubeCamera = new THREE.CubeCamera(1.5, 3800, cubeRenderTarget);
+scene.add(cubeCamera);
+
+// Also bake an initial PMREM environment map for general PBR materials in the scene
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+pmremGenerator.compileCubemapShader();
+cubeCamera.position.set(0, 24, 0);
+cubeCamera.update(renderer, scene);
+scene.environment = pmremGenerator.fromCubemap(cubeRenderTarget.texture).texture;
+
+// ============================================================================
+// 8. SPACEX STARSHIP 3D MODEL (MIRROR-POLISHED STAINLESS STEEL + EXACT HULL DETAILS)
+// ============================================================================
+// Dimensions & Coordinate Frame inside starshipGroup:
+//   - y = 0.0m: Bottom of the 3 sweeping tapered rear tail-fin landing pads resting on concrete
+//   - y = 3.8m: Bottom rim of aft cylindrical thrust skirt (R = 4.5m)
+//   - y = 3.8m to 31.8m: Cylindrical stainless steel fuselage (R = 4.5m, Height = 28.0m)
+//   - y = 31.8m to 53.8m: Pointed tangent-ogive nosecone (Height = 22.0m, Apex at y = 53.8m)
+
+// Tangent-ogive exact mathematical radius r(y) and slope dr/dy for any elevation y on the hull
+const OGIVE_RHO = (ROCKET_R * ROCKET_R + NOSE_H * NOSE_H) / (2.0 * ROCKET_R);
+function getHullRadiusAtY(y) {
+  if (y <= CYL_TOP_Y) return ROCKET_R;
+  if (y >= NOSE_APEX_Y) return 0.0;
+  const dy = y - CYL_TOP_Y;
+  const under = Math.max(0.0, OGIVE_RHO * OGIVE_RHO - dy * dy);
+  return Math.max(0.0, Math.sqrt(under) - (OGIVE_RHO - ROCKET_R));
+}
+
+function getHullNormalXZAndY(y, theta) {
+  let dr_dy = 0.0;
+  if (y > CYL_TOP_Y && y < NOSE_APEX_Y) {
+    const dy = y - CYL_TOP_Y;
+    const under = Math.max(0.001, OGIVE_RHO * OGIVE_RHO - dy * dy);
+    dr_dy = -dy / Math.sqrt(under);
+  }
+  const ny = -dr_dy;
+  const nHoriz = 1.0;
+  const len = Math.hypot(nHoriz, ny);
+  return {
+    nx: (Math.sin(theta) * nHoriz) / len,
+    ny: ny / len,
+    nz: (Math.cos(theta) * nHoriz) / len
+  };
+}
+
+// Primary Mirror-Polished Stainless Steel Material
+const stainlessSteelMat = new THREE.MeshPhysicalMaterial({
+  color: 0xd0d9e4,
+  metalness: 1.0,
+  roughness: 0.048,
+  roughnessMap: steelMaps.roughnessMap,
+  normalMap: steelMaps.normalMap,
+  normalScale: new THREE.Vector2(0.16, 0.16),
+  clearcoat: 0.45,
+  clearcoatRoughness: 0.04,
+  reflectivity: 1.0,
+  envMap: cubeRenderTarget.texture,
+  envMapIntensity: 1.18
+});
+
+// Slightly smoother mirror chrome for the Seamless Pointed Nosecone & Sweeping Tail Fins
+const noseAndFinChromeMat = new THREE.MeshPhysicalMaterial({
+  color: 0xd4dde8,
+  metalness: 1.0,
+  roughness: 0.036,
+  roughnessMap: steelMaps.roughnessMap,
+  normalMap: steelMaps.normalMap,
+  normalScale: new THREE.Vector2(0.08, 0.08),
+  clearcoat: 0.55,
+  clearcoatRoughness: 0.035,
+  reflectivity: 1.0,
+  envMap: cubeRenderTarget.texture,
+  envMapIntensity: 1.22
+});
+
+// Dark Tinted Viewport & Cabin Window Glass Material
+const darkWindowGlassMat = new THREE.MeshPhysicalMaterial({
+  color: 0x070b12,
+  metalness: 0.25,
+  roughness: 0.05,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.03,
+  reflectivity: 1.0,
+  envMap: cubeRenderTarget.texture,
+  envMapIntensity: 1.4
+});
+
+// Dark Structural Frame / Lattice Mullion Material
+const darkStructuralMat = new THREE.MeshStandardMaterial({
+  color: 0x161b24,
+  metalness: 0.72,
+  roughness: 0.34,
+  envMap: cubeRenderTarget.texture,
+  envMapIntensity: 0.9
+});
+
+function createStarshipModel() {
+  const starship = new THREE.Group();
+
+  // --------------------------------------------------------------------------
+  // 8A. MAIN CYLINDRICAL FUSELAGE & POINTED OGIVE NOSECONE (LatheGeometry)
+  // --------------------------------------------------------------------------
+  const cylGeo = new THREE.CylinderGeometry(ROCKET_R, ROCKET_R, CYL_TOP_Y - SKIRT_Y, 96, 28, true);
+  cylGeo.scale(1, 1, 1);
+  const cylMesh = new THREE.Mesh(cylGeo, stainlessSteelMat);
+  cylMesh.position.y = (SKIRT_Y + CYL_TOP_Y) * 0.5;
+  cylMesh.castShadow = true;
+  cylMesh.receiveShadow = true;
+  starship.add(cylMesh);
+
+  // Tangent-Ogive Pointed Nosecone Profile
+  const nosePts = [];
+  const noseSegs = 64;
+  for (let i = 0; i <= noseSegs; i++) {
+    const t = i / noseSegs;
+    const y = CYL_TOP_Y + t * NOSE_H;
+    const r = getHullRadiusAtY(y);
+    nosePts.push(new THREE.Vector2(r, y));
+  }
+  const noseGeo = new THREE.LatheGeometry(nosePts, 96);
+  const noseMesh = new THREE.Mesh(noseGeo, noseAndFinChromeMat);
+  noseMesh.castShadow = true;
+  noseMesh.receiveShadow = true;
+  starship.add(noseMesh);
+
+  // Subtle horizontal structural ring-weld accent ribs at key bulkhead transitions
+  for (const ringY of [3.85, 11.5, 19.5, 25.8, 31.8, 39.2]) {
+    const r = getHullRadiusAtY(ringY);
+    const ringGeo = new THREE.TorusGeometry(r + 0.008, 0.022, 8, 96);
+    ringGeo.rotateX(Math.PI / 2);
+    const ringMesh = new THREE.Mesh(ringGeo, noseAndFinChromeMat);
+    ringMesh.position.y = ringY;
+    starship.add(ringMesh);
+  }
+
+  // --------------------------------------------------------------------------
+  // 8B. DARK TRIANGULAR LATTICE VIEWPORT AT THE TOP OF THE NOSECONE
+  // --------------------------------------------------------------------------
+  // Conforms flush to the curved ogive nosecone from y = 41.2m up to y = 49.4m
+  // centered at front hero azimuth (thetaCenter = 0.08 rad)
+  function buildTriangularLatticeViewport() {
+    const vpGroup = new THREE.Group();
+    const yBot = 41.2;
+    const yTop = 49.4;
+    const rows = 7;
+    const thetaCenter = 0.08;
+
+    function getAngularHalfSpan(tRow) {
+      // Wide at bottom (±37°), tapering smoothly to a pointed triangle apex at top (±4.5°)
+      return lerp(0.64, 0.075, Math.pow(tRow, 0.92));
+    }
+
+    function getSurfacePt(y, theta, radialOffset = 0.024) {
+      const r = getHullRadiusAtY(y) + radialOffset;
+      return new THREE.Vector3(r * Math.sin(theta), y, r * Math.cos(theta));
+    }
+
+    // 1. Curved Dark Tinted Viewport Glass Surface (Triangulated over the triangular boundary)
+    const glassPositions = [];
+    const glassNormals = [];
+
+    for (let i = 0; i < rows; i++) {
+      const t0 = i / rows;
+      const t1 = (i + 1) / rows;
+      const y0 = lerp(yBot, yTop, t0);
+      const y1 = lerp(yBot, yTop, t1);
+      const span0 = getAngularHalfSpan(t0);
+      const span1 = getAngularHalfSpan(t1);
+      const cols = Math.max(2, (rows - i) * 2);
+
+      for (let c = 0; c < cols; c++) {
+        const u0 = c / cols;
+        const u1 = (c + 1) / cols;
+        const th00 = thetaCenter + lerp(-span0, span0, u0);
+        const th01 = thetaCenter + lerp(-span0, span0, u1);
+        const th10 = thetaCenter + lerp(-span1, span1, u0);
+        const th11 = thetaCenter + lerp(-span1, span1, u1);
+
+        const p00 = getSurfacePt(y0, th00, 0.022);
+        const p01 = getSurfacePt(y0, th01, 0.022);
+        const p10 = getSurfacePt(y1, th10, 0.022);
+        const p11 = getSurfacePt(y1, th11, 0.022);
+
+        const n00 = getHullNormalXZAndY(y0, th00);
+        const n01 = getHullNormalXZAndY(y0, th01);
+        const n10 = getHullNormalXZAndY(y1, th10);
+        const n11 = getHullNormalXZAndY(y1, th11);
+
+        // Triangle 1
+        glassPositions.push(p00.x, p00.y, p00.z, p01.x, p01.y, p01.z, p10.x, p10.y, p10.z);
+        glassNormals.push(n00.nx, n00.ny, n00.nz, n01.nx, n01.ny, n01.nz, n10.nx, n10.ny, n10.nz);
+        // Triangle 2
+        glassPositions.push(p01.x, p01.y, p01.z, p11.x, p11.y, p11.z, p10.x, p10.y, p10.z);
+        glassNormals.push(n01.nx, n01.ny, n01.nz, n11.nx, n11.ny, n11.nz, n10.nx, n10.ny, n10.nz);
+      }
+    }
+
+    const glassGeo = new THREE.BufferGeometry();
+    glassGeo.setAttribute('position', new THREE.Float32BufferAttribute(glassPositions, 3));
+    glassGeo.setAttribute('normal', new THREE.Float32BufferAttribute(glassNormals, 3));
+    const glassMesh = new THREE.Mesh(glassGeo, darkWindowGlassMat);
+    vpGroup.add(glassMesh);
+
+    // 2. 3D Triangular Lattice Mullion Struts framing the triangular viewport
+    const strutGeo = new THREE.CylinderGeometry(1, 1, 1, 6);
+    strutGeo.rotateX(Math.PI / 2);
+
+    function addStrut(pA, pB, radius = 0.032) {
+      const dist = pA.distanceTo(pB);
+      if (dist < 0.01) return;
+      const strut = new THREE.Mesh(strutGeo, darkStructuralMat);
+      strut.position.lerpVectors(pA, pB, 0.5);
+      strut.scale.set(radius, radius, dist);
+      strut.lookAt(pB);
+      vpGroup.add(strut);
+    }
+
+    // Build grid nodes for the triangular truss lattice
+    const gridRows = [];
+    for (let r = 0; r <= rows; r++) {
+      const t = r / rows;
+      const y = lerp(yBot, yTop, t);
+      const span = getAngularHalfSpan(t);
+      const numNodes = rows - r + 1;
+      const rowPts = [];
+      for (let k = 0; k < numNodes; k++) {
+        const u = numNodes === 1 ? 0.5 : k / (numNodes - 1);
+        const th = thetaCenter + lerp(-span, span, u);
+        rowPts.push(getSurfacePt(y, th, 0.036));
+      }
+      gridRows.push(rowPts);
+    }
+
+    // Connect horizontal, left-diagonal, and right-diagonal triangular lattice struts
+    for (let r = 0; r < rows; r++) {
+      const curRow = gridRows[r];
+      const nextRow = gridRows[r + 1];
+      const isOuterBottom = (r === 0);
+
+      // Horizontal struts along current row
+      for (let k = 0; k < curRow.length - 1; k++) {
+        addStrut(curRow[k], curRow[k + 1], isOuterBottom ? 0.048 : 0.028);
+      }
+
+      // Diagonals connecting curRow (N+1 nodes) to nextRow (N nodes)
+      for (let k = 0; k < nextRow.length; k++) {
+        const isLeftBorder = (k === 0);
+        const isRightBorder = (k === nextRow.length - 1);
+        addStrut(curRow[k], nextRow[k], isLeftBorder ? 0.048 : 0.028);
+        addStrut(curRow[k + 1], nextRow[k], isRightBorder ? 0.048 : 0.028);
+      }
+    }
+
+    return vpGroup;
+  }
+  starship.add(buildTriangularLatticeViewport());
+
+  // --------------------------------------------------------------------------
+  // 8C. COMPACT FORWARD AERODYNAMIC FLAPS (UPPER NOSECONE FLANKS)
+  // --------------------------------------------------------------------------
+  function buildForwardFlaps() {
+    const flapsGroup = new THREE.Group();
+    const yBot = 40.2;
+    const yTop = 48.6;
+    const rBot = getHullRadiusAtY(yBot);
+    const rTop = getHullRadiusAtY(yTop);
+
+    for (const side of [-1, 1]) {
+      const flapAz = side * (Math.PI * 0.52) + 0.08; // Symmetrical left/right profile flanks
+      const flapRoot = new THREE.Group();
+
+      // Custom tapered 3D aerodynamic flap geometry (double-wedge airfoil cross-section)
+      const spanBot = 2.55;
+      const spanTop = 1.05;
+      const halfThick = 0.20;
+
+      // Vertices in local flap frame where X = radial outward, Y = elevation, Z = thickness
+      const v = [
+        // 0..3: Root edge (buried slightly inside ogive hull)
+        new THREE.Vector3(rBot - 0.35, yBot, halfThick),
+        new THREE.Vector3(rBot - 0.35, yBot, -halfThick),
+        new THREE.Vector3(rTop - 0.25, yTop, halfThick * 0.7),
+        new THREE.Vector3(rTop - 0.25, yTop, -halfThick * 0.7),
+        // 4: Lower outer tip corner (swept slightly down)
+        new THREE.Vector3(rBot + spanBot, yBot - 0.55, 0.0),
+        // 5: Upper outer tip corner (swept back)
+        new THREE.Vector3(rTop + spanTop, yTop - 1.15, 0.0)
+      ];
+
+      const indices = [
+        // Front face (+Z)
+        0, 4, 5,  0, 5, 2,
+        // Back face (-Z)
+        1, 5, 4,  1, 3, 5,
+        // Top leading edge
+        2, 5, 3,
+        // Bottom trailing edge
+        0, 1, 4
+      ];
+
+      const posArr = [];
+      for (let idx = 0; idx < indices.length; idx++) {
+        const pt = v[indices[idx]];
+        posArr.push(pt.x, pt.y, pt.z);
+      }
+
+      const flapGeo = new THREE.BufferGeometry();
+      flapGeo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+      flapGeo.computeVertexNormals();
+
+      const flapMesh = new THREE.Mesh(flapGeo, noseAndFinChromeMat);
+      flapMesh.castShadow = true;
+      flapRoot.add(flapMesh);
+
+      // Cylindrical aerodynamic hinge root fairing along hull intersection
+      const hingeLen = Math.hypot(rTop - rBot, yTop - yBot);
+      const hingeAngle = Math.atan2(rTop - rBot, yTop - yBot);
+      const hingeFairing = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.24, 0.30, hingeLen, 16),
+        darkStructuralMat
+      );
+      hingeFairing.position.set((rBot + rTop) * 0.5 - 0.04, (yBot + yTop) * 0.5, 0);
+      hingeFairing.rotation.z = -hingeAngle;
+      flapRoot.add(hingeFairing);
+
+      // Orient flap at its azimuth around Y axis
+      flapRoot.rotation.y = Math.PI * 0.5 - flapAz;
+      flapsGroup.add(flapRoot);
+    }
+
+    return flapsGroup;
+  }
+  starship.add(buildForwardFlaps());
+
+  // --------------------------------------------------------------------------
+  // 8D. SIX HORIZONTAL ROWS OF SMALL DARK RECTANGULAR CABIN WINDOWS
+  //     WRAPPING AROUND THE UPPER SECTION
+  // --------------------------------------------------------------------------
+  function buildSixCabinWindowRows() {
+    const winGroup = new THREE.Group();
+    const rowElevations = [31.5, 32.85, 34.2, 35.55, 36.9, 38.25];
+    const thetaCenter = 0.08;
+
+    const winW = 0.36;
+    const winH = 0.52;
+    const bezelGeo = new THREE.BoxGeometry(winW + 0.07, winH + 0.07, 0.05);
+    const paneGeo = new THREE.BoxGeometry(winW, winH, 0.065);
+
+    const dummy = new THREE.Object3D();
+    const windowConfigs = [];
+
+    for (let rIdx = 0; rIdx < rowElevations.length; rIdx++) {
+      const y = rowElevations[rIdx];
+      const rad = getHullRadiusAtY(y);
+      // Wrap windows around ±112° of the upper section
+      const numCols = 17 - Math.floor(rIdx * 0.7);
+      const wrapSpan = 1.92 - rIdx * 0.06;
+
+      for (let c = 0; c < numCols; c++) {
+        const u = (c / (numCols - 1)) * 2.0 - 1.0;
+        const theta = thetaCenter + u * wrapSpan;
+        windowConfigs.push({ y, rad, theta });
+      }
+    }
+
+    const bezelInst = new THREE.InstancedMesh(bezelGeo, darkStructuralMat, windowConfigs.length);
+    const paneInst = new THREE.InstancedMesh(paneGeo, darkWindowGlassMat, windowConfigs.length);
+
+    const _pos = new THREE.Vector3();
+    const _norm = new THREE.Vector3();
+    const _look = new THREE.Vector3();
+
+    for (let i = 0; i < windowConfigs.length; i++) {
+      const { y, rad, theta } = windowConfigs[i];
+      const n = getHullNormalXZAndY(y, theta);
+      _pos.set((rad + 0.012) * Math.sin(theta), y, (rad + 0.012) * Math.cos(theta));
+      _norm.set(n.nx, n.ny, n.nz);
+      _look.copy(_pos).add(_norm);
+
+      dummy.position.copy(_pos);
+      dummy.lookAt(_look);
+      dummy.updateMatrix();
+      bezelInst.setMatrixAt(i, dummy.matrix);
+      paneInst.setMatrixAt(i, dummy.matrix);
+    }
+
+    bezelInst.instanceMatrix.needsUpdate = true;
+    paneInst.instanceMatrix.needsUpdate = true;
+    winGroup.add(bezelInst);
+    winGroup.add(paneInst);
+    return winGroup;
+  }
+  starship.add(buildSixCabinWindowRows());
+
+  // --------------------------------------------------------------------------
+  // 8E. RECESSED RECTANGULAR HATCH (UPPER-MID FUSELAGE)
+  // --------------------------------------------------------------------------
+  function buildRecessedHatch() {
+    const hatchGroup = new THREE.Group();
+    const hatchY = 27.6;
+    const hatchTheta = 0.36; // Slightly to the right of centerline so it sits cleanly beside flag/windows
+    const r = ROCKET_R;
+
+    const frameW = 1.55;
+    const frameH = 2.35;
+
+    // Outer recessed dark perimeter bezel
+    const outerFrame = new THREE.Mesh(
+      new THREE.BoxGeometry(frameW, frameH, 0.08),
+      darkStructuralMat
+    );
+    hatchGroup.add(outerFrame);
+
+    // Inset metallic hatch door panel with subtle seam gap
+    const innerDoor = new THREE.Mesh(
+      new THREE.BoxGeometry(frameW - 0.16, frameH - 0.16, 0.095),
+      stainlessSteelMat
+    );
+    innerDoor.position.z = 0.004;
+    hatchGroup.add(innerDoor);
+
+    // Small circular viewport porthole & actuator latch bars on the hatch door
+    const hatchPorthole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.18, 0.11, 16),
+      darkWindowGlassMat
+    );
+    hatchPorthole.rotation.x = Math.PI / 2;
+    hatchPorthole.position.set(0, 0.45, 0.01);
+    hatchGroup.add(hatchPorthole);
+
+    for (const hSide of [-0.52, 0.52]) {
+      const hingeBlock = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 0.12, 0.12),
+        darkStructuralMat
+      );
+      hingeBlock.position.set(-frameW * 0.48, hSide, 0.02);
+      hatchGroup.add(hingeBlock);
+    }
+
+    hatchGroup.position.set(r * Math.sin(hatchTheta), hatchY, r * Math.cos(hatchTheta));
+    hatchGroup.rotation.y = hatchTheta;
+    return hatchGroup;
+  }
+  starship.add(buildRecessedHatch());
+
+  // --------------------------------------------------------------------------
+  // 8F. CRISP AMERICAN FLAG DECAL ON THE MID-BODY
+  // --------------------------------------------------------------------------
+  function buildCurvedCylinderDecal({ yCenter, height, arcAngle, thetaCenter, map, roughness = 0.14, metalness = 0.2 }) {
+    const r = ROCKET_R + 0.022;
+    const geo = new THREE.CylinderGeometry(
+      r,
+      r,
+      height,
+      32,
+      1,
+      true,
+      thetaCenter - arcAngle * 0.5,
+      arcAngle
+    );
+    const mat = new THREE.MeshPhysicalMaterial({
+      map,
+      transparent: true,
+      alphaTest: 0.05,
+      roughness,
+      metalness,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.08,
+      envMap: cubeRenderTarget.texture,
+      envMapIntensity: 1.15,
+      polygonOffset: true,
+      polygonOffsetFactor: -2
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = yCenter;
+    return mesh;
+  }
+
+  // Crisp American Flag on the Mid-Body (y = 22.8m)
+  starship.add(
+    buildCurvedCylinderDecal({
+      yCenter: 22.8,
+      height: 1.85,
+      arcAngle: 0.76, // ~3.45m arc width
+      thetaCenter: 0.06,
+      map: usFlagTex,
+      roughness: 0.16,
+      metalness: 0.15
+    })
+  );
+
+  // --------------------------------------------------------------------------
+  // 8G. VERTICAL DARK "SPACEX" LETTERING DOWN THE LOWER FUSELAGE
+  // --------------------------------------------------------------------------
+  starship.add(
+    buildCurvedCylinderDecal({
+      yCenter: 13.8,
+      height: 10.6,
+      arcAngle: 0.58, // ~2.6m arc width
+      thetaCenter: 0.06,
+      map: spaceXLogoTex,
+      roughness: 0.22,
+      metalness: 0.35
+    })
+  );
+
+  // --------------------------------------------------------------------------
+  // 8H. THREE SWEEPING, TAPERED REAR TAIL FINS ACTING AS LANDING LEGS
+  // --------------------------------------------------------------------------
+  // Spaced 120° apart around the lower fuselage and extending down to y = 0.0
+  // on the concrete launchpad. Angles chosen so all 3 sweeping fins are clearly
+  // silhouetted from the low-angle hero view!
+  function buildThreeSweepingTailFins() {
+    const finsGroup = new THREE.Group();
+    const finAzimuths = [
+      -0.96,                 // Left-front sweeping fin (-55°)
+      -0.96 + (Math.PI * 2) / 3, // Right-front sweeping fin (+65°)
+      -0.96 + (Math.PI * 4) / 3  // Rear-left sweeping fin (+185°)
+    ];
+
+    // Build custom smooth 3D swept-delta fin geometry with curved leading chine
+    function createSingleSweepingFinGeometry() {
+      const uSteps = 28; // Vertical stations from tip (y = 0.18m) to upper root (y = 19.6m)
+      const vSteps = 10; // Radial stations from hull root to outer swept leading edge
+
+      const positions = [];
+      const uvs = [];
+      const indices = [];
+
+      // Helper: outer radial reach rOut(t) and half-thickness th(t, s)
+      // t = 0 at bottom landing leg tip (y = 0.18m, rOut = 9.15m)
+      // t = 1 at upper fuselage blend root (y = 19.6m, rOut = 4.52m)
+      function evalFinStation(t) {
+        const y = lerp(0.18, 19.6, t);
+        // Sweeping concave-to-convex OG curve from wide landing stance up into fuselage
+        const sweepCurve = Math.pow(1.0 - t, 1.38);
+        const rOut = ROCKET_R + 0.05 + 4.65 * sweepCurve;
+
+        // Inner boundary stays flush inside the fuselage cylinder above skirt (y >= 3.8),
+        // and sweeps outward from the skirt rim down to the landing tip below y = 3.8!
+        let rIn = ROCKET_R - 0.25;
+        if (y < SKIRT_Y) {
+          const legT = (SKIRT_Y - y) / (SKIRT_Y - 0.18); // 0 at skirt, 1 at tip
+          rIn = lerp(ROCKET_R - 0.15, rOut - 0.62, Math.pow(legT, 0.88));
+        }
+        return { y, rIn, rOut };
+      }
+
+      // Generate Top (+Z) and Bottom (-Z) airfoil skins
+      for (let side of [1, -1]) {
+        const baseVertexOffset = positions.length / 3;
+
+        for (let iu = 0; iu <= uSteps; iu++) {
+          const t = iu / uSteps;
+          const { y, rIn, rOut } = evalFinStation(t);
+
+          for (let iv = 0; iv <= vSteps; iv++) {
+            const s = iv / vSteps; // 0 at root, 1 at outer leading edge
+            const r = lerp(rIn, rOut, s);
+
+            // Airfoil thickness profile: thick near root/mid-chord, sharp at outer leading edge & upper root
+            const chordArch = Math.sin(Math.pow(s, 0.65) * Math.PI);
+            const heightTaper = Math.sin(Math.pow(t, 0.55) * Math.PI) * 0.75 + (1.0 - t) * 0.45;
+            const zHalf = 0.46 * chordArch * heightTaper;
+
+            positions.push(r, y, side * zHalf);
+            uvs.push(s, t);
+          }
+        }
+
+        const stride = vSteps + 1;
+        for (let iu = 0; iu < uSteps; iu++) {
+          for (let iv = 0; iv < vSteps; iv++) {
+            const a = baseVertexOffset + iu * stride + iv;
+            const b = a + 1;
+            const c = a + stride;
+            const d = c + 1;
+            if (side === 1) {
+              indices.push(a, b, c, b, d, c);
+            } else {
+              indices.push(a, c, b, b, c, d);
+            }
+          }
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      return geo;
+    }
+
+    const finGeo = createSingleSweepingFinGeometry();
+
+    for (let i = 0; i < 3; i++) {
+      const finUnit = new THREE.Group();
+      const finMesh = new THREE.Mesh(finGeo, noseAndFinChromeMat);
+      finMesh.castShadow = true;
+      finMesh.receiveShadow = true;
+      finUnit.add(finMesh);
+
+      // Vertical aerodynamic root fairing & actuation housing along hull junction
+      const rootFairing = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.26, 0.48, 15.6, 16),
+        noseAndFinChromeMat
+      );
+      rootFairing.position.set(ROCKET_R + 0.04, 11.6, 0);
+      finUnit.add(rootFairing);
+
+      // Integrated Heavy-Duty Landing Footpad & Shock Strut at Fin Tip (y = 0.0m)
+      const tipX = ROCKET_R + 4.42;
+      const shockCylinder = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.24, 0.20, 1.35, 16),
+        darkStructuralMat
+      );
+      shockCylinder.position.set(tipX, 0.68, 0);
+      shockCylinder.rotation.z = 0.22;
+      finUnit.add(shockCylinder);
+
+      const footPad = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.52, 0.68, 0.18, 20),
+        darkStructuralMat
+      );
+      footPad.position.set(tipX + 0.12, 0.09, 0);
+      footPad.castShadow = true;
+      finUnit.add(footPad);
+
+      finUnit.rotation.y = Math.PI * 0.5 - finAzimuths[i];
+      finsGroup.add(finUnit);
+    }
+
+    return finsGroup;
+  }
+  starship.add(buildThreeSweepingTailFins());
+
+  // --------------------------------------------------------------------------
+  // 8I. CLUSTERED RAPTOR ENGINE NOZZLES BENEATH THE AFT SKIRT
+  // --------------------------------------------------------------------------
+  const nozzleInteriorMats = [];
+
+  function buildClusteredEngineNozzles() {
+    const engineGroup = new THREE.Group();
+
+    // Recessed dark thermal dome bulkhead inside the aft skirt at y = 4.55m
+    const thrustDome = new THREE.Mesh(
+      new THREE.CircleGeometry(ROCKET_R - 0.04, 64),
+      darkStructuralMat
+    );
+    thrustDome.rotation.x = Math.PI / 2;
+    thrustDome.position.y = 4.55;
+    engineGroup.add(thrustDome);
+
+    // Inner aft skirt liner wall (visible from low-angle camera)
+    const innerSkirtWall = new THREE.Mesh(
+      new THREE.CylinderGeometry(ROCKET_R - 0.05, ROCKET_R - 0.05, 1.15, 64, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: 0x222834,
+        metalness: 0.78,
+        roughness: 0.35,
+        side: THREE.BackSide,
+        envMap: cubeRenderTarget.texture
+      })
+    );
+    innerSkirtWall.position.y = SKIRT_Y + 0.55;
+    engineGroup.add(innerSkirtWall);
+
+    // Outer nozzle bell material (dark copper-inconel regenerative cooling patina)
+    const nozzleOuterMat = new THREE.MeshStandardMaterial({
+      color: 0x2c303a,
+      metalness: 0.88,
+      roughness: 0.28,
+      envMap: cubeRenderTarget.texture,
+      envMapIntensity: 1.2
+    });
+
+    const coolingRingMat = new THREE.MeshStandardMaterial({
+      color: 0x5c4b3e,
+      metalness: 0.85,
+      roughness: 0.32,
+      envMap: cubeRenderTarget.texture
+    });
+
+    // Parabolic De Laval Rocket Nozzle Lathe Profile
+    function createSingleRaptorNozzle(exitRadius, length) {
+      const nGroup = new THREE.Group();
+      const pts = [];
+      const segs = 20;
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs; // 0 at exit bottom, 1 at throat top
+        const y = t * length;
+        const r = lerp(exitRadius, exitRadius * 0.36, Math.pow(t, 1.45));
+        pts.push(new THREE.Vector2(r, y));
+      }
+      const bellGeo = new THREE.LatheGeometry(pts, 32);
+
+      // Outer metallic bell
+      const outerBell = new THREE.Mesh(bellGeo, nozzleOuterMat);
+      outerBell.castShadow = true;
+      nGroup.add(outerBell);
+
+      // Glowing inner combustion throat & chamber liner (emissive driven by engine throttle!)
+      const innerMat = new THREE.MeshStandardMaterial({
+        color: 0x181412,
+        emissive: new THREE.Color(0xff6a14),
+        emissiveIntensity: 0.0,
+        roughness: 0.4,
+        side: THREE.BackSide
+      });
+      nozzleInteriorMats.push(innerMat);
+
+      const innerBell = new THREE.Mesh(bellGeo, innerMat);
+      innerBell.scale.set(0.97, 1.0, 0.97);
+      nGroup.add(innerBell);
+
+      // Glowing injector throat disc at top of nozzle bell
+      const throatDisc = new THREE.Mesh(
+        new THREE.CircleGeometry(exitRadius * 0.35, 20),
+        innerMat
+      );
+      throatDisc.rotation.x = Math.PI / 2;
+      throatDisc.position.y = length - 0.05;
+      nGroup.add(throatDisc);
+
+      // External regenerative cooling reinforcement bands
+      for (const bandT of [0.06, 0.38, 0.72]) {
+        const rBand = lerp(exitRadius, exitRadius * 0.36, Math.pow(bandT, 1.45)) + 0.02;
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(rBand, 0.028, 8, 28),
+          coolingRingMat
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = bandT * length;
+        nGroup.add(ring);
+      }
+
+      return nGroup;
+    }
+
+    // 3 Central Sea-Level Gimbaled Raptors + 6 Outer Large Vacuum Raptors (9-Raptor Cluster clearly visible beneath skirt)
+    for (let i = 0; i < 3; i++) {
+      const angSL = (i * Math.PI * 2) / 3 + 0.25;
+      const slNozzle = createSingleRaptorNozzle(0.68, 2.05);
+      slNozzle.position.set(Math.cos(angSL) * 1.15, 2.30, Math.sin(angSL) * 1.15);
+      engineGroup.add(slNozzle);
+    }
+    for (let i = 0; i < 6; i++) {
+      const angVac = (i * Math.PI * 2) / 6 + 0.12;
+      const vacNozzle = createSingleRaptorNozzle(0.96, 2.45);
+      vacNozzle.position.set(Math.cos(angVac) * 2.85, 1.95, Math.sin(angVac) * 2.85);
+      engineGroup.add(vacNozzle);
+    }
+
+    return engineGroup;
+  }
+  starship.add(buildClusteredEngineNozzles());
+
+  return { root: starship, nozzleInteriorMats };
+}
+
+const starshipObj = createStarshipModel();
+const starshipGroup = starshipObj.root;
+scene.add(starshipGroup);
+
+// ============================================================================
+// 9. RAZOR-SHARP SUPERSONIC PLASMA EXHAUST, MACH DIAMONDS & 9-NOZZLE EXIT JETS
+// ============================================================================
+function createPlasmaExhaustSystem() {
+  const exhaustGroup = new THREE.Group();
+
+  // Shared uniforms across outer plasma sheath, inner Mach shock diamond core, and 9 nozzle exit jets
+  const sharedExhaustUniforms = {
+    uTime: { value: 0 },
+    uThrottle: { value: 0 },
+    uGroundClipY: { value: -2.2 } // Clips plume cleanly at the concrete launchpad surface
+  };
+
+  // 9A. Outer Turbulent Orange-Red-Amber Supersonic Plasma Sheath (NormalBlending so it never washes out to white!)
+  const coneLen = 24.0;
+  const coneGeo = new THREE.CylinderGeometry(3.15, 5.4, coneLen, 48, 48, true);
+  coneGeo.translate(0, -coneLen * 0.5, 0);
+
+  const exhaustMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.NormalBlending,
+    uniforms: sharedExhaustUniforms,
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vLocalPos;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      uniform float uTime;
+      uniform float uThrottle;
+
+      void main() {
+        vUv = uv;
+        vec3 pos = position;
+
+        // High-velocity supersonic shear-layer flutter along the exhaust boundary
+        float downT = 1.0 - uv.y; // 0 at nozzle exit, 1 at bottom tip
+        float shockRipple = sin(downT * 34.0 - uTime * 22.0) * 0.06 * (1.0 - downT * 0.6);
+        float flutter = sin(downT * 24.0 - uTime * 68.0) * 0.11 + cos(downT * 11.0 - uTime * 42.0) * 0.16;
+        pos.xz *= 1.0 + shockRipple + flutter * downT * 0.38 * uThrottle;
+
+        vLocalPos = pos;
+        vec4 wp = modelMatrix * vec4(pos, 1.0);
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vViewDir = normalize(cameraPosition - wp.xyz);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vLocalPos;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      uniform float uTime;
+      uniform float uThrottle;
+      uniform float uGroundClipY;
+
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+          mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+
+      // Ridged cellular flame FBM for crisp supersonic flame tongues
+      float flameFbm(vec2 p) {
+        float s = 0.0;
+        float a = 0.52;
+        for (int i = 0; i < 5; i++) {
+          float n = noise(p);
+          float ridge = 1.0 - abs(n * 2.0 - 1.0);
+          s += a * ridge;
+          p *= 2.12;
+          a *= 0.48;
+        }
+        return s;
+      }
+
+      void main() {
+        if (uThrottle <= 0.005) discard;
+        if (vLocalPos.y < uGroundClipY) discard;
+
+        float downT = 1.0 - vUv.y; // 0 at nozzle exit, 1 at bottom tip
+        float activeLen = clamp(uThrottle, 0.18, 1.0);
+        if (downT > activeLen) discard;
+
+        float ndv = abs(dot(normalize(vNormal), normalize(vViewDir)));
+        float cylCore = pow(ndv, 1.15);
+
+        // High-speed downward scrolling cellular flame streaks
+        vec2 flowUV = vec2(vUv.x * 8.0, downT * 6.5 - uTime * 22.0);
+        float flameCells = flameFbm(flowUV);
+        float fineStreaks = noise(vec2(vUv.x * 24.0, downT * 14.0 - uTime * 38.0));
+
+        // Crisp standing Mach shock diamond nodes along the supersonic jet
+        float shockPeriod = downT * 46.0 - uTime * 6.0;
+        float machDiamond = pow(max(0.0, cos(shockPeriod)), 6.0) * smoothstep(0.72, 0.0, downT) * pow(ndv, 1.8);
+        float machXWave   = pow(max(0.0, sin(shockPeriod)), 4.0) * smoothstep(0.60, 0.02, downT) * smoothstep(0.3, 0.85, ndv);
+
+        // Erode outer edge & lower tail into distinct flame tongues
+        float groundDist = vLocalPos.y - uGroundClipY;
+        float groundFade = smoothstep(0.0, 0.65, groundDist);
+        float tailErode = smoothstep(activeLen, activeLen * 0.25, downT + (1.0 - flameCells) * 0.22 * downT);
+        float edgeErode = smoothstep(0.08, 0.48, cylCore + (flameCells - 0.42) * 0.38);
+
+        float alpha = clamp(edgeErode * tailErode * groundFade * uThrottle * 0.94, 0.0, 0.96);
+        if (alpha < 0.02) discard;
+
+        // High-contrast physical rocket flame palette (NormalBlending preserves rich orange-red in daylight!)
+        vec3 colCrimsonEdge = vec3(0.88, 0.14, 0.01);
+        vec3 colMoltenOrange = vec3(1.22, 0.44, 0.03);
+        vec3 colGoldenYellow = vec3(1.48, 0.95, 0.28);
+        vec3 colShockWhite   = vec3(1.85, 1.72, 1.38);
+
+        float heat = clamp(
+          pow(cylCore, 1.45) * (1.08 - downT * 0.78) +
+          (flameCells - 0.45) * 0.35 +
+          (fineStreaks - 0.5) * 0.18 +
+          machXWave * 0.32,
+          0.0, 1.0
+        );
+
+        vec3 col = mix(colCrimsonEdge, colMoltenOrange, smoothstep(0.05, 0.42, heat));
+        col = mix(col, colGoldenYellow, smoothstep(0.40, 0.78, heat));
+        col = mix(col, colShockWhite, clamp(smoothstep(0.76, 0.98, heat) + machDiamond * 0.95, 0.0, 1.0));
+
+        gl_FragColor = vec4(col, alpha);
+      }
+    `
+  });
+
+  const outerPlumeMesh = new THREE.Mesh(coneGeo, exhaustMat);
+  outerPlumeMesh.renderOrder = 2;
+  exhaustGroup.add(outerPlumeMesh);
+
+  // 9B. Razor-Sharp Inner Mach Shock-Diamond Core & 9 Individual Raptor Nozzle Exit Streams
+  const machCoreMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.NormalBlending,
+    uniforms: sharedExhaustUniforms,
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vLocalPos;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main() {
+        vUv = uv;
+        vLocalPos = position;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vViewDir = normalize(cameraPosition - wp.xyz);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vLocalPos;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      uniform float uTime;
+      uniform float uThrottle;
+      uniform float uGroundClipY;
+
+      void main() {
+        if (uThrottle <= 0.01) discard;
+        if (vLocalPos.y < uGroundClipY) discard;
+
+        float downT = 1.0 - vUv.y;
+        float ndv = abs(dot(normalize(vNormal), normalize(vViewDir)));
+
+        // Standing supersonic Mach shock diamonds (7 sharp nodes down the core)
+        float phase = downT * 44.0 - uTime * 5.0;
+        float diamondNode = pow(max(0.0, cos(phase)), 5.0);
+        float coreAxis = pow(ndv, 1.5);
+
+        float groundFade = smoothstep(0.0, 0.45, vLocalPos.y - uGroundClipY);
+        float axialFade = smoothstep(1.0, 0.08, downT) * smoothstep(0.0, 0.03, downT);
+
+        float alpha = clamp(coreAxis * axialFade * groundFade * (0.55 + 0.45 * diamondNode) * uThrottle, 0.0, 0.96);
+        if (alpha < 0.02) discard;
+
+        vec3 colAmber  = vec3(1.25, 0.58, 0.08);
+        vec3 colYellow = vec3(1.60, 1.28, 0.52);
+        vec3 colWhite  = vec3(2.10, 1.98, 1.70);
+
+        float tCol = clamp(coreAxis * 0.65 + diamondNode * 0.55, 0.0, 1.0);
+        vec3 col = mix(colAmber, colYellow, smoothstep(0.1, 0.55, tCol));
+        col = mix(col, colWhite, smoothstep(0.52, 0.92, tCol));
+
+        gl_FragColor = vec4(col, alpha);
+      }
+    `
+  });
+
+  // Central coalesced Mach shock diamond core
+  const innerCoreGeo = new THREE.CylinderGeometry(1.85, 0.45, 16.0, 32, 32, true);
+  innerCoreGeo.translate(0, -16.0 * 0.5, 0);
+  const innerCoreMesh = new THREE.Mesh(innerCoreGeo, machCoreMat);
+  innerCoreMesh.renderOrder = 3;
+  exhaustGroup.add(innerCoreMesh);
+
+  // 9 Individual High-Velocity Raptor Nozzle Exit Jets (3 inner sea-level + 6 outer vacuum)
+  const nozzleJetGeo = new THREE.CylinderGeometry(0.62, 0.28, 6.2, 16, 16, true);
+  nozzleJetGeo.translate(0, -6.2 * 0.5, 0);
+  for (let i = 0; i < 3; i++) {
+    const angSL = (i * Math.PI * 2) / 3 + 0.25;
+    const jet = new THREE.Mesh(nozzleJetGeo, machCoreMat);
+    jet.position.set(Math.cos(angSL) * 1.15, 0.1, Math.sin(angSL) * 1.15);
+    jet.renderOrder = 3;
+    exhaustGroup.add(jet);
+  }
+  const vacJetGeo = new THREE.CylinderGeometry(0.88, 0.42, 7.2, 16, 16, true);
+  vacJetGeo.translate(0, -7.2 * 0.5, 0);
+  for (let i = 0; i < 6; i++) {
+    const angVac = (i * Math.PI * 2) / 6 + 0.12;
+    const jet = new THREE.Mesh(vacJetGeo, machCoreMat);
+    jet.position.set(Math.cos(angVac) * 2.85, -0.25, Math.sin(angVac) * 2.85);
+    jet.renderOrder = 3;
+    exhaustGroup.add(jet);
+  }
+
+  // 9C. Concrete Pad Plasma Impingement Deflection Disc (when rocket is near pad)
+  const padFlareGeo = new THREE.RingGeometry(0.3, 17.5, 48, 8);
+  padFlareGeo.rotateX(-Math.PI / 2);
+
+  const padFlareMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uPadIntensity: { value: 0 }
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vPos;
+      void main() {
+        vPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec3 vPos;
+      uniform float uTime;
+      uniform float uPadIntensity;
+
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+          mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+
+      void main() {
+        if (uPadIntensity <= 0.005) discard;
+        float r = length(vPos.xz);
+        float normR = clamp(r / 17.5, 0.0, 1.0);
+        float ang = atan(vPos.z, vPos.x);
+
+        // Radial supersonic ground-wash flame streaks shooting outward across the concrete pad
+        float n1 = 1.0 - abs(noise(vec2(ang * 8.0, normR * 6.0 - uTime * 14.0)) * 2.0 - 1.0);
+        float n2 = noise(vec2(ang * 16.0 + 3.1, normR * 10.0 - uTime * 22.0));
+        float radialFalloff = pow(1.0 - normR, 1.85) * smoothstep(0.0, 0.06, normR);
+
+        float val = clamp(radialFalloff * (0.42 + 0.68 * n1 * n2) * uPadIntensity, 0.0, 0.92);
+        vec3 col = mix(vec3(1.05, 0.25, 0.02), vec3(1.65, 1.32, 0.68), pow(1.0 - normR, 2.0));
+
+        gl_FragColor = vec4(col, val);
+      }
+    `
+  });
+
+  const padFlareMesh = new THREE.Mesh(padFlareGeo, padFlareMat);
+  padFlareMesh.position.y = 0.06;
+  scene.add(padFlareMesh);
+
+  return { exhaustGroup, exhaustMat, padFlareMesh, padFlareMat };
+}
+
+const plasmaSystem = createPlasmaExhaustSystem();
+plasmaSystem.exhaustGroup.position.y = 2.25; // Directly at Raptor nozzle exits
+starshipGroup.add(plasmaSystem.exhaustGroup);
+
+// ============================================================================
+// 10. HIGH-CONTRAST SCULPTED CAULIFLOWER VOLUMETRIC SMOKE, DUST & SPARKS SYSTEM
+// ============================================================================
+function createVolumetricSmokeAndSparksSystem() {
+  const MAX_SMOKE = 1600;
+  const positions = new Float32Array(MAX_SMOKE * 3);
+  const velocities = new Float32Array(MAX_SMOKE * 3);
+  const params = new Float32Array(MAX_SMOKE * 4); // x: age, y: maxAge, z: startSize, w: endSize
+  const extras = new Float32Array(MAX_SMOKE * 4); // x: rotAngle, y: rotSpeed, z: shadeSeed, w: kind (0=padSmoke, 1=plumeTrail, 2=cryoVent)
+
+  for (let i = 0; i < MAX_SMOKE; i++) {
+    params[i * 4] = 999.0; // Inactive initially
+    params[i * 4 + 1] = 1.0;
+  }
+
+  const smokeGeo = new THREE.BufferGeometry();
+  const posAttr = new THREE.BufferAttribute(positions, 3);
+  const paramAttr = new THREE.BufferAttribute(params, 4);
+  const extraAttr = new THREE.BufferAttribute(extras, 4);
+  posAttr.setUsage(THREE.DynamicDrawUsage);
+  paramAttr.setUsage(THREE.DynamicDrawUsage);
+  extraAttr.setUsage(THREE.DynamicDrawUsage);
+
+  smokeGeo.setAttribute('position', posAttr);
+  smokeGeo.setAttribute('aParams', paramAttr);
+  smokeGeo.setAttribute('aExtras', extraAttr);
+
+  const smokeMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      uTex: { value: puffNormalAlphaTex },
+      uScale: { value: window.innerHeight * renderer.getPixelRatio() * 0.55 },
+      uSunDir: { value: sunLight.position.clone().normalize() },
+      uFlamePos: { value: new THREE.Vector3(0, 2.0, 0) },
+      uFlameIntensity: { value: 0.0 }
+    },
+    vertexShader: /* glsl */ `
+      attribute vec4 aParams;
+      attribute vec4 aExtras;
+
+      varying float vLife;
+      varying float vRot;
+      varying float vSeed;
+      varying float vKind;
+      varying vec3 vWorldPos;
+
+      uniform float uScale;
+
+      void main() {
+        float age = aParams.x;
+        float maxAge = aParams.y;
+        vLife = clamp(age / max(maxAge, 0.001), 0.0, 1.0);
+
+        if (age >= maxAge) {
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+          gl_PointSize = 0.0;
+          return;
+        }
+
+        vRot = aExtras.x + age * aExtras.y;
+        vSeed = aExtras.z;
+        vKind = aExtras.w;
+        vWorldPos = position;
+
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        // Smooth billowing expansion curve
+        float grow = 1.0 - pow(1.0 - vLife, 2.3);
+        float worldSize = mix(aParams.z, aParams.w, grow);
+
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = clamp((worldSize * uScale) / max(-mvPosition.z, 1.0), 2.0, 380.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying float vLife;
+      varying float vRot;
+      varying float vSeed;
+      varying float vKind;
+      varying vec3 vWorldPos;
+
+      uniform sampler2D uTex;
+      uniform vec3 uSunDir;
+      uniform vec3 uFlamePos;
+      uniform float uFlameIntensity;
+
+      vec2 hash22(vec2 p) {
+        p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+        return fract(sin(p) * 43758.5453123);
+      }
+
+      // Isotropic round cauliflower bubble detail for crisp 3D smoke folds
+      float roundSmokePuffs(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float maxP = 0.0;
+        for (int y = -1; y <= 1; y++) {
+          for (int x = -1; x <= 1; x++) {
+            vec2 nb = vec2(float(x), float(y));
+            vec2 rnd = hash22(i + nb);
+            vec2 center = nb + 0.5 + 0.35 * sin(rnd * 6.2831853);
+            float r = length(f - center);
+            float rad = 0.65 + 0.25 * rnd.x;
+            maxP = max(maxP, smoothstep(rad, rad * 0.10, r));
+          }
+        }
+        return maxP;
+      }
+
+      void main() {
+        if (vLife >= 1.0) discard;
+
+        // Rotate sprite UV for organic rolling motion
+        vec2 centered = gl_PointCoord - 0.5;
+        float c = cos(vRot);
+        float s = sin(vRot);
+        vec2 rotUV = vec2(centered.x * c - centered.y * s, centered.x * s + centered.y * c) + 0.5;
+
+        vec4 samp = texture2D(uTex, rotUV);
+        float texAlpha = samp.a;
+        if (texAlpha < 0.02) discard;
+
+        // Unpack normal (R,G) and cauliflower crease AO (B)
+        vec2 nXY = samp.rg * 2.0 - 1.0;
+        float creaseAO = samp.b;
+        float nz = sqrt(max(0.05, 1.0 - min(0.95, dot(nXY, nXY))));
+        vec3 nWorld = normalize(vec3(
+          nXY.x * c - nXY.y * s,
+          nXY.x * s + nXY.y * c,
+          nz
+        ));
+
+        // Add crisp per-pixel isotropic round cauliflower folds
+        vec2 pSeed = vec2(vSeed * 11.3, vSeed * 7.1);
+        float procBillow = roundSmokePuffs(rotUV * 3.6 + pSeed) * 0.62 +
+                           roundSmokePuffs(rotUV * 7.4 - pSeed) * 0.38;
+        float foldRelief = clamp(creaseAO * 0.52 + procBillow * 0.58, 0.0, 1.0);
+
+        // 1. High-Contrast Directional Sunlight + Deep Cauliflower Crevice Shadowing
+        float sunDiff = clamp(dot(nWorld, uSunDir) * 0.58 + 0.42, 0.0, 1.0);
+        float dustWarmth = (1.0 - clamp(vWorldPos.y / 18.0, 0.0, 1.0)) * 0.48;
+
+        vec3 deepCrevice = mix(vec3(0.14, 0.17, 0.23), vec3(0.22, 0.19, 0.17), dustWarmth);
+        vec3 midBillow   = mix(vec3(0.52, 0.58, 0.67), vec3(0.60, 0.56, 0.52), dustWarmth);
+        vec3 litCrown    = mix(vec3(0.99, 0.98, 0.96), vec3(0.95, 0.91, 0.85), dustWarmth * 0.45);
+
+        float lightTerm = clamp(sunDiff * pow(foldRelief, 1.25) * (0.85 + 0.15 * vSeed), 0.0, 1.0);
+        vec3 smokeCol = mix(deepCrevice, midBillow, smoothstep(0.06, 0.44, lightTerm));
+        smokeCol = mix(smokeCol, litCrown, smoothstep(0.42, 0.82, lightTerm));
+
+        // 2. Internal Molten Orange-Red Fire Glow inside the smoke collar near the exhaust jet
+        if (uFlameIntensity > 0.01 && vKind < 1.5) {
+          vec3 toFlame = uFlamePos - vWorldPos;
+          float dist = length(toFlame);
+          vec3 flameDir = toFlame / max(dist, 0.1);
+          float flameFace = clamp(dot(nWorld, flameDir) * 0.6 + 0.4, 0.0, 1.0);
+          float atten = 1.0 / (1.0 + dist * 0.075 + dist * dist * 0.0042);
+
+          vec3 fireAmber = vec3(1.05, 0.52, 0.08);
+          vec3 fireDeep  = vec3(0.92, 0.22, 0.02);
+          vec3 fireTint  = mix(fireDeep, fireAmber, clamp(atten * 1.6, 0.0, 1.0));
+          // Glow strongest inside the billow crevices facing the flame
+          smokeCol = mix(smokeCol, fireTint, clamp(atten * flameFace * uFlameIntensity * 1.45, 0.0, 0.88));
+        }
+
+        // Erode outer edge with procedural billow detail so puffs never look like smooth circles
+        float crispAlpha = smoothstep(0.08, 0.55, texAlpha * (0.65 + 0.55 * procBillow));
+        float fadeIn = smoothstep(0.0, 0.06, vLife);
+        float fadeOut = pow(1.0 - vLife, 1.45);
+        float baseOpacity = (vKind > 1.5) ? 0.42 : 0.78;
+        float finalAlpha = crispAlpha * fadeIn * fadeOut * baseOpacity;
+
+        gl_FragColor = vec4(smokeCol, finalAlpha);
+      }
+    `
+  });
+
+  const smokePoints = new THREE.Points(smokeGeo, smokeMat);
+  smokePoints.frustumCulled = false;
+  smokePoints.renderOrder = 1;
+  scene.add(smokePoints);
+
+  // Hot Ignition Sparks & Pad Cinders Particle System
+  const MAX_SPARKS = 260;
+  const sparkPos = new Float32Array(MAX_SPARKS * 3);
+  const sparkVel = new Float32Array(MAX_SPARKS * 3);
+  const sparkLife = new Float32Array(MAX_SPARKS * 2); // age, maxAge
+  for (let i = 0; i < MAX_SPARKS; i++) {
+    sparkLife[i * 2] = 999.0;
+    sparkLife[i * 2 + 1] = 1.0;
+  }
+  const sparkGeo = new THREE.BufferGeometry();
+  const sparkPosAttr = new THREE.BufferAttribute(sparkPos, 3);
+  sparkPosAttr.setUsage(THREE.DynamicDrawUsage);
+  sparkGeo.setAttribute('position', sparkPosAttr);
+
+  const sparkMat = new THREE.PointsMaterial({
+    color: 0xff9a2e,
+    size: 0.46,
+    transparent: true,
+    opacity: 0.95,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+  const sparkPoints = new THREE.Points(sparkGeo, sparkMat);
+  sparkPoints.frustumCulled = false;
+  scene.add(sparkPoints);
+
+  let nextSmokeIdx = 0;
+  let nextSparkIdx = 0;
+  const prng = mulberry32(77319);
+
+  function spawnSmoke({
+    x, y, z,
+    vx, vy, vz,
+    maxAge = 4.5,
+    startSize = 3.5,
+    endSize = 18.0,
+    kind = 0
+  }) {
+    const i = nextSmokeIdx;
+    nextSmokeIdx = (nextSmokeIdx + 1) % MAX_SMOKE;
+
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+
+    velocities[i * 3] = vx;
+    velocities[i * 3 + 1] = vy;
+    velocities[i * 3 + 2] = vz;
+
+    params[i * 4] = 0.0;
+    params[i * 4 + 1] = maxAge;
+    params[i * 4 + 2] = startSize;
+    params[i * 4 + 3] = endSize;
+
+    extras[i * 4] = prng() * Math.PI * 2;
+    extras[i * 4 + 1] = (prng() - 0.5) * 1.15;
+    extras[i * 4 + 2] = prng();
+    extras[i * 4 + 3] = kind;
+  }
+
+  function spawnSpark(x, y, z, vx, vy, vz, maxAge) {
+    const i = nextSparkIdx;
+    nextSparkIdx = (nextSparkIdx + 1) % MAX_SPARKS;
+    sparkPos[i * 3] = x;
+    sparkPos[i * 3 + 1] = y;
+    sparkPos[i * 3 + 2] = z;
+    sparkVel[i * 3] = vx;
+    sparkVel[i * 3 + 1] = vy;
+    sparkVel[i * 3 + 2] = vz;
+    sparkLife[i * 2] = 0.0;
+    sparkLife[i * 2 + 1] = maxAge;
+  }
+
+  function update(dt, rocketY, rocketVel, throttle) {
+    // 1. Crisp Quick-Disconnect (QD) Umbilical Cryogenic LOX Venting on Pad & Liftoff Disconnect
+    if (rocketY < 35 && prng() < 0.65) {
+      spawnSmoke({
+        x: -ROCKET_R - 0.35 - prng() * 0.4,
+        y: 14.5 + (prng() - 0.5) * 0.8,
+        z: -1.1 + (prng() - 0.5) * 0.5,
+        vx: -1.8 - prng() * 1.6,
+        vy: -0.9 - prng() * 0.8,
+        vz: (prng() - 0.5) * 1.2,
+        maxAge: 1.4 + prng() * 0.9,
+        startSize: 0.9,
+        endSize: 3.4,
+        kind: 2
+      });
+    }
+
+    // 2. Engine Ignition & Liftoff Sculpted Cauliflower Smoke + Pad Dust Emission
+    if (throttle > 0.02) {
+      const nozzleWorldY = rocketY + 2.25;
+      const padProximity = clamp(1.0 - rocketY / 48.0, 0.0, 1.0);
+
+      // A. Radial Ground-Surge Cauliflower Smoke & Dust Rolling Outward Across the Concrete Pad
+      // Spawned at rStart >= 4.2m so the central supersonic orange-white plasma jet stays 100% clear!
+      if (padProximity > 0.05) {
+        const groundSpawnCount = Math.ceil((8 + 14 * throttle) * padProximity);
+        for (let k = 0; k < groundSpawnCount; k++) {
+          const az = prng() * Math.PI * 2;
+          const rStart = 4.2 + prng() * 5.2 + (1.0 - padProximity) * 3.5;
+          const speed = (14.0 + prng() * 22.0) * throttle * (0.55 + 0.45 * padProximity);
+
+          spawnSmoke({
+            x: Math.cos(az) * rStart,
+            y: 0.9 + prng() * 2.4,
+            z: Math.sin(az) * rStart,
+            vx: Math.cos(az) * speed,
+            vy: 1.1 + prng() * 3.8,
+            vz: Math.sin(az) * speed,
+            maxAge: 3.4 + prng() * 3.2,
+            startSize: 3.8 + prng() * 3.2,
+            endSize: 18.5 + prng() * 14.5,
+            kind: 0
+          });
+        }
+
+        // B. Incandescent Pad Deflection Sparks & Cinders
+        const sparkCount = Math.ceil(6 * throttle * padProximity);
+        for (let s = 0; s < sparkCount; s++) {
+          const az = prng() * Math.PI * 2;
+          const spd = (18.0 + prng() * 28.0) * throttle;
+          spawnSpark(
+            Math.cos(az) * (2.2 + prng() * 2.5),
+            0.35 + prng() * 0.9,
+            Math.sin(az) * (2.2 + prng() * 2.5),
+            Math.cos(az) * spd,
+            4.5 + prng() * 9.5,
+            Math.sin(az) * spd,
+            0.55 + prng() * 0.75
+          );
+        }
+      }
+
+      // C. Vertical Exhaust Smoke Wake Trailing BELOW the Supersonic Plasma Flame Cone
+      // Starts at distDown >= 8.5m below the nozzles so the upper plasma flame & Mach shock diamonds are unobstructed!
+      const columnSpawnCount = Math.ceil(6 + 9 * throttle);
+      for (let k = 0; k < columnSpawnCount; k++) {
+        const az = prng() * Math.PI * 2;
+        const distDown = 8.5 + prng() * 14.5 * throttle;
+        const spawnY = Math.max(1.0, nozzleWorldY - distDown);
+        const hitsPad = spawnY < 2.6;
+        const rSpread = hitsPad ? (4.2 + prng() * 3.5) : (1.6 + prng() * 2.6 + (distDown - 8.0) * 0.18);
+        const lateralSpd = (2.8 + prng() * 6.0) * throttle;
+
+        const outBoost = hitsPad ? (12.0 + prng() * 14.0) * throttle : lateralSpd;
+        const downVel = hitsPad ? (1.4 + prng() * 3.0) : (-16.0 - prng() * 12.0 + rocketVel * 0.25);
+
+        spawnSmoke({
+          x: Math.cos(az) * rSpread,
+          y: spawnY,
+          z: Math.sin(az) * rSpread,
+          vx: Math.cos(az) * outBoost,
+          vy: downVel,
+          vz: Math.sin(az) * outBoost,
+          maxAge: 2.8 + prng() * 2.6,
+          startSize: 3.6 + prng() * 2.8,
+          endSize: 16.5 + prng() * 13.5,
+          kind: 1
+        });
+      }
+    }
+
+    // 3. Integrate Smoke Particle Physics (Drag, Thermal Buoyancy, Turbulent Curl & Ground Collision)
+    for (let i = 0; i < MAX_SMOKE; i++) {
+      const i4 = i * 4;
+      let age = params[i4];
+      const maxAge = params[i4 + 1];
+      if (age >= maxAge) continue;
+
+      age += dt;
+      params[i4] = age;
+      if (age >= maxAge) continue;
+
+      const i3 = i * 3;
+      let x = positions[i3];
+      let y = positions[i3 + 1];
+      let z = positions[i3 + 2];
+      let vx = velocities[i3];
+      let vy = velocities[i3 + 1];
+      let vz = velocities[i3 + 2];
+      const kind = extras[i4 + 3];
+
+      const drag = Math.exp(-(kind === 0 ? 1.32 : 1.05) * dt);
+      vx *= drag;
+      vz *= drag;
+
+      if (kind < 1.5) {
+        vy = vy * Math.exp(-1.4 * dt) + (2.6 + extras[i4 + 2] * 2.4) * dt;
+      } else {
+        vx -= 1.1 * dt;
+      }
+
+      x += vx * dt;
+      y += vy * dt;
+      z += vz * dt;
+
+      const minY = Math.max(0.85, params[i4 + 2] * 0.22);
+      if (y < minY) {
+        y = minY;
+        if (vy < 0) {
+          const rHoriz = Math.hypot(x, z) + 0.001;
+          const push = Math.abs(vy) * 0.55;
+          vx += (x / rHoriz) * push;
+          vz += (z / rHoriz) * push;
+          vy = 0.65 + extras[i4 + 2] * 1.1;
+        }
+      }
+
+      positions[i3] = x;
+      positions[i3 + 1] = y;
+      positions[i3 + 2] = z;
+      velocities[i3] = vx;
+      velocities[i3 + 1] = vy;
+      velocities[i3 + 2] = vz;
+    }
+
+    // 4. Integrate Ignition Sparks
+    for (let i = 0; i < MAX_SPARKS; i++) {
+      const i2 = i * 2;
+      let age = sparkLife[i2];
+      const maxAge = sparkLife[i2 + 1];
+      if (age >= maxAge) {
+        sparkPos[i * 3 + 1] = -999;
+        continue;
+      }
+      age += dt;
+      sparkLife[i2] = age;
+
+      const i3 = i * 3;
+      sparkVel[i3 + 1] -= 18.0 * dt;
+      sparkPos[i3] += sparkVel[i3] * dt;
+      sparkPos[i3 + 1] += sparkVel[i3 + 1] * dt;
+      sparkPos[i3 + 2] += sparkVel[i3 + 2] * dt;
+
+      if (sparkPos[i3 + 1] < 0.08) {
+        sparkPos[i3 + 1] = 0.08;
+        sparkVel[i3 + 1] *= -0.42;
+      }
+    }
+
+    posAttr.needsUpdate = true;
+    paramAttr.needsUpdate = true;
+    extraAttr.needsUpdate = true;
+    sparkPosAttr.needsUpdate = true;
+
+    smokeMat.uniforms.uFlamePos.value.set(0, Math.max(2.0, rocketY - 2.5), 0);
+    smokeMat.uniforms.uFlameIntensity.value = throttle * 1.45;
+  }
+
+  function reset() {
+    for (let i = 0; i < MAX_SMOKE; i++) {
+      params[i * 4] = 999.0;
+    }
+    for (let i = 0; i < MAX_SPARKS; i++) {
+      sparkLife[i * 2] = 999.0;
+      sparkPos[i * 3 + 1] = -999;
+    }
+    posAttr.needsUpdate = true;
+    paramAttr.needsUpdate = true;
+    sparkPosAttr.needsUpdate = true;
+  }
+
+  return { update, reset, smokeMat };
+}
+
+const particleSystem = createVolumetricSmokeAndSparksSystem();
+
+// ============================================================================
+// 11. LAUNCH SEQUENCE STATE MACHINE, PHYSICS, CAMERA SHAKE & HUD CONTROLS
+// ============================================================================
+// Launch Timeline (seconds):
+//   t in [0.0, 1.8)   : Pre-Launch Countdown on Pad (T - 00:01.8 -> T - 00:00.0)
+//   t in [1.8, 4.4)   : Raptor Engine Ignition, Plasma Exhaust Build, Pad Smoke & Seismic Shake
+//   t >= 4.4          : Liftoff & Gravity-Defying Acceleration into the Starry Upper Sky
+const T_IGNITION = 1.8;
+const T_LIFTOFF = 4.4;
+
+let simTime = 0.0;
+let isPaused = false;
+let waitingForManualTrigger = false; // If user clicks Reset, hold at pad until they click Launch
+let rocketY = 0.0;
+let rocketVel = 0.0;
+let prevTrackedY = HERO_CAM_TARGET.y;
+let cubeFrameCounter = 0;
+
+// UI DOM Elements
+const statusDotEl = document.getElementById('status-dot');
+const statusTextEl = document.getElementById('status-text');
+const teleTimeEl = document.getElementById('tele-time');
+const teleAltEl = document.getElementById('tele-alt');
+const teleVelEl = document.getElementById('tele-vel');
+const btnLaunch = document.getElementById('btn-launch');
+const btnLaunchLabel = document.getElementById('btn-launch-label');
+const btnPause = document.getElementById('btn-pause');
+const btnPauseLabel = document.getElementById('btn-pause-label');
+const btnReset = document.getElementById('btn-reset');
+
+function triggerLaunchNow() {
+  isPaused = false;
+  waitingForManualTrigger = false;
+  userInteractingWithCam = false;
+  btnPause.classList.remove('active-toggle');
+  btnPauseLabel.textContent = 'Pause';
+
+  if (simTime < T_IGNITION || simTime > T_LIFTOFF + 1.0) {
+    // Reset to exact Engine Ignition moment (T-0)
+    particleSystem.reset();
+    simTime = T_IGNITION;
+    rocketY = 0.0;
+    rocketVel = 0.0;
+    prevTrackedY = HERO_CAM_TARGET.y;
+    starshipGroup.position.set(0, 0, 0);
+    starshipGroup.rotation.set(0, 0, 0);
+    controls.reset();
+    camera.position.copy(HERO_CAM_POS);
+    controls.target.copy(HERO_CAM_TARGET);
+    controls.update();
+  }
+}
+
+function togglePause() {
+  isPaused = !isPaused;
+  if (isPaused) {
+    btnPause.classList.add('active-toggle');
+    btnPauseLabel.textContent = 'Resume';
+  } else {
+    btnPause.classList.remove('active-toggle');
+    btnPauseLabel.textContent = 'Pause';
+  }
+}
+
+function resetToPad() {
+  isPaused = false;
+  waitingForManualTrigger = true;
+  userInteractingWithCam = false;
+  btnPause.classList.remove('active-toggle');
+  btnPauseLabel.textContent = 'Pause';
+  btnLaunchLabel.textContent = 'Launch';
+
+  simTime = 0.0;
+  rocketY = 0.0;
+  rocketVel = 0.0;
+  prevTrackedY = HERO_CAM_TARGET.y;
+
+  starshipGroup.position.set(0, 0, 0);
+  starshipGroup.rotation.set(0, 0, 0);
+  particleSystem.reset();
+
+  controls.reset();
+  camera.position.copy(HERO_CAM_POS);
+  controls.target.copy(HERO_CAM_TARGET);
+  controls.update();
+}
+
+btnLaunch.addEventListener('click', triggerLaunchNow);
+btnPause.addEventListener('click', togglePause);
+btnReset.addEventListener('click', resetToPad);
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (waitingForManualTrigger) triggerLaunchNow();
+    else togglePause();
+  } else if (e.key === 'r' || e.key === 'R') {
+    resetToPad();
+  } else if (e.key === 'l' || e.key === 'L') {
+    triggerLaunchNow();
+  }
+});
+
+const _shakeOffset = new THREE.Vector3();
+let _prevShakeApplied = new THREE.Vector3();
+
+function updateSimulation(dt) {
+  // Remove previous frame's camera shake before OrbitControls & camera tracking update
+  camera.position.sub(_prevShakeApplied);
+  _prevShakeApplied.set(0, 0, 0);
+
+  if (!isPaused && !waitingForManualTrigger) {
+    simTime += dt;
+  }
+
+  // --------------------------------------------------------------------------
+  // A. EVALUATE ENGINE THROTTLE, ROCKET ALTITUDE, VELOCITY & PITCH
+  // --------------------------------------------------------------------------
+  let throttle = 0.0;
+  if (simTime >= T_IGNITION) {
+    const igElapsed = simTime - T_IGNITION;
+    // Rapid staggered Raptor startup ramp with high-frequency combustion flicker
+    const baseRamp = smootherstep(0.0, 1.45, igElapsed);
+    const flicker = 0.94 + 0.06 * Math.sin(simTime * 54.0) * Math.cos(simTime * 37.0);
+    throttle = clamp(baseRamp * flicker, 0.0, 1.0);
+  }
+
+  if (simTime < T_LIFTOFF) {
+    rocketY = 0.0;
+    rocketVel = 0.0;
+    starshipGroup.position.set(0, 0, 0);
+    starshipGroup.rotation.set(0, 0, 0);
+  } else {
+    const flightT = simTime - T_LIFTOFF;
+    // Realistic heavy-lift gravity-defying acceleration profile:
+    // Slow majestic initial pad clearance (T/W ~ 1.22), progressively building acceleration as propellant burns
+    const a0 = 1.65; // initial net upward acceleration (m/s^2)
+    const jerk = 0.24; // progressive acceleration increase (m/s^3)
+    rocketY = 0.5 * a0 * flightT * flightT + (1.0 / 6.0) * jerk * flightT * flightT * flightT;
+    rocketVel = a0 * flightT + 0.5 * jerk * flightT * flightT;
+
+    // Subtle aerodynamic gravity-turn pitch maneuver above 65m altitude
+    const pitchT = smootherstep(4.5, 22.0, flightT);
+    const downrangeX = pitchT * pitchT * 14.0;
+    const pitchAngle = -pitchT * 0.075;
+
+    starshipGroup.position.set(downrangeX, rocketY, 0);
+    starshipGroup.rotation.set(0, 0, pitchAngle);
+  }
+
+  // Update the Rocket Launch Holder Tower, Chopstick Arms, QD Umbilical & Base Hold-Down Clamps
+  rocketHolderSystem.update(simTime, T_IGNITION, T_LIFTOFF);
+  skyDomeMat.uniforms.uRocketAlt.value = rocketY;
+
+  // --------------------------------------------------------------------------
+  // B. UPDATE PLASMA EXHAUST CONE, RAPTOR THROATS & DYNAMIC POINT LIGHTS
+  // --------------------------------------------------------------------------
+  plasmaSystem.exhaustMat.uniforms.uTime.value = simTime * 1.0;
+  plasmaSystem.exhaustMat.uniforms.uThrottle.value = throttle;
+  // Local Y of the concrete pad relative to the Raptor nozzle exits (at starshipY + 2.25)
+  plasmaSystem.exhaustMat.uniforms.uGroundClipY.value = -(rocketY + 2.20);
+
+  // Pad impingement radial plasma flare disc intensity
+  const padFlareFactor = throttle * smoothstep(26.0, 0.0, rocketY);
+  plasmaSystem.padFlareMat.uniforms.uTime.value = simTime;
+  plasmaSystem.padFlareMat.uniforms.uPadIntensity.value = padFlareFactor;
+  plasmaSystem.padFlareMesh.position.x = starshipGroup.position.x;
+
+  // Raptor combustion chamber throat glow
+  for (const mat of starshipObj.nozzleInteriorMats) {
+    mat.emissiveIntensity = throttle * 6.5;
+  }
+
+  // Dynamic Point Lights reflecting fiery warmth across metallic hull & concrete ground
+  const lightPulse = 0.88 + 0.12 * Math.sin(simTime * 63.0) * Math.sin(simTime * 41.0);
+  engineCoreLight.position.set(starshipGroup.position.x, rocketY + 1.8, 1.5);
+  engineCoreLight.intensity = throttle * 145.0 * lightPulse;
+
+  const padAtten = smoothstep(75.0, 0.0, rocketY);
+  padBounceLight.position.set(starshipGroup.position.x * 0.4, 2.6, 5.5);
+  padBounceLight.intensity = throttle * padAtten * 195.0 * lightPulse;
+
+  // Keep directional sun shadow frustum centered on the Starship during ascent
+  if (rocketY < 160) {
+    sunLight.target.position.set(starshipGroup.position.x, rocketY + 18, 0);
+    sunLight.position.set(starshipGroup.position.x + 110, rocketY + 145, 130);
+  }
+
+  // --------------------------------------------------------------------------
+  // C. UPDATE GPU VOLUMETRIC SMOKE, DUST & SPARKS
+  // --------------------------------------------------------------------------
+  if (!isPaused) {
+    particleSystem.update(dt, rocketY, rocketVel, throttle);
+  }
+
+  // --------------------------------------------------------------------------
+  // D. CAMERA ASCENT TRACKING, ORBITCONTROLS & SEISMIC CAMERA SHAKE
+  // --------------------------------------------------------------------------
+  // Smoothly tilt and track the Starship's ascent toward the upper sky,
+  // dipping slightly at liftoff so both the full 53.8m stainless-steel Starship
+  // and its 26m orange-white plasma exhaust cone stay completely framed in view!
+  const liftoffDip = smoothstep(0.0, 22.0, rocketY) * 4.2;
+  const desiredTrackY = HERO_CAM_TARGET.y + rocketY - liftoffDip;
+  const trackDeltaY = desiredTrackY - prevTrackedY;
+  prevTrackedY = desiredTrackY;
+
+  // Always move OrbitControls target up with the rocket so the camera tilts smoothly toward the sky
+  controls.target.y += trackDeltaY;
+  controls.target.x = lerp(controls.target.x, starshipGroup.position.x, 1.0 - Math.exp(-3.0 * dt));
+
+  // Elevate camera position smoothly once the rocket clears the launch tower so the full
+  // rocket hull + Mach-diamond plasma plume remain dramatically framed at all altitudes
+  if (!userInteractingWithCam && rocketY > 6.0) {
+    const chaseClimbFactor = lerp(0.24, 0.93, smoothstep(18.0, 88.0, rocketY));
+    camera.position.y += trackDeltaY * chaseClimbFactor;
+  }
+
+  controls.update();
+
+  // Seismic Camera Shake during Engine Ignition & Low-Altitude Liftoff
+  if (!isPaused && throttle > 0.02) {
+    const distToRocket = camera.position.distanceTo(starshipGroup.position);
+    const seismicEnv =
+      throttle *
+      smoothstep(T_IGNITION, T_IGNITION + 0.9, simTime) *
+      (1.0 / (1.0 + Math.max(0, distToRocket - 55.0) * 0.018));
+
+    const shakeAmp = 0.24 * seismicEnv;
+    const tS = simTime * 38.0;
+    _shakeOffset.set(
+      (Math.sin(tS * 1.13) * 0.6 + Math.cos(tS * 2.41) * 0.4) * shakeAmp,
+      (Math.sin(tS * 1.77 + 1.2) * 0.65 + Math.sin(tS * 3.15) * 0.35) * shakeAmp,
+      (Math.cos(tS * 1.39 + 2.4) * 0.45) * shakeAmp
+    );
+    camera.position.add(_shakeOffset);
+    _prevShakeApplied.copy(_shakeOffset);
+  }
+
+  // Keep the celestial Sky Dome and Blazing Sun Corona anchored at infinity relative to the camera
+  skyDome.position.copy(camera.position);
+  blazingSunGroup.position.copy(camera.position).add(SUN_WORLD_POS);
+
+  // --------------------------------------------------------------------------
+  // E. UPDATE REAL-TIME CUBE ENVIRONMENT MAP FOR MIRROR-POLISHED CHROME HULL
+  // --------------------------------------------------------------------------
+  cubeFrameCounter++;
+  if (cubeFrameCounter % 2 === 0) {
+    starshipGroup.visible = false;
+    cubeCamera.position.set(starshipGroup.position.x, rocketY + 24.0, 0);
+    skyDome.position.copy(cubeCamera.position);
+    blazingSunGroup.position.copy(cubeCamera.position).add(SUN_WORLD_POS);
+    cubeCamera.update(renderer, scene);
+    skyDome.position.copy(camera.position);
+    blazingSunGroup.position.copy(camera.position).add(SUN_WORLD_POS);
+    starshipGroup.visible = true;
+  }
+
+  // --------------------------------------------------------------------------
+  // F. UPDATE ON-SCREEN HUD TELEMETRY & STATUS
+  // --------------------------------------------------------------------------
+  skyDomeMat.uniforms.uTime.value = simTime;
+  skyDomeMat.uniforms.uRocketAlt.value = rocketY;
+
+  const missionClock = simTime - T_IGNITION;
+  const signChar = missionClock < 0 ? 'T- ' : 'T+ ';
+  const absClock = Math.abs(missionClock);
+  const mins = String(Math.floor(absClock / 60)).padStart(2, '0');
+  const secs = (absClock % 60).toFixed(1).padStart(4, '0');
+  teleTimeEl.textContent = `${signChar}${mins}:${secs}`;
+  teleAltEl.textContent = rocketY >= 1000 ? `${(rocketY / 1000).toFixed(2)} km` : `${rocketY.toFixed(1)} m`;
+  teleVelEl.textContent = `${rocketVel.toFixed(1)} m/s`;
+
+  statusDotEl.className = 'status-dot';
+  if (isPaused) {
+    statusDotEl.classList.add('paused');
+    statusTextEl.textContent = 'STARSHIP \u2022 PAUSED';
+  } else if (waitingForManualTrigger) {
+    statusTextEl.textContent = 'STARSHIP \u2022 READY ON PAD';
+  } else if (simTime < T_IGNITION) {
+    statusTextEl.textContent = 'STARSHIP \u2022 AUTO-SEQUENCE';
+  } else if (simTime < T_LIFTOFF) {
+    statusDotEl.classList.add('ignition');
+    statusTextEl.textContent = 'RAPTOR IGNITION \u2022 THRUST BUILD';
+  } else {
+    statusDotEl.classList.add('liftoff');
+    statusTextEl.textContent = rocketY > 250 ? 'STARSHIP \u2022 ASCENT' : 'STARSHIP \u2022 LIFTOFF';
+    btnLaunchLabel.textContent = 'Relaunch';
+  }
+}
+
+// ============================================================================
+// 12. POST-PROCESSING (SUBTLE UNREAL BLOOM FOR GLOWING EXHAUST + ACES OUTPUT)
+// ============================================================================
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.28, // Subtle optical bloom strength for the glowing orange-white plasma exhaust & sun glints
+  0.45, // Bloom radius
+  1.08  // High threshold so only HDR exhaust cone, sparks & concentrated sun glints bloom
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// ============================================================================
+// 13. RESIZE HANDLER & MAIN ANIMATION LOOP
+// ============================================================================
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  particleSystem.smokeMat.uniforms.uScale.value = h * renderer.getPixelRatio() * 0.55;
+});
+
+// Initialize frame 0 immediately
+updateSimulation(1 / 60);
+
+let lastNow = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const rawDt = (now - lastNow) * 0.001;
+  lastNow = now;
+  const dt = clamp(rawDt, 0.001, 0.05);
+
+  updateSimulation(dt);
+  composer.render();
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

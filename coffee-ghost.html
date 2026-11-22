@@ -1,0 +1,2367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coffee Ghost</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #040d15;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+    // =========================================================================
+    // 1. DETERMINISTIC PRNG & DUAL-NUMBER ANALYTIC DIFFERENTIATION
+    // =========================================================================
+    class PRNG {
+      constructor(seed = 40917) {
+        this.s = seed % 2147483647;
+        if (this.s <= 0) this.s += 2147483646;
+      }
+      next() {
+        this.s = (this.s * 16807) % 2147483647;
+        return (this.s - 1) / 2147483646;
+      }
+      range(a, b) {
+        return a + (b - a) * this.next();
+      }
+    }
+
+    const rng = new PRNG(20261117);
+
+    // Exact forward-mode 2-variable dual numbers: [value, d/du, d/dv]
+    const D2 = {
+      c: (v) => [v, 0, 0],
+      u: (u) => [u, 1, 0],
+      v: (v) => [v, 0, 1],
+      add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+      sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+      neg: (a) => [-a[0], -a[1], -a[2]],
+      scale: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+      mul: (a, b) => [
+        a[0] * b[0],
+        a[1] * b[0] + a[0] * b[1],
+        a[2] * b[0] + a[0] * b[2],
+      ],
+      div: (a, b) => {
+        const inv = 1 / b[0];
+        const inv2 = inv * inv;
+        return [
+          a[0] * inv,
+          (a[1] * b[0] - a[0] * b[1]) * inv2,
+          (a[2] * b[0] - a[0] * b[2]) * inv2,
+        ];
+      },
+      sq: (a) => [a[0] * a[0], 2 * a[0] * a[1], 2 * a[0] * a[2]],
+      powInt: (a, n) => {
+        const p = Math.pow(a[0], n);
+        const dp = n * Math.pow(a[0], n - 1);
+        return [p, dp * a[1], dp * a[2]];
+      },
+      sin: (a) => {
+        const s = Math.sin(a[0]);
+        const c = Math.cos(a[0]);
+        return [s, c * a[1], c * a[2]];
+      },
+      cos: (a) => {
+        const c = Math.cos(a[0]);
+        const s = -Math.sin(a[0]);
+        return [c, s * a[1], s * a[2]];
+      },
+      exp: (a) => {
+        const e = Math.exp(a[0]);
+        return [e, e * a[1], e * a[2]];
+      },
+      tanh: (a) => {
+        const t = Math.tanh(a[0]);
+        const d = 1 - t * t;
+        return [t, d * a[1], d * a[2]];
+      },
+      sqrtSafe: (a, eps = 1e-12) => {
+        const r = Math.sqrt(a[0] * a[0] + eps);
+        const d = a[0] / r;
+        return [r, d * a[1], d * a[2]];
+      },
+      sum: (...items) => {
+        let v = 0, du = 0, dv = 0;
+        for (let i = 0; i < items.length; i++) {
+          v += items[i][0];
+          du += items[i][1];
+          dv += items[i][2];
+        }
+        return [v, du, dv];
+      },
+    };
+
+    function clamp(x, a, b) {
+      return Math.max(a, Math.min(b, x));
+    }
+
+    function smoothstep(e0, e1, x) {
+      const t = clamp((x - e0) / (e1 - e0), 0, 1);
+      return t * t * (3 - 2 * t);
+    }
+
+    function valueNoise2D(x, y) {
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix, fy = y - iy;
+      const ux = fx * fx * (3 - 2 * fx);
+      const uy = fy * fy * (3 - 2 * fy);
+      const h = (px, py) => {
+        const n = Math.sin(px * 127.1 + py * 311.7) * 43758.5453123;
+        return n - Math.floor(n);
+      };
+      const a = h(ix, iy);
+      const b = h(ix + 1, iy);
+      const c = h(ix, iy + 1);
+      const d = h(ix + 1, iy + 1);
+      return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+    }
+
+    function fbm2(x, y, octaves = 4) {
+      let val = 0, amp = 0.5, freq = 1.0;
+      for (let i = 0; i < octaves; i++) {
+        val += amp * valueNoise2D(x * freq, y * freq);
+        freq *= 2.02;
+        amp *= 0.5;
+      }
+      return val;
+    }
+
+    // =========================================================================
+    // 2. RENDERER, SCENE, CAMERA, CONTROLS & BLOOM COMPOSER
+    // =========================================================================
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.06;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(
+      38,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      100
+    );
+    camera.position.set(1.85, 0.92, 4.35);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(-0.10, 0.00, 0.02);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.055;
+    controls.minDistance = 2.2;
+    controls.maxDistance = 9.0;
+    controls.maxPolarAngle = Math.PI * 0.88;
+    controls.minPolarAngle = Math.PI * 0.12;
+    controls.update();
+
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    composer.setSize(window.innerWidth, window.innerHeight);
+
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.38,
+      0.56,
+      1.04
+    );
+    composer.addPass(bloomPass);
+
+    const outputPass = new OutputPass();
+    composer.addPass(outputPass);
+
+    // =========================================================================
+    // 3. DEEP TEAL-NAVY GRADIENT BACKDROP & CALIBRATED PMREM ENVIRONMENT
+    // =========================================================================
+    const backdropGeo = new THREE.SphereGeometry(42, 48, 32);
+    const backdropMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      uniforms: {
+        uTime: { value: 0 },
+      },
+      vertexShader: `
+        varying vec3 vWorldDir;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorldDir = normalize(position);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldDir;
+        uniform float uTime;
+
+        float hash12(vec2 p) {
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
+
+        void main() {
+          vec3 dir = normalize(vWorldDir);
+          float y = dir.y;
+          float horizonBand = exp(-pow((y + 0.08) * 1.9, 2.0));
+          float upperFade = smoothstep(-0.2, 0.9, y);
+          float lowerFade = smoothstep(0.15, -0.85, y);
+
+          vec3 deepZenith = vec3(0.011, 0.032, 0.062);
+          vec3 midNavyTeal = vec3(0.022, 0.082, 0.128);
+          vec3 richTealGlow = vec3(0.036, 0.145, 0.195);
+          vec3 abyssBase = vec3(0.008, 0.024, 0.044);
+
+          vec3 col = mix(midNavyTeal, deepZenith, upperFade);
+          col = mix(col, richTealGlow, horizonBand * 0.72);
+          col = mix(col, abyssBase, lowerFade * 0.82);
+
+          // Subtle directional depth toward back-left cool rim & front warm aura
+          float coolCorner = pow(max(0.0, dot(dir, normalize(vec3(-0.6, 0.25, -0.75)))), 3.0);
+          col += vec3(0.012, 0.048, 0.072) * coolCorner;
+
+          // Subtle filmic dither to prevent gradient banding
+          float dither = (hash12(gl_FragCoord.xy) - 0.5) * (1.8 / 255.0);
+          col = max(col + dither, vec3(0.0));
+
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+    });
+    const backdropMesh = new THREE.Mesh(backdropGeo, backdropMat);
+    scene.add(backdropMesh);
+
+    function createCalibratedEnvMap() {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      pmrem.compileEquirectangularShader();
+
+      const envScene = new THREE.Scene();
+      const envDome = new THREE.Mesh(
+        new THREE.SphereGeometry(20, 32, 24),
+        new THREE.ShaderMaterial({
+          side: THREE.BackSide,
+          vertexShader: `
+            varying vec3 vDir;
+            void main() {
+              vDir = normalize(position);
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            varying vec3 vDir;
+            void main() {
+              vec3 d = normalize(vDir);
+              vec3 sky = mix(vec3(0.04, 0.12, 0.18), vec3(0.10, 0.28, 0.38), smoothstep(-0.3, 0.85, d.y));
+              // Cool overhead/back studio rim strip for crisp specular catchlights
+              float coolStrip = pow(max(0.0, dot(d, normalize(vec3(-0.55, 0.58, -0.60)))), 14.0);
+              float frontKeySoft = pow(max(0.0, dot(d, normalize(vec3(-0.35, 0.70, 0.62)))), 10.0);
+              // Warm lower-front coffee glint bounce
+              float warmBounce = pow(max(0.0, dot(d, normalize(vec3(0.20, -0.35, 0.90)))), 8.0);
+              vec3 col = sky
+                + vec3(0.55, 0.92, 1.05) * coolStrip * 2.2
+                + vec3(0.75, 0.90, 0.98) * frontKeySoft * 1.15
+                + vec3(1.10, 0.48, 0.15) * warmBounce * 0.85;
+              gl_FragColor = vec4(col, 1.0);
+            }
+          `,
+        })
+      );
+      envScene.add(envDome);
+
+      const rt = pmrem.fromScene(envScene, 0.03);
+      envDome.geometry.dispose();
+      envDome.material.dispose();
+      pmrem.dispose();
+      return rt.texture;
+    }
+
+    scene.environment = createCalibratedEnvMap();
+
+    // =========================================================================
+    // 4. PROCEDURAL CALIBRATED PBR TEXTURES
+    // =========================================================================
+    function createCottonTextures(size = 512) {
+      const albedoCanvas = document.createElement('canvas');
+      const normalCanvas = document.createElement('canvas');
+      const roughCanvas = document.createElement('canvas');
+      albedoCanvas.width = normalCanvas.width = roughCanvas.width = size;
+      albedoCanvas.height = normalCanvas.height = roughCanvas.height = size;
+
+      const aCtx = albedoCanvas.getContext('2d');
+      const nCtx = normalCanvas.getContext('2d');
+      const rCtx = roughCanvas.getContext('2d');
+
+      const aImg = aCtx.createImageData(size, size);
+      const nImg = nCtx.createImageData(size, size);
+      const rImg = rCtx.createImageData(size, size);
+
+      const heights = new Float32Array(size * size);
+      const threads = 64; // warp & weft threads per tile
+
+      for (let y = 0; y < size; y++) {
+        const ny = y / size;
+        for (let x = 0; x < size; x++) {
+          const nx = x / size;
+          const idx = y * size + x;
+
+          // Seamless periodic weave pattern + organic cotton fiber slubs
+          const uPhase = nx * Math.PI * 2 * threads;
+          const vPhase = ny * Math.PI * 2 * threads;
+          const checker = (Math.floor(nx * threads) + Math.floor(ny * threads)) & 1;
+
+          const warp = Math.sin(uPhase) * 0.5 + 0.5;
+          const weft = Math.sin(vPhase) * 0.5 + 0.5;
+          const weave = checker ? (warp * 0.72 + weft * 0.28) : (weft * 0.72 + warp * 0.28);
+
+          // Tileable multi-harmonic thread slub noise
+          const slub =
+            0.5 * Math.sin(nx * Math.PI * 2 * 7 + Math.cos(ny * Math.PI * 2 * 5) * 1.4) +
+            0.5 * Math.cos(ny * Math.PI * 2 * 11 + Math.sin(nx * Math.PI * 2 * 9) * 1.2);
+          const grain = fbm2(nx * 24, ny * 24, 3);
+
+          const h = weave * 0.68 + slub * 0.14 + grain * 0.18;
+          heights[idx] = h;
+
+          // Soft warm unbleached cotton ivory
+          const shade = 232 + h * 18 - (1.0 - weave) * 8;
+          const p = idx * 4;
+          aImg.data[p] = clamp(shade + 3, 0, 255);
+          aImg.data[p + 1] = clamp(shade + 1, 0, 255);
+          aImg.data[p + 2] = clamp(shade - 4, 0, 255);
+          aImg.data[p + 3] = 255;
+
+          // Matte cotton roughness ~ 0.84 - 0.96
+          const roughVal = Math.round(clamp((0.84 + (1.0 - weave) * 0.09 + grain * 0.04) * 255, 0, 255));
+          rImg.data[p] = rImg.data[p + 1] = rImg.data[p + 2] = roughVal;
+          rImg.data[p + 3] = 255;
+        }
+      }
+
+      // Compute tangent-space normal map from seamless height field
+      const strength = 2.6;
+      for (let y = 0; y < size; y++) {
+        const ym = (y - 1 + size) % size;
+        const yp = (y + 1) % size;
+        for (let x = 0; x < size; x++) {
+          const xm = (x - 1 + size) % size;
+          const xp = (x + 1) % size;
+
+          const dx = (heights[y * size + xp] - heights[y * size + xm]) * strength;
+          const dy = (heights[yp * size + x] - heights[ym * size + x]) * strength;
+
+          let nx = -dx, ny = -dy, nz = 1.0;
+          const len = Math.hypot(nx, ny, nz);
+          nx /= len; ny /= len; nz /= len;
+
+          const p = (y * size + x) * 4;
+          nImg.data[p] = Math.round((nx * 0.5 + 0.5) * 255);
+          nImg.data[p + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+          nImg.data[p + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+          nImg.data[p + 3] = 255;
+        }
+      }
+
+      aCtx.putImageData(aImg, 0, 0);
+      nCtx.putImageData(nImg, 0, 0);
+      rCtx.putImageData(rImg, 0, 0);
+
+      const map = new THREE.CanvasTexture(albedoCanvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      const normalMap = new THREE.CanvasTexture(normalCanvas);
+      normalMap.colorSpace = THREE.NoColorSpace;
+      const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+      roughnessMap.colorSpace = THREE.NoColorSpace;
+
+      [map, normalMap, roughnessMap].forEach((t) => {
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(9, 7);
+        t.anisotropy = 4;
+      });
+
+      return { map, normalMap, roughnessMap };
+    }
+
+    function createCeramicTextures(size = 512) {
+      const albedoCanvas = document.createElement('canvas');
+      const normalCanvas = document.createElement('canvas');
+      const roughCanvas = document.createElement('canvas');
+      albedoCanvas.width = normalCanvas.width = roughCanvas.width = size;
+      albedoCanvas.height = normalCanvas.height = roughCanvas.height = size;
+
+      const aCtx = albedoCanvas.getContext('2d');
+      const nCtx = normalCanvas.getContext('2d');
+      const rCtx = roughCanvas.getContext('2d');
+
+      const aImg = aCtx.createImageData(size, size);
+      const nImg = nCtx.createImageData(size, size);
+      const rImg = rCtx.createImageData(size, size);
+      const heights = new Float32Array(size * size);
+
+      for (let y = 0; y < size; y++) {
+        const ny = y / size;
+        for (let x = 0; x < size; x++) {
+          const nx = x / size;
+          const idx = y * size + x;
+          const p = idx * 4;
+
+          // Subtle hand-thrown potter's wheel ribs + mineral glaze speckles
+          const wheelRibs = Math.sin(ny * Math.PI * 2 * 26) * 0.35 + Math.sin(ny * Math.PI * 2 * 11 + 0.6) * 0.25;
+          const mottling = fbm2(nx * 10, ny * 10, 4);
+          const speckleNoise = valueNoise2D(nx * 58, ny * 58);
+          const speckle = speckleNoise > 0.84 ? (speckleNoise - 0.84) / 0.16 : 0;
+
+          heights[idx] = wheelRibs * 0.35 + mottling * 0.35 - speckle * 0.25;
+
+          // Rich roasted terracotta-umber stoneware glaze, slightly lighter near rim (ny ~ 0.45-0.65)
+          const r = clamp(96 + mottling * 26 - speckle * 32, 0, 255);
+          const g = clamp(44 + mottling * 14 - speckle * 18, 0, 255);
+          const b = clamp(29 + mottling * 10 - speckle * 12, 0, 255);
+
+          aImg.data[p] = r;
+          aImg.data[p + 1] = g;
+          aImg.data[p + 2] = b;
+          aImg.data[p + 3] = 255;
+
+          const roughVal = Math.round(clamp((0.12 + mottling * 0.07 + speckle * 0.18) * 255, 0, 255));
+          rImg.data[p] = rImg.data[p + 1] = rImg.data[p + 2] = roughVal;
+          rImg.data[p + 3] = 255;
+        }
+      }
+
+      for (let y = 0; y < size; y++) {
+        const ym = (y - 1 + size) % size;
+        const yp = (y + 1) % size;
+        for (let x = 0; x < size; x++) {
+          const xm = (x - 1 + size) % size;
+          const xp = (x + 1) % size;
+          const dx = (heights[y * size + xp] - heights[y * size + xm]) * 1.4;
+          const dy = (heights[yp * size + x] - heights[ym * size + x]) * 1.4;
+          let nx = -dx, ny = -dy, nz = 1.0;
+          const len = Math.hypot(nx, ny, nz);
+          nx /= len; ny /= len; nz /= len;
+          const p = (y * size + x) * 4;
+          nImg.data[p] = Math.round((nx * 0.5 + 0.5) * 255);
+          nImg.data[p + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+          nImg.data[p + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+          nImg.data[p + 3] = 255;
+        }
+      }
+
+      aCtx.putImageData(aImg, 0, 0);
+      nCtx.putImageData(nImg, 0, 0);
+      rCtx.putImageData(rImg, 0, 0);
+
+      const map = new THREE.CanvasTexture(albedoCanvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      const normalMap = new THREE.CanvasTexture(normalCanvas);
+      normalMap.colorSpace = THREE.NoColorSpace;
+      const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+      roughnessMap.colorSpace = THREE.NoColorSpace;
+      [map, normalMap, roughnessMap].forEach((t) => {
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.anisotropy = 4;
+      });
+      return { map, normalMap, roughnessMap };
+    }
+
+    function createCoffeeCremaTextures(size = 512) {
+      const albedoCanvas = document.createElement('canvas');
+      const normalCanvas = document.createElement('canvas');
+      const roughCanvas = document.createElement('canvas');
+      const emissiveCanvas = document.createElement('canvas');
+      albedoCanvas.width = normalCanvas.width = roughCanvas.width = emissiveCanvas.width = size;
+      albedoCanvas.height = normalCanvas.height = roughCanvas.height = emissiveCanvas.height = size;
+
+      const aCtx = albedoCanvas.getContext('2d');
+      const nCtx = normalCanvas.getContext('2d');
+      const rCtx = roughCanvas.getContext('2d');
+      const eCtx = emissiveCanvas.getContext('2d');
+
+      const aImg = aCtx.createImageData(size, size);
+      const nImg = nCtx.createImageData(size, size);
+      const rImg = rCtx.createImageData(size, size);
+      const eImg = eCtx.createImageData(size, size);
+      const heights = new Float32Array(size * size);
+
+      // Generate organic foam bubble sites clustered in outer crema ring and swirl
+      const bubbles = [];
+      for (let i = 0; i < 320; i++) {
+        const ringBias = rng.next() < 0.72 ? rng.range(0.56, 0.96) : rng.range(0.18, 0.58);
+        const angle = rng.range(0, Math.PI * 2);
+        const rPx = ringBias * (size * 0.47);
+        const cx = size * 0.5 + Math.cos(angle) * rPx;
+        const cy = size * 0.5 + Math.sin(angle) * rPx;
+        const rad = rng.next() < 0.16 ? rng.range(4.2, 8.2) : rng.range(1.6, 4.0);
+        bubbles.push({ cx, cy, rad, bright: rng.range(0.75, 1.15) });
+      }
+
+      for (let y = 0; y < size; y++) {
+        const dyc = (y - size * 0.5) / (size * 0.5);
+        for (let x = 0; x < size; x++) {
+          const dxc = (x - size * 0.5) / (size * 0.5);
+          const idx = y * size + x;
+          const p = idx * 4;
+
+          const r = Math.hypot(dxc, dyc);
+          const ang = Math.atan2(dyc, dxc);
+
+          // Swirling espresso-crema marbling
+          const swirlAng = ang + 2.8 * (1.0 - smoothstep(0.0, 1.0, r)) + fbm2(dxc * 3.5 + 4.1, dyc * 3.5 + 2.7, 3) * 1.4;
+          const swirlBand = 0.5 + 0.5 * Math.sin(swirlAng * 3.0 + fbm2(dxc * 5.0, dyc * 5.0, 3) * 2.5);
+          const rimCrema = smoothstep(0.42, 0.90, r);
+          const centerDark = 1.0 - smoothstep(0.05, 0.55, r);
+          const cremaMask = clamp(rimCrema * 0.78 + swirlBand * 0.44 * (1.0 - centerDark * 0.72), 0, 1);
+
+          // Dark roasted espresso core -> warm hazelnut golden crema
+          const darkR = 24, darkG = 9, darkB = 4;
+          const cremaR = 205, cremaG = 112, cremaB = 40;
+          const frothR = 245, frothG = 178, frothB = 96;
+
+          let cr = darkR + (cremaR - darkR) * cremaMask;
+          let cg = darkG + (cremaG - darkG) * cremaMask;
+          let cb = darkB + (cremaB - darkB) * cremaMask;
+
+          // Warm inner coffee magic luminescence concentrated in crema swirls & foam, leaving espresso center dark
+          let er = clamp(210 * cremaMask * 0.72 + 40 * expGlow(r), 0, 255);
+          let eg = clamp(82 * cremaMask * 0.68 + 16 * expGlow(r), 0, 255);
+          let eb = clamp(14 * cremaMask * 0.48 + 4 * expGlow(r), 0, 255);
+
+          let rough = 0.05 + cremaMask * 0.22;
+          let h = cremaMask * 0.18;
+
+          // Accumulate crisp foam bubbles
+          for (let b = 0; b < bubbles.length; b++) {
+            const bub = bubbles[b];
+            const bx = x - bub.cx;
+            const by = y - bub.cy;
+            const d2 = bx * bx + by * by;
+            const rr = bub.rad;
+            if (d2 < rr * rr) {
+              const dist = Math.sqrt(d2) / rr;
+              const dome = Math.sqrt(Math.max(0, 1 - dist * dist));
+              const ring = smoothstep(0.65, 0.95, dist) * (1 - smoothstep(0.92, 1.0, dist));
+              h += dome * 0.55;
+              const mixF = dome * 0.68 * bub.bright;
+              cr = cr + (frothR - cr) * mixF - ring * 38;
+              cg = cg + (frothG - cg) * mixF - ring * 26;
+              cb = cb + (frothB - cb) * mixF - ring * 14;
+              // Glossy wet bubble sheen
+              rough = Math.max(0.03, rough - dome * 0.14);
+              er = Math.min(255, er + dome * 42);
+              eg = Math.min(255, eg + dome * 24);
+            }
+          }
+
+          heights[idx] = h;
+          aImg.data[p] = clamp(cr, 0, 255);
+          aImg.data[p + 1] = clamp(cg, 0, 255);
+          aImg.data[p + 2] = clamp(cb, 0, 255);
+          aImg.data[p + 3] = 255;
+
+          const rByte = Math.round(clamp(rough * 255, 0, 255));
+          rImg.data[p] = rImg.data[p + 1] = rImg.data[p + 2] = rByte;
+          rImg.data[p + 3] = 255;
+
+          eImg.data[p] = clamp(er, 0, 255);
+          eImg.data[p + 1] = clamp(eg, 0, 255);
+          eImg.data[p + 2] = clamp(eb, 0, 255);
+          eImg.data[p + 3] = 255;
+        }
+      }
+
+      function expGlow(r) {
+        return Math.exp(-r * r * 3.8);
+      }
+
+      for (let y = 0; y < size; y++) {
+        const ym = Math.max(0, y - 1);
+        const yp = Math.min(size - 1, y + 1);
+        for (let x = 0; x < size; x++) {
+          const xm = Math.max(0, x - 1);
+          const xp = Math.min(size - 1, x + 1);
+          const dx = (heights[y * size + xp] - heights[y * size + xm]) * 2.4;
+          const dy = (heights[yp * size + x] - heights[ym * size + x]) * 2.4;
+          let nx = -dx, ny = -dy, nz = 1.0;
+          const len = Math.hypot(nx, ny, nz);
+          nx /= len; ny /= len; nz /= len;
+          const p = (y * size + x) * 4;
+          nImg.data[p] = Math.round((nx * 0.5 + 0.5) * 255);
+          nImg.data[p + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+          nImg.data[p + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+          nImg.data[p + 3] = 255;
+        }
+      }
+
+      aCtx.putImageData(aImg, 0, 0);
+      nCtx.putImageData(nImg, 0, 0);
+      rCtx.putImageData(rImg, 0, 0);
+      eCtx.putImageData(eImg, 0, 0);
+
+      const map = new THREE.CanvasTexture(albedoCanvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      const normalMap = new THREE.CanvasTexture(normalCanvas);
+      normalMap.colorSpace = THREE.NoColorSpace;
+      const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+      roughnessMap.colorSpace = THREE.NoColorSpace;
+      const emissiveMap = new THREE.CanvasTexture(emissiveCanvas);
+      emissiveMap.colorSpace = THREE.SRGBColorSpace;
+
+      [map, normalMap, roughnessMap, emissiveMap].forEach((t) => {
+        t.anisotropy = 4;
+      });
+      return { map, normalMap, roughnessMap, emissiveMap };
+    }
+
+    const cottonTex = createCottonTextures(512);
+    const ceramicTex = createCeramicTextures(512);
+    const coffeeTex = createCoffeeCremaTextures(512);
+
+    // =========================================================================
+    // 5. PARAMETRIC GHOST SHEET BODY WITH EXACT ANALYTIC NORMALS
+    // =========================================================================
+    const TAIL_PHI = -0.68 * Math.PI; // Wind-swept trailing tail toward back-left (-X, -Z)
+
+    // Evaluates parametric ghost sheet surface P(u,v) and exact analytic partials dP/du, dP/dv
+    function evaluateGhostSheet(uVal, vVal) {
+      const u = D2.u(uVal);
+      const v = D2.v(vVal);
+      const twoPi = 2 * Math.PI;
+      const phi = D2.scale(u, twoPi);
+
+      // Crown dome angle: theta(v) = (pi/2) * tanh(4.4 * v)
+      const thetaV = D2.scale(D2.tanh(D2.scale(v, 4.4)), Math.PI * 0.5);
+      const sinCap = D2.sin(thetaV);
+      const oneMinusCosCap = D2.sub(D2.c(1), D2.cos(thetaV));
+
+      // Gentle neck/cheek waist + smooth lower skirt flare
+      const waistArg = D2.scale(D2.sub(v, D2.c(0.35)), 1 / 0.13);
+      const waist = D2.scale(D2.exp(D2.neg(D2.sq(waistArg))), -0.032);
+      const skirtFlare = D2.mul(
+        D2.sq(v),
+        D2.sub(D2.c(0.44), D2.scale(v, 0.08))
+      );
+      const rEnv = D2.mul(sinCap, D2.sum(D2.c(0.56), waist, skirtFlare));
+
+      // Base vertical drop: strictly zero derivative at crown pole v = 0
+      const v2 = D2.sq(v);
+      const ySkirt = D2.mul(v2, D2.sub(D2.c(2.12), D2.scale(v, 0.42)));
+      const yBase = D2.sub(
+        D2.c(1.24),
+        D2.add(D2.scale(oneMinusCosCap, 0.48), ySkirt)
+      );
+
+      // Smooth face mask centered at front (+Z, phi=0, v=0.33) so eyes & smile sit cleanly
+      const frontBell = D2.sq(D2.scale(D2.add(D2.c(1), D2.cos(phi)), 0.5));
+      const vFaceArg = D2.scale(D2.sub(v, D2.c(0.33)), 1 / 0.145);
+      const faceEnv = D2.exp(D2.neg(D2.sq(vFaceArg)));
+      const faceMask = D2.mul(frontBell, faceEnv);
+
+      // Subtle recessed pocket right inside wide open smile so mouth pocket sits cleanly
+      const mouthPhiArg = D2.scale(D2.sin(D2.scale(phi, 0.5)), 1 / 0.145);
+      const mouthVArg = D2.scale(D2.sub(v, D2.c(0.375)), 1 / 0.068);
+      const mouthDimple = D2.scale(
+        D2.mul(
+          D2.exp(D2.neg(D2.sq(mouthPhiArg))),
+          D2.exp(D2.neg(D2.sq(mouthVArg)))
+        ),
+        -0.024
+      );
+
+      // Subtle cloth gather at left shoulder (+X, front-side) where stubby arm emerges
+      const shPhiArg = D2.scale(D2.sin(D2.scale(D2.sub(phi, D2.c(0.72)), 0.5)), 1 / 0.22);
+      const shVArg = D2.scale(D2.sub(v, D2.c(0.55)), 1 / 0.10);
+      const shoulderGather = D2.scale(
+        D2.mul(
+          D2.exp(D2.neg(D2.sq(shPhiArg))),
+          D2.exp(D2.neg(D2.sq(shVArg)))
+        ),
+        0.052
+      );
+
+      // Flowing draped pleats: gently swept backward toward TAIL_PHI as v descends
+      const phiDrift = D2.sub(
+        phi,
+        D2.scale(D2.mul(v2, D2.sin(D2.sub(phi, D2.c(TAIL_PHI)))), 0.25)
+      );
+
+      const foldRamp = D2.scale(
+        D2.add(D2.c(1), D2.tanh(D2.scale(D2.sub(v, D2.c(0.37)), 5.2))),
+        0.5
+      );
+      const foldMask = D2.mul(
+        D2.mul(v2, foldRamp),
+        D2.sub(D2.c(1), D2.scale(faceMask, 0.9))
+      );
+
+      const f1 = D2.add(
+        D2.scale(D2.cos(D2.add(D2.scale(phiDrift, 7), D2.c(0.35))), 0.132),
+        D2.scale(D2.cos(D2.add(D2.scale(phiDrift, 14), D2.c(0.75))), 0.040)
+      );
+      const f2 = D2.add(
+        D2.scale(D2.sin(D2.sum(D2.scale(phiDrift, 4), D2.c(-0.9), D2.scale(v, 0.45))), 0.066),
+        D2.scale(D2.cos(D2.add(D2.scale(phiDrift, 11), D2.c(1.4))), 0.034)
+      );
+      const ampMod = D2.sum(
+        D2.c(1.0),
+        D2.scale(D2.sin(D2.add(D2.scale(phi, 2), D2.c(0.8))), 0.22),
+        D2.scale(D2.cos(D2.sub(D2.scale(phi, 3), D2.c(0.5))), 0.14)
+      );
+      const dRFold = D2.mul(foldMask, D2.mul(ampMod, D2.add(f1, f2)));
+
+      // One-sided wind-blown trailing tail lobe around TAIL_PHI
+      const cTail = D2.scale(D2.add(D2.c(1), D2.cos(D2.sub(phi, D2.c(TAIL_PHI)))), 0.5);
+      const dTail = D2.powInt(cTail, 3);
+      const dTip = D2.powInt(cTail, 6);
+      const v3 = D2.mul(v2, v);
+      const v4 = D2.sq(v2);
+      const v5 = D2.mul(v4, v);
+
+      const tailRipple = D2.add(
+        D2.c(1.0),
+        D2.scale(D2.sin(D2.add(D2.scale(phi, 8), D2.scale(v, 2.2))), 0.16)
+      );
+      const dRTail = D2.add(
+        D2.scale(D2.mul(v3, dTail), 0.78),
+        D2.scale(D2.mul(D2.mul(v4, dTip), tailRipple), 0.36)
+      );
+      const dYTail = D2.add(
+        D2.scale(D2.mul(D2.mul(v2, D2.sub(D2.c(1), D2.scale(v, 0.32))), dTail), -0.34),
+        D2.scale(
+          D2.mul(
+            D2.mul(v5, dTip),
+            D2.add(D2.c(1), D2.scale(D2.sin(D2.sub(D2.scale(phi, 6), D2.c(1.1))), 0.22))
+          ),
+          0.26
+        )
+      );
+
+      // Wind-blown ragged scalloped hem near v -> 1
+      const hemWave = D2.sum(
+        D2.scale(D2.sin(D2.add(D2.scale(phi, 5), D2.c(0.45))), 0.138),
+        D2.scale(D2.cos(D2.sub(D2.scale(phi, 9), D2.c(1.15))), 0.088),
+        D2.scale(D2.sin(D2.add(D2.scale(phi, 13), D2.c(2.05))), 0.038),
+        D2.scale(D2.cos(D2.sub(D2.scale(phi, 18), D2.c(0.4))), 0.016)
+      );
+      const dYHem = D2.mul(v4, hemWave);
+      const dRHemFlare = D2.scale(
+        D2.mul(
+          v4,
+          D2.add(
+            D2.sin(D2.sub(D2.scale(phi, 9), D2.c(1.15))),
+            D2.scale(D2.cos(D2.scale(phi, 15)), 0.55)
+          )
+        ),
+        0.042
+      );
+
+      const R = D2.sum(rEnv, D2.scale(faceMask, 0.018), mouthDimple, shoulderGather, dRFold, dRTail, dRHemFlare);
+      const Y = D2.sum(yBase, dYTail, dYHem);
+
+      // Subtle wind S-drift of the lower skirt toward TAIL_PHI
+      const sweep = D2.scale(D2.mul(v3, D2.sub(D2.c(1.25), D2.scale(v, 0.25))), 0.22);
+      const xDrift = D2.scale(sweep, Math.sin(TAIL_PHI));
+      const zDrift = D2.scale(sweep, Math.cos(TAIL_PHI));
+
+      // Slightly plump cranium width & depth tapering naturally into skirt
+      const xScale = D2.add(D2.c(1.02), D2.scale(v, -0.02));
+      const zScale = D2.add(D2.c(0.96), D2.scale(v, 0.04));
+
+      const X = D2.add(D2.mul(D2.mul(R, xScale), D2.sin(phi)), xDrift);
+      const Z = D2.add(D2.mul(D2.mul(R, zScale), D2.cos(phi)), zDrift);
+
+      // Compute exact outward analytic normal: normalize(dP/dv x dP/du)
+      const pu = new THREE.Vector3(X[1], Y[1], Z[1]);
+      const pv = new THREE.Vector3(X[2], Y[2], Z[2]);
+      let n;
+      if (vVal < 1e-6) {
+        n = new THREE.Vector3(0, 1, 0);
+      } else {
+        n = new THREE.Vector3().crossVectors(pv, pu);
+        if (n.lengthSq() < 1e-16) {
+          n.set(0, 1, 0);
+        } else {
+          n.normalize();
+        }
+      }
+
+      return {
+        p: new THREE.Vector3(X[0], Y[0], Z[0]),
+        n,
+        pu,
+        pv,
+      };
+    }
+
+    function buildGhostSheetGeometry(segU = 160, segV = 96) {
+      const cols = segU + 1;
+      const rows = segV + 1;
+      const count = cols * rows;
+
+      const positions = new Float32Array(count * 3);
+      const normals = new Float32Array(count * 3);
+      const uvs = new Float32Array(count * 2);
+      const aDu = new Float32Array(count * 3);
+      const aDv = new Float32Array(count * 3);
+      const aClothUV = new Float32Array(count * 2);
+
+      for (let j = 0; j <= segV; j++) {
+        const v = j / segV;
+        for (let i = 0; i <= segU; i++) {
+          const u = i === segU ? 0 : i / segU;
+          const idx = j * cols + i;
+          const res = evaluateGhostSheet(u, v);
+
+          positions[idx * 3] = res.p.x;
+          positions[idx * 3 + 1] = res.p.y;
+          positions[idx * 3 + 2] = res.p.z;
+
+          normals[idx * 3] = res.n.x;
+          normals[idx * 3 + 1] = res.n.y;
+          normals[idx * 3 + 2] = res.n.z;
+
+          aDu[idx * 3] = res.pu.x;
+          aDu[idx * 3 + 1] = res.pu.y;
+          aDu[idx * 3 + 2] = res.pu.z;
+
+          aDv[idx * 3] = res.pv.x;
+          aDv[idx * 3 + 1] = res.pv.y;
+          aDv[idx * 3 + 2] = res.pv.z;
+
+          // Seamless circumferential UV mapping
+          const texU = i / segU;
+          uvs[idx * 2] = texU;
+          uvs[idx * 2 + 1] = v;
+
+          aClothUV[idx * 2] = texU;
+          aClothUV[idx * 2 + 1] = v;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < segV; j++) {
+        for (let i = 0; i < segU; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          indices.push(a, d, b);
+          indices.push(d, c, b);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setAttribute('aDu', new THREE.BufferAttribute(aDu, 3));
+      geo.setAttribute('aDv', new THREE.BufferAttribute(aDv, 3));
+      geo.setAttribute('aClothUV', new THREE.BufferAttribute(aClothUV, 2));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    // =========================================================================
+    // 6. SHARED LUMINOUS COTTON MATERIAL WITH VERTEX-SHADER CLOTH SWAY
+    // =========================================================================
+    const coffeeWorldPos = new THREE.Vector3(0.16, 0.16, 0.90);
+    const coolRimDir = new THREE.Vector3(-2.6, 2.0, -3.2).normalize();
+
+    const sharedClothUniforms = {
+      uTime: { value: 0 },
+      uCoffeePos: { value: coffeeWorldPos.clone() },
+      uRimDir: { value: coolRimDir.clone() },
+      uTailPhi: { value: TAIL_PHI },
+    };
+
+    function enhanceCottonMaterial(mat, isArm = false) {
+      mat.customProgramCacheKey = () => (isArm ? 'ghost-cotton-arm' : 'ghost-cotton-body');
+      mat.onBeforeCompile = (shader) => {
+        shader.uniforms.uTime = sharedClothUniforms.uTime;
+        shader.uniforms.uCoffeePos = sharedClothUniforms.uCoffeePos;
+        shader.uniforms.uRimDir = sharedClothUniforms.uRimDir;
+        shader.uniforms.uTailPhi = sharedClothUniforms.uTailPhi;
+
+        shader.vertexShader = shader.vertexShader
+          .replace(
+            '#include <common>',
+            `#include <common>
+            attribute vec3 aDu;
+            attribute vec3 aDv;
+            attribute vec2 aClothUV;
+            uniform float uTime;
+            uniform float uTailPhi;
+            varying vec3 vGhostWorldPos;
+            varying vec3 vGhostWorldNormal;
+            varying vec2 vClothUV;
+
+            void evalClothWave(
+              vec2 cuv,
+              out vec3 disp,
+              out vec3 dDispDu,
+              out vec3 dDispDv
+            ) {
+              float phi = cuv.x * 6.28318530718;
+              float v = cuv.y;
+              ${
+                isArm
+                  ? `
+                // Arm sways subtly at the shoulder (v=0) and stays steady cradling the mug (v=1)
+                float shoulderBlend = exp(-v * 4.5);
+                float t = uTime;
+                float sw = sin(t * 1.85 - 1.1) * 0.012 * shoulderBlend;
+                disp = vec3(sw * 0.6, cos(t * 1.4) * 0.006 * (1.0 - v * 0.5), sw);
+                dDispDu = vec3(0.0);
+                dDispDv = vec3(0.0);
+              `
+                  : `
+                // Smooth mask: head & face remain poised while folds, hem & tail billow smoothly
+                float s = clamp((v - 0.26) / 0.74, 0.0, 1.0);
+                float env = s * s * (3.0 - 2.0 * s);
+                float dEnvDv = (v > 0.26 && v < 1.0) ? (6.0 * s * (1.0 - s) / 0.74) : 0.0;
+
+                float tailLobe = pow(0.5 + 0.5 * cos(phi - uTailPhi), 2.5);
+                float dTailDu = 2.5 * pow(0.5 + 0.5 * cos(phi - uTailPhi), 1.5)
+                              * (-0.5 * sin(phi - uTailPhi)) * 6.28318530718;
+
+                float t = uTime;
+                // Traveling cloth wind ripples along circumference & down toward hem
+                float p1 = phi * 2.0 - v * 5.2 + t * 2.25;
+                float p2 = phi * 4.0 - v * 7.8 + t * 3.10 + 1.1;
+                float p3 = (phi - uTailPhi) * 1.0 - v * 4.2 + t * 1.75;
+
+                float w1 = sin(p1) * (0.048 + 0.055 * tailLobe);
+                float w2 = sin(p2) * (0.018 + 0.024 * tailLobe);
+                float lift = sin(p3) * (0.025 + 0.045 * tailLobe);
+
+                float ampR = (w1 + w2) * env;
+                float dirX = sin(phi) * 0.75 + sin(uTailPhi) * 0.25;
+                float dirZ = cos(phi) * 0.75 + cos(uTailPhi) * 0.25;
+                float flutterY = (lift + 0.020 * cos(p2)) * env * v;
+
+                disp = vec3(dirX * ampR, flutterY, dirZ * ampR);
+
+                // Analytic derivatives wrt u and v for live moving cloth normals
+                float dw1Du = cos(p1) * 2.0 * 6.28318530718 * (0.048 + 0.055 * tailLobe)
+                            + sin(p1) * 0.055 * dTailDu;
+                float dw2Du = cos(p2) * 4.0 * 6.28318530718 * (0.018 + 0.024 * tailLobe)
+                            + sin(p2) * 0.024 * dTailDu;
+                float dAmpRDu = (dw1Du + dw2Du) * env;
+                float dDirXDu = cos(phi) * 0.75 * 6.28318530718;
+                float dDirZDu = -sin(phi) * 0.75 * 6.28318530718;
+
+                float dLiftDu = (cos(p3) * 6.28318530718 * (0.025 + 0.045 * tailLobe)
+                               + sin(p3) * 0.045 * dTailDu
+                               - 0.020 * sin(p2) * 4.0 * 6.28318530718) * env * v;
+
+                dDispDu = vec3(
+                  dDirXDu * ampR + dirX * dAmpRDu,
+                  dLiftDu,
+                  dDirZDu * ampR + dirZ * dAmpRDu
+                );
+
+                float dw1Dv = cos(p1) * (-5.2) * (0.048 + 0.055 * tailLobe);
+                float dw2Dv = cos(p2) * (-7.8) * (0.018 + 0.024 * tailLobe);
+                float dAmpRDv = (dw1Dv + dw2Dv) * env + (w1 + w2) * dEnvDv;
+                float dLiftDv = (cos(p3) * (-4.2) * (0.025 + 0.045 * tailLobe)
+                               - 0.020 * sin(p2) * (-7.8)) * env * v
+                              + (lift + 0.020 * cos(p2)) * (dEnvDv * v + env);
+
+                dDispDv = vec3(dirX * dAmpRDv, dLiftDv, dirZ * dAmpRDv);
+              `
+              }
+            }`
+          )
+          .replace(
+            '#include <beginnormal_vertex>',
+            `#include <beginnormal_vertex>
+            vec3 _cDisp, _cDu, _cDv;
+            evalClothWave(aClothUV, _cDisp, _cDu, _cDv);
+            ${
+              isArm
+                ? ''
+                : `
+              if (aClothUV.y > 0.002) {
+                vec3 _newDu = aDu + _cDu;
+                vec3 _newDv = aDv + _cDv;
+                vec3 _an = cross(_newDv, _newDu);
+                if (dot(_an, _an) > 1e-10) {
+                  objectNormal = normalize(_an);
+                }
+              }
+            `
+            }`
+          )
+          .replace(
+            '#include <begin_vertex>',
+            `#include <begin_vertex>
+            transformed += _cDisp;
+            vClothUV = aClothUV;
+            vGhostWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+            vGhostWorldNormal = normalize(mat3(modelMatrix) * objectNormal);`
+          );
+
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <common>',
+            `#include <common>
+            uniform vec3 uCoffeePos;
+            uniform vec3 uRimDir;
+            varying vec3 vGhostWorldPos;
+            varying vec3 vGhostWorldNormal;
+            varying vec2 vClothUV;`
+          )
+          .replace(
+            '#include <opaque_fragment>',
+            `
+            vec3 wN = normalize(vGhostWorldNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+            vec3 wV = normalize(cameraPosition - vGhostWorldPos);
+
+            // 1. Warm orange subsurface coffee translucency softly illuminating chest, belly & hands
+            vec3 toCoffee = uCoffeePos - vGhostWorldPos;
+            float distCoffee = length(toCoffee);
+            vec3 coffeeDir = toCoffee / max(distCoffee, 0.001);
+            float coffeeProx = exp(-distCoffee * 1.65);
+            // Wrap + transmitted back-glow through thin cloth folds
+            float sssWrap = clamp(dot(wN, coffeeDir) * 0.45 + 0.55, 0.0, 1.0);
+            float backTransmit = pow(clamp(dot(-wN, coffeeDir) * 0.5 + 0.5, 0.0, 1.0), 1.4) * 0.42;
+            float backFaceAtten = gl_FrontFacing ? 1.0 : 0.72;
+            vec3 warmGlow = vec3(0.38, 0.11, 0.015) * coffeeProx * (sssWrap * 0.56 + backTransmit) * backFaceAtten;
+
+            // 2. Cool cyan-teal backlit rim luminosity on ghost's back edge & wispy hem
+            float fresnel = pow(clamp(1.0 - abs(dot(wN, wV)), 0.0, 1.0), 2.45);
+            float rimAlign = clamp(dot(wN, normalize(uRimDir)) * 0.55 + 0.45, 0.0, 1.0);
+            float hemEther = ${isArm ? '0.0' : 'smoothstep(0.62, 1.0, vClothUV.y)'};
+            vec3 coolRimGlow = vec3(0.18, 0.60, 0.82) * fresnel * (0.28 + 0.72 * rimAlign) * (0.45 + 0.35 * hemEther);
+
+            // 3. Soft internal ambient luminosity so sheet feels light, airy & translucent
+            float innerLum = (0.022 + 0.042 * hemEther) * (gl_FrontFacing ? 1.0 : 0.65);
+            totalEmissiveRadiance += warmGlow + coolRimGlow + vec3(0.84, 0.90, 0.95) * innerLum;
+
+            #include <opaque_fragment>`
+          );
+      };
+    }
+
+    const ghostMaterial = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(0xeef1f3),
+      map: cottonTex.map,
+      normalMap: cottonTex.normalMap,
+      normalScale: new THREE.Vector2(0.32, 0.32),
+      roughnessMap: cottonTex.roughnessMap,
+      roughness: 0.90,
+      metalness: 0.0,
+      sheen: 0.72,
+      sheenRoughness: 0.78,
+      sheenColor: new THREE.Color(0xd2f0ff),
+      envMapIntensity: 0.65,
+      side: THREE.DoubleSide,
+    });
+    enhanceCottonMaterial(ghostMaterial, false);
+
+    const armMaterial = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(0xeef1f3),
+      map: cottonTex.map,
+      normalMap: cottonTex.normalMap,
+      normalScale: new THREE.Vector2(0.30, 0.30),
+      roughnessMap: cottonTex.roughnessMap,
+      roughness: 0.90,
+      metalness: 0.0,
+      sheen: 0.72,
+      sheenRoughness: 0.78,
+      sheenColor: new THREE.Color(0xd2f0ff),
+      envMapIntensity: 0.65,
+      side: THREE.DoubleSide,
+    });
+    enhanceCottonMaterial(armMaterial, true);
+
+    // =========================================================================
+    // 7. GHOST RIG ASSEMBLY (BODY, STUBBY ARM, EYES, WIDE SMILING MOUTH)
+    // =========================================================================
+    const ghostRoot = new THREE.Group();
+    scene.add(ghostRoot);
+
+    const ghostBodyMesh = new THREE.Mesh(buildGhostSheetGeometry(160, 96), ghostMaterial);
+    ghostRoot.add(ghostBodyMesh);
+
+    // --- 7A. Parametric Lofted Stubby Arm Cradling the Cup ---
+    function buildStubbyArmGeometry(segU = 44, segV = 48) {
+      const cols = segU + 1;
+      const rows = segV + 1;
+      const count = cols * rows;
+
+      const positions = new Float32Array(count * 3);
+      const normals = new Float32Array(count * 3);
+      const uvs = new Float32Array(count * 2);
+      const aDu = new Float32Array(count * 3);
+      const aDv = new Float32Array(count * 3);
+      const aClothUV = new Float32Array(count * 2);
+
+      // Dual-valued spine evaluation so frame derivatives are 100% analytic
+      function evalArmPoint(uVal, vVal) {
+        const u = D2.u(uVal);
+        const v = D2.v(vVal);
+        const phi = D2.scale(u, 2 * Math.PI);
+
+        // Short, plump stubby Bezier spine emerging smoothly from shoulder fold to cradle outer mug
+        const p0 = [0.30, 0.17, 0.34];
+        const p1 = [0.47, 0.09, 0.57];
+        const p2 = [0.45, -0.02, 0.78];
+        const p3 = [0.365, -0.05, 0.885];
+
+        const omt = D2.sub(D2.c(1), v);
+        const b0 = D2.powInt(omt, 3);
+        const b1 = D2.scale(D2.mul(D2.sq(omt), v), 3);
+        const b2 = D2.scale(D2.mul(omt, D2.sq(v)), 3);
+        const b3 = D2.powInt(v, 3);
+
+        const cx = D2.sum(D2.scale(b0, p0[0]), D2.scale(b1, p1[0]), D2.scale(b2, p2[0]), D2.scale(b3, p3[0]));
+        const cy = D2.sum(D2.scale(b0, p0[1]), D2.scale(b1, p1[1]), D2.scale(b2, p2[1]), D2.scale(b3, p3[1]));
+        const cz = D2.sum(D2.scale(b0, p0[2]), D2.scale(b1, p1[2]), D2.scale(b2, p2[2]), D2.scale(b3, p3[2]));
+
+        // Analytic tangent C'(v) as dual numbers
+        const d1 = D2.scale(D2.sq(omt), 3);
+        const d2 = D2.scale(D2.mul(omt, v), 6);
+        const d3 = D2.scale(D2.sq(v), 3);
+
+        const dx = D2.sum(D2.scale(d1, p1[0] - p0[0]), D2.scale(d2, p2[0] - p1[0]), D2.scale(d3, p3[0] - p2[0]));
+        const dy = D2.sum(D2.scale(d1, p1[1] - p0[1]), D2.scale(d2, p2[1] - p1[1]), D2.scale(d3, p3[1] - p2[1]));
+        const dz = D2.sum(D2.scale(d1, p1[2] - p0[2]), D2.scale(d2, p2[2] - p1[2]), D2.scale(d3, p3[2] - p2[2]));
+
+        const lenT = D2.sqrtSafe(D2.sum(D2.sq(dx), D2.sq(dy), D2.sq(dz)));
+        const tx = D2.div(dx, lenT);
+        const ty = D2.div(dy, lenT);
+        const tz = D2.div(dz, lenT);
+
+        // B1 = normalize(up x T) = normalize(tz, 0, -tx), smooth & twist-free since tz > 0 along spine
+        const lenB1 = D2.sqrtSafe(D2.add(D2.sq(tz), D2.sq(tx)));
+        const b1x = D2.div(tz, lenB1);
+        const b1y = D2.c(0);
+        const b1z = D2.div(D2.neg(tx), lenB1);
+
+        // B2 = T x B1
+        const b2x = D2.sub(D2.mul(ty, b1z), D2.mul(tz, b1y));
+        const b2y = D2.sub(D2.mul(tz, b1x), D2.mul(tx, b1z));
+        const b2z = D2.sub(D2.mul(tx, b1y), D2.mul(ty, b1x));
+
+        // Pillowy smooth rounded hemisphere cap at v -> 1 with zero pinch or twist
+        const capAngle = D2.scale(D2.sub(D2.c(1), D2.powInt(v, 5)), Math.PI * 0.5);
+        const tipSin = D2.sin(capAngle);
+        const tipAdvance = D2.scale(D2.cos(capAngle), 0.056);
+
+        const shoulderFlare = D2.add(D2.c(1.0), D2.scale(D2.exp(D2.scale(v, -6.5)), 0.35));
+        const baseR = D2.mul(
+          tipSin,
+          D2.mul(
+            D2.sub(D2.c(0.116), D2.scale(v, 0.032)),
+            shoulderFlare
+          )
+        );
+        const rB1 = baseR;
+        const rB2 = D2.scale(baseR, 1.08);
+
+        const off1 = D2.mul(rB1, D2.cos(phi));
+        const off2 = D2.mul(rB2, D2.sin(phi));
+
+        const X = D2.sum(cx, D2.mul(off1, b1x), D2.mul(off2, b2x), D2.mul(tipAdvance, tx));
+        const Y = D2.sum(cy, D2.mul(off1, b1y), D2.mul(off2, b2y), D2.mul(tipAdvance, ty));
+        const Z = D2.sum(cz, D2.mul(off1, b1z), D2.mul(off2, b2z), D2.mul(tipAdvance, tz));
+
+        const pu = new THREE.Vector3(X[1], Y[1], Z[1]);
+        const pv = new THREE.Vector3(X[2], Y[2], Z[2]);
+        let n;
+        if (vVal > 1 - 1e-6) {
+          n = new THREE.Vector3(tx[0], ty[0], tz[0]).normalize();
+        } else {
+          n = new THREE.Vector3().crossVectors(pu, pv);
+          if (n.lengthSq() < 1e-16) {
+            n = new THREE.Vector3(tx[0], ty[0], tz[0]).normalize();
+          } else {
+            n.normalize();
+          }
+        }
+
+        return {
+          p: new THREE.Vector3(X[0], Y[0], Z[0]),
+          n,
+          pu,
+          pv,
+        };
+      }
+
+      for (let j = 0; j <= segV; j++) {
+        const v = j / segV;
+        for (let i = 0; i <= segU; i++) {
+          const u = i === segU ? 0 : i / segU;
+          const idx = j * cols + i;
+          const res = evalArmPoint(u, v);
+
+          positions[idx * 3] = res.p.x;
+          positions[idx * 3 + 1] = res.p.y;
+          positions[idx * 3 + 2] = res.p.z;
+
+          normals[idx * 3] = res.n.x;
+          normals[idx * 3 + 1] = res.n.y;
+          normals[idx * 3 + 2] = res.n.z;
+
+          aDu[idx * 3] = res.pu.x;
+          aDu[idx * 3 + 1] = res.pu.y;
+          aDu[idx * 3 + 2] = res.pu.z;
+
+          aDv[idx * 3] = res.pv.x;
+          aDv[idx * 3 + 1] = res.pv.y;
+          aDv[idx * 3 + 2] = res.pv.z;
+
+          const texU = i / segU;
+          uvs[idx * 2] = texU * 1.4;
+          uvs[idx * 2 + 1] = v * 1.1;
+          aClothUV[idx * 2] = texU;
+          aClothUV[idx * 2 + 1] = v;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < segV; j++) {
+        for (let i = 0; i < segU; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          // Match outward cross(pu, pv) winding
+          indices.push(a, b, d);
+          indices.push(d, b, c);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setAttribute('aDu', new THREE.BufferAttribute(aDu, 3));
+      geo.setAttribute('aDv', new THREE.BufferAttribute(aDv, 3));
+      geo.setAttribute('aClothUV', new THREE.BufferAttribute(aClothUV, 2));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    const armMesh = new THREE.Mesh(buildStubbyArmGeometry(44, 48), armMaterial);
+    ghostRoot.add(armMesh);
+
+    // --- 7B. Parametric Curved Glossy Black Oval Eyes (Conforming to Face) ---
+    function getFaceFrame(uVal, vVal) {
+      const sample = evaluateGhostSheet(uVal, vVal);
+      const n = sample.n.clone().normalize();
+      let right = sample.pu.clone().normalize();
+      // Right-handed basis: right (+X), up (+Y), n (+Z) with det = +1
+      const up = new THREE.Vector3().crossVectors(n, right).normalize();
+      right = new THREE.Vector3().crossVectors(up, n).normalize();
+      return { p: sample.p, n, right, up };
+    }
+
+    function buildCurvedOvalEyeGeometry(uCenter, vCenter, rx = 0.056, ry = 0.094, depth = 0.036) {
+      const frame = getFaceFrame(uCenter, vCenter);
+      const segA = 44;
+      const segR = 20;
+      const cols = segA + 1;
+      const rows = segR + 1;
+      const count = cols * rows;
+
+      const positions = new Float32Array(count * 3);
+      const normals = new Float32Array(count * 3);
+
+      const curvR = 0.56;
+
+      for (let j = 0; j <= segR; j++) {
+        const t = j / segR; // 0 at center apex, 1 at embedded perimeter
+        const rho = Math.sin(t * Math.PI * 0.5);
+        const bulge = Math.cos(t * Math.PI * 0.5);
+
+        for (let i = 0; i <= segA; i++) {
+          const a = (i / segA) * Math.PI * 2;
+          const ca = Math.cos(a), sa = Math.sin(a);
+
+          const lx = rx * rho * ca;
+          const ly = ry * rho * sa;
+          const bendBack = -(lx * lx + ly * ly) / (2 * curvR);
+          const lz = depth * bulge - 0.005 + bendBack;
+
+          // Analytic local normal of the cabochon dome
+          let nx = (rx > 0 ? (rho * ca) / rx : 0) * depth * 0.90;
+          let ny = (ry > 0 ? (rho * sa) / ry : 0) * depth * 0.90;
+          let nz = Math.max(0.08, bulge);
+          if (j === 0) { nx = 0; ny = 0; nz = 1; }
+          const nLen = Math.hypot(nx, ny, nz);
+          nx /= nLen; ny /= nLen; nz /= nLen;
+
+          const idx = j * cols + i;
+          positions[idx * 3] = lx;
+          positions[idx * 3 + 1] = ly;
+          positions[idx * 3 + 2] = lz;
+
+          normals[idx * 3] = nx;
+          normals[idx * 3 + 1] = ny;
+          normals[idx * 3 + 2] = nz;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < segR; j++) {
+        for (let i = 0; i < segA; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          // Outward (+Z) CCW winding: (d-a)x(b-a) = (+X)x(+Y) = +Z
+          indices.push(a, d, b);
+          indices.push(d, c, b);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setIndex(indices);
+      return { geo, frame };
+    }
+
+    const eyeMaterial = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(0x030407),
+      roughness: 0.045,
+      metalness: 0.04,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.025,
+      ior: 1.62,
+      envMapIntensity: 0.80,
+    });
+
+    function createEyePivot(uCenter, vCenter, tiltZ) {
+      const { geo, frame } = buildCurvedOvalEyeGeometry(uCenter, vCenter, 0.056, 0.094, 0.036);
+      const pivot = new THREE.Group();
+      pivot.position.copy(frame.p);
+
+      const rotMat = new THREE.Matrix4().makeBasis(frame.right, frame.up, frame.n);
+      pivot.quaternion.setFromRotationMatrix(rotMat);
+
+      const eyeMesh = new THREE.Mesh(geo, eyeMaterial);
+      eyeMesh.rotation.z = tiltZ;
+      pivot.add(eyeMesh);
+      ghostRoot.add(pivot);
+      return { pivot, eyeMesh };
+    }
+
+    // u = 0 is front center; phi = ±0.245 rad corresponds to u ≈ 0.039 and 1 - 0.039
+    const leftEye = createEyePivot(0.961, 0.275, 0.06);
+    const rightEye = createEyePivot(0.039, 0.275, -0.06);
+
+    // --- 7C. Parametric Wide Open Smiling Mouth (D-Smile Cavity Pocket) ---
+    function buildSmilingMouthGeometry(uCenter = 0.0, vCenter = 0.375) {
+      const frame = getFaceFrame(uCenter, vCenter);
+      const segA = 72;
+      const segR = 22;
+      const cols = segA + 1;
+      const rows = segR + 1;
+      const count = cols * rows;
+
+      const positions = new Float32Array(count * 3);
+      const normals = new Float32Array(count * 3);
+
+      // Smooth rounded D-smile outline parameterized by angle a in [0, 2*pi)
+      function mouthBoundary(a) {
+        const ca = Math.cos(a);
+        const sa = Math.sin(a);
+        const halfW = 0.140;
+        const x = halfW * ca;
+        // Cheerful wide upturned top lip & deep rounded lower jaw arc
+        const cornerLift = 0.032 * Math.pow(Math.abs(ca), 1.8);
+        const upperY = 0.022 + cornerLift;
+        const lowerY = -0.106 * Math.pow(Math.max(0.0001, 1 - ca * ca * 0.88), 0.72) + 0.015;
+        const tUp = 0.5 + 0.5 * Math.tanh(sa * 6.5);
+        const y = lowerY + (upperY - lowerY) * tUp;
+        return { x, y };
+      }
+
+      const curvR = 0.56;
+      for (let j = 0; j <= segR; j++) {
+        const t = j / segR; // 0 = deep dark center, 1 = outer tucked rim flange
+        const radScale = t;
+        let zProfile;
+        if (t < 0.82) {
+          const s = t / 0.82;
+          // Center stays +0.006 cleanly in front of -0.024 dimpled sheet; lip crest at +0.020
+          zProfile = 0.006 + 0.014 * s * s;
+        } else {
+          const s = (t - 0.82) / 0.18;
+          // Outer bevel tucks neatly -0.008 inside the sheet surface
+          zProfile = 0.020 - 0.028 * s * s;
+        }
+
+        for (let i = 0; i <= segA; i++) {
+          const a = (i / segA) * Math.PI * 2;
+          const bnd = mouthBoundary(a);
+          const lx = bnd.x * radScale;
+          const ly = bnd.y * radScale;
+          const bendBack = -(lx * lx + ly * ly) / (2 * curvR);
+          const lz = zProfile + bendBack;
+
+          const idx = j * cols + i;
+          positions[idx * 3] = lx;
+          positions[idx * 3 + 1] = ly;
+          positions[idx * 3 + 2] = lz;
+        }
+      }
+
+      // Compute exact smooth surface normals on the mouth pocket from tangent grid
+      const pA = new THREE.Vector3();
+      const pB = new THREE.Vector3();
+      const pC = new THREE.Vector3();
+      const duV = new THREE.Vector3();
+      const dvV = new THREE.Vector3();
+      const nVec = new THREE.Vector3();
+
+      for (let j = 0; j <= segR; j++) {
+        const jm = Math.max(0, j - 1);
+        const jp = Math.min(segR, j + 1);
+        for (let i = 0; i <= segA; i++) {
+          const idx = j * cols + i;
+          if (j === 0) {
+            normals[idx * 3] = 0;
+            normals[idx * 3 + 1] = 0;
+            normals[idx * 3 + 2] = 1;
+            continue;
+          }
+          const im = (i - 1 + segA) % segA;
+          const ip = (i + 1) % segA;
+
+          const idxM = j * cols + im;
+          const idxP = j * cols + ip;
+          pA.set(positions[idxP * 3], positions[idxP * 3 + 1], positions[idxP * 3 + 2]);
+          pB.set(positions[idxM * 3], positions[idxM * 3 + 1], positions[idxM * 3 + 2]);
+          duV.subVectors(pA, pB);
+
+          const idxJm = jm * cols + i;
+          const idxJp = jp * cols + i;
+          pC.set(positions[idxJp * 3], positions[idxJp * 3 + 1], positions[idxJp * 3 + 2]);
+          pB.set(positions[idxJm * 3], positions[idxJm * 3 + 1], positions[idxJm * 3 + 2]);
+          dvV.subVectors(pC, pB);
+
+          nVec.crossVectors(dvV, duV);
+          if (nVec.lengthSq() < 1e-16) nVec.set(0, 0, 1);
+          else nVec.normalize();
+          if (j < segR * 0.78 && nVec.z < 0) nVec.negate();
+
+          normals[idx * 3] = nVec.x;
+          normals[idx * 3 + 1] = nVec.y;
+          normals[idx * 3 + 2] = nVec.z;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < segR; j++) {
+        for (let i = 0; i < segA; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          // Outward (+Z) CCW winding: (d-a)x(b-a) = (+X)x(+Y) = +Z
+          indices.push(a, d, b);
+          indices.push(d, c, b);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setIndex(indices);
+      return { geo, frame };
+    }
+
+    const mouthData = buildSmilingMouthGeometry(0.0, 0.375);
+    const mouthMaterial = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(0x030205),
+      roughness: 0.92,
+      metalness: 0.0,
+      clearcoat: 0.0,
+      envMapIntensity: 0.05,
+      side: THREE.DoubleSide,
+    });
+    const mouthPivot = new THREE.Group();
+    mouthPivot.position.copy(mouthData.frame.p);
+    const mouthBasis = new THREE.Matrix4().makeBasis(
+      mouthData.frame.right,
+      mouthData.frame.up,
+      mouthData.frame.n
+    );
+    mouthPivot.quaternion.setFromRotationMatrix(mouthBasis);
+    const mouthMesh = new THREE.Mesh(mouthData.geo, mouthMaterial);
+    mouthPivot.add(mouthMesh);
+    ghostRoot.add(mouthPivot);
+
+    // =========================================================================
+    // 8. PARAMETRIC CERAMIC COFFEE CUP, SWEPT HANDLE & RIPPLING CREMA SURFACE
+    // =========================================================================
+    const cupGroup = new THREE.Group();
+    // Cradled right against the chest & stubby paw
+    cupGroup.position.set(0.12, -0.02, 0.90);
+    // Tilted slightly forward-right so viewer sees the glistening dark crema surface
+    cupGroup.rotation.set(0.18, 0.18, -0.05);
+    ghostRoot.add(cupGroup);
+
+    function buildCeramicMugGeometry(segU = 72) {
+      // Smooth closed mug cross-section profile points (r, y) from center-bottom -> outer belly -> rolled lip -> inner floor
+      const pts = [];
+      const addArc = (r0, y0, r1, y1, cx, cy, steps, skipFirst = true) => {
+        const a0 = Math.atan2(y0 - cy, r0 - cx);
+        let a1 = Math.atan2(y1 - cy, r1 - cx);
+        for (let i = skipFirst ? 1 : 0; i <= steps; i++) {
+          const t = i / steps;
+          const a = a0 + (a1 - a0) * t;
+          const rad = Math.hypot(r0 - cx, y0 - cy);
+          pts.push([cx + Math.cos(a) * rad, cy + Math.sin(a) * rad]);
+        }
+      };
+
+      // Bottom center -> foot ring
+      pts.push([0.0001, -0.182]);
+      pts.push([0.115, -0.182]);
+      pts.push([0.125, -0.192]);
+      pts.push([0.145, -0.192]);
+      pts.push([0.155, -0.175]);
+
+      // Plump cozy mug belly curving smoothly up to neck & rim
+      for (let i = 1; i <= 22; i++) {
+        const t = i / 22;
+        const y = -0.175 + t * 0.340; // up to +0.165
+        const belly = Math.sin(t * Math.PI) * 0.036;
+        const flare = t * t * 0.015;
+        const r = 0.155 + belly + flare + 0.022 * Math.sin(t * Math.PI * 0.5);
+        pts.push([r, y]);
+      }
+
+      // Thick rounded rolled drinking lip (top outer -> top crest -> top inner)
+      const rimOuterR = pts[pts.length - 1][0];
+      const rimY = 0.165;
+      const rimInnerR = 0.162;
+      const lipCx = (rimOuterR + rimInnerR) * 0.5;
+      const lipRx = (rimOuterR - rimInnerR) * 0.5;
+      const lipRy = 0.016;
+      for (let i = 1; i <= 12; i++) {
+        const a = (i / 12) * Math.PI;
+        pts.push([lipCx + Math.cos(a) * lipRx, rimY + Math.sin(a) * lipRy]);
+      }
+
+      // Inner glazed mug wall down to coffee floor
+      for (let i = 1; i <= 16; i++) {
+        const t = i / 16;
+        const y = rimY - t * 0.315; // down to -0.150
+        const r = rimInnerR - Math.pow(t, 2.2) * 0.026;
+        pts.push([r, y]);
+      }
+      pts.push([0.095, -0.155]);
+      pts.push([0.0001, -0.155]);
+
+      const rows = pts.length;
+      const cols = segU + 1;
+      const count = rows * cols;
+      const positions = new Float32Array(count * 3);
+      const normals = new Float32Array(count * 3);
+      const uvs = new Float32Array(count * 2);
+
+      // Compute smooth profile tangent normals in (r, y)
+      const profN = pts.map((_, j) => {
+        const jm = Math.max(0, j - 1);
+        const jp = Math.min(rows - 1, j + 1);
+        const dr = pts[jp][0] - pts[jm][0];
+        const dy = pts[jp][1] - pts[jm][1];
+        // Outward normal of CCW-to-interior profile (bottom->outer->rim->inner): (+dy, -dr)
+        const len = Math.hypot(dy, dr) || 1;
+        return [dy / len, -dr / len];
+      });
+      profN[0] = [0, -1];
+      profN[rows - 1] = [0, 1];
+
+      for (let j = 0; j < rows; j++) {
+        const [r, y] = pts[j];
+        const [nr, ny] = profN[j];
+        const v = j / (rows - 1);
+        for (let i = 0; i <= segU; i++) {
+          const u = i / segU;
+          const a = u * Math.PI * 2;
+          const ca = Math.cos(a), sa = Math.sin(a);
+          const idx = j * cols + i;
+
+          positions[idx * 3] = r * ca;
+          positions[idx * 3 + 1] = y;
+          positions[idx * 3 + 2] = r * sa;
+
+          normals[idx * 3] = nr * ca;
+          normals[idx * 3 + 1] = ny;
+          normals[idx * 3 + 2] = nr * sa;
+
+          uvs[idx * 2] = u * 2.0;
+          uvs[idx * 2 + 1] = v * 2.0;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < rows - 1; j++) {
+        for (let i = 0; i < segU; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          // Outward CCW winding matching profN: (+Y) x (+Z) = +X
+          indices.push(a, d, b);
+          indices.push(d, c, b);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    function buildMugHandleGeometry(segS = 36, segT = 24) {
+      // Ear-shaped handle curving neatly off the outer right/front-right side of the mug
+      const p0 = new THREE.Vector3(0.176, 0.115, 0.0);
+      const p1 = new THREE.Vector3(0.325, 0.135, 0.0);
+      const p2 = new THREE.Vector3(0.320, -0.105, 0.0);
+      const p3 = new THREE.Vector3(0.165, -0.095, 0.0);
+      const curve = new THREE.CubicBezierCurve3(p0, p1, p2, p3);
+
+      const cols = segT + 1;
+      const rows = segS + 1;
+      const count = cols * rows;
+      const positions = new Float32Array(count * 3);
+      const normals = new Float32Array(count * 3);
+      const uvs = new Float32Array(count * 2);
+
+      for (let j = 0; j <= segS; j++) {
+        const s = j / segS;
+        const pt = curve.getPoint(s);
+        const T = curve.getTangent(s).normalize();
+        const B1 = new THREE.Vector3(0, 0, 1); // Z axis perpendicular to XY handle plane
+        const B2 = new THREE.Vector3().crossVectors(T, B1).normalize();
+
+        // Slight flare at attachment ends for authentic ceramic fillet
+        const fillet = 1.0 + 0.32 * (Math.exp(-s * 9.0) + Math.exp(-(1 - s) * 9.0));
+        const rZ = 0.022 * fillet;
+        const rIn = 0.015 * fillet;
+
+        for (let i = 0; i <= segT; i++) {
+          const u = i / segT;
+          const a = u * Math.PI * 2;
+          const ca = Math.cos(a), sa = Math.sin(a);
+          const idx = j * cols + i;
+
+          const p = pt.clone()
+            .addScaledVector(B1, rZ * ca)
+            .addScaledVector(B2, rIn * sa);
+          const n = new THREE.Vector3()
+            .addScaledVector(B1, ca / rZ)
+            .addScaledVector(B2, sa / rIn)
+            .normalize();
+
+          positions[idx * 3] = p.x;
+          positions[idx * 3 + 1] = p.y;
+          positions[idx * 3 + 2] = p.z;
+
+          normals[idx * 3] = n.x;
+          normals[idx * 3 + 1] = n.y;
+          normals[idx * 3 + 2] = n.z;
+
+          uvs[idx * 2] = u;
+          uvs[idx * 2 + 1] = s;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < segS; j++) {
+        for (let i = 0; i < segT; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          // Outward CCW winding: (+B2) x (+T) = +B1
+          indices.push(a, b, d);
+          indices.push(d, b, c);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    const ceramicMaterial = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(0xffffff),
+      map: ceramicTex.map,
+      normalMap: ceramicTex.normalMap,
+      normalScale: new THREE.Vector2(0.28, 0.28),
+      roughnessMap: ceramicTex.roughnessMap,
+      roughness: 0.16,
+      metalness: 0.0,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.06,
+      ior: 1.54,
+      envMapIntensity: 1.35,
+    });
+
+    const cupBodyMesh = new THREE.Mesh(buildCeramicMugGeometry(72), ceramicMaterial);
+    const cupHandleMesh = new THREE.Mesh(buildMugHandleGeometry(36, 24), ceramicMaterial);
+    // Point ear handle cleanly toward outer front-left (-X, +Z), clear of the cradling arm on +X
+    cupHandleMesh.rotation.y = Math.PI + 0.35;
+    cupGroup.add(cupBodyMesh, cupHandleMesh);
+
+    // --- 8B. Rippling Dark Crema-Topped Coffee Surface ---
+    function buildCoffeeLiquidGeometry(radius = 0.161, segR = 44, segA = 72) {
+      const cols = segA + 1;
+      const rows = segR + 1;
+      const count = cols * rows;
+      const positions = new Float32Array(count * 3);
+      const normals = new Float32Array(count * 3);
+      const uvs = new Float32Array(count * 2);
+
+      for (let j = 0; j <= segR; j++) {
+        const rn = j / segR;
+        const r = rn * radius;
+        // Subtle meniscus rise right at the inner ceramic wall
+        const meniscus = Math.pow(rn, 7) * 0.0055;
+        for (let i = 0; i <= segA; i++) {
+          const u = i / segA;
+          const a = u * Math.PI * 2;
+          const ca = Math.cos(a), sa = Math.sin(a);
+          const x = r * ca;
+          const z = r * sa;
+          const idx = j * cols + i;
+
+          positions[idx * 3] = x;
+          positions[idx * 3 + 1] = meniscus;
+          positions[idx * 3 + 2] = z;
+
+          normals[idx * 3] = 0;
+          normals[idx * 3 + 1] = 1;
+          normals[idx * 3 + 2] = 0;
+
+          uvs[idx * 2] = 0.5 + 0.49 * rn * ca;
+          uvs[idx * 2 + 1] = 0.5 + 0.49 * rn * sa;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < segR; j++) {
+        for (let i = 0; i < segA; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          // Upward (+Y) CCW winding: (+Z) x (+X) = +Y
+          indices.push(a, b, d);
+          indices.push(d, b, c);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    const coffeeUniforms = {
+      uTime: { value: 0 },
+      uBobVel: { value: 0 },
+    };
+
+    const coffeeMaterial = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(0xffffff),
+      map: coffeeTex.map,
+      normalMap: coffeeTex.normalMap,
+      normalScale: new THREE.Vector2(0.50, 0.50),
+      roughnessMap: coffeeTex.roughnessMap,
+      roughness: 0.22,
+      metalness: 0.0,
+      clearcoat: 0.55,
+      clearcoatRoughness: 0.11,
+      ior: 1.34,
+      emissive: new THREE.Color(0xd65010),
+      emissiveMap: coffeeTex.emissiveMap,
+      emissiveIntensity: 0.45,
+      envMapIntensity: 0.42,
+    });
+
+    coffeeMaterial.customProgramCacheKey = () => 'coffee-crema-ripples';
+    coffeeMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = coffeeUniforms.uTime;
+      shader.uniforms.uBobVel = coffeeUniforms.uBobVel;
+
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+          uniform float uTime;
+          uniform float uBobVel;
+
+          void evalCoffeeRipple(vec2 xz, out float h, out vec3 n) {
+            float r = length(xz);
+            float rSafe = max(r, 0.0005);
+            float k1 = 44.0;
+            float k2 = 26.0;
+            float damp = exp(-r * 3.8);
+            float p1 = r * k1 - uTime * 3.2;
+            float p2 = r * k2 - uTime * 2.1 + atan(xz.y, xz.x) * 2.0;
+
+            float w1 = sin(p1) * 0.0028 * damp;
+            float w2 = sin(p2) * 0.0014 * smoothstep(0.0, 0.14, r) * (1.0 - smoothstep(0.11, 0.16, r));
+            // Gentle slosh coupled to bob velocity
+            float slosh = (xz.x * 0.025 + xz.y * 0.032) * uBobVel;
+
+            h = w1 + w2 + slosh;
+
+            // Analytic gradient dh/dx, dh/dz for accurate rippling specular reflections
+            float dw1dr = (cos(p1) * k1 - sin(p1) * 3.8) * 0.0028 * damp;
+            float dhdx = dw1dr * (xz.x / rSafe) + cos(p2) * 0.0014 * 16.0 * (xz.x / rSafe) + 0.025 * uBobVel;
+            float dhdz = dw1dr * (xz.y / rSafe) + cos(p2) * 0.0014 * 16.0 * (xz.y / rSafe) + 0.032 * uBobVel;
+            n = normalize(vec3(-dhdx, 1.0, -dhdz));
+          }`
+        )
+        .replace(
+          '#include <beginnormal_vertex>',
+          `#include <beginnormal_vertex>
+          float _liqH;
+          vec3 _liqN;
+          evalCoffeeRipple(position.xz, _liqH, _liqN);
+          objectNormal = _liqN;`
+        )
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+          transformed.y += _liqH;`
+        );
+    };
+
+    const coffeeMesh = new THREE.Mesh(buildCoffeeLiquidGeometry(0.161, 44, 72), coffeeMaterial);
+    coffeeMesh.position.y = 0.128;
+    cupGroup.add(coffeeMesh);
+
+    // =========================================================================
+    // 9. CURLING STEAM WISPS RISING FROM THE COFFEE CUP
+    // =========================================================================
+    function createSteamWispSystem() {
+      const wispGroup = new THREE.Group();
+      const segX = 10;
+      const segY = 56;
+      const cols = segX + 1;
+      const rows = segY + 1;
+
+      const geo = new THREE.BufferGeometry();
+      const positions = new Float32Array(cols * rows * 3);
+      const uvs = new Float32Array(cols * rows * 2);
+      const normals = new Float32Array(cols * rows * 3);
+
+      for (let j = 0; j <= segY; j++) {
+        const v = j / segY;
+        for (let i = 0; i <= segX; i++) {
+          const u = i / segX;
+          const idx = j * cols + i;
+          positions[idx * 3] = (u - 0.5) * 0.12;
+          positions[idx * 3 + 1] = v * 0.95;
+          positions[idx * 3 + 2] = 0;
+          normals[idx * 3] = 0;
+          normals[idx * 3 + 1] = 0;
+          normals[idx * 3 + 2] = 1;
+          uvs[idx * 2] = u;
+          uvs[idx * 2 + 1] = v;
+        }
+      }
+
+      const indices = [];
+      for (let j = 0; j < segY; j++) {
+        for (let i = 0; i < segX; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const d = (j + 1) * cols + i;
+          const c = d + 1;
+          indices.push(a, d, b);
+          indices.push(d, c, b);
+        }
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+
+      const wispConfigs = [
+        { phase: 0.0, rot: 0.25, radius: 0.036, width: 0.095, height: 0.95, speed: 1.05 },
+        { phase: 1.4, rot: 1.35, radius: 0.048, width: 0.115, height: 1.08, speed: 0.88 },
+        { phase: 2.7, rot: 2.40, radius: 0.032, width: 0.085, height: 0.86, speed: 1.18 },
+        { phase: 3.9, rot: 3.65, radius: 0.052, width: 0.120, height: 1.12, speed: 0.82 },
+        { phase: 5.1, rot: 4.85, radius: 0.040, width: 0.092, height: 0.92, speed: 1.02 },
+      ];
+
+      wispConfigs.forEach((cfg) => {
+        const mat = new THREE.ShaderMaterial({
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.NormalBlending,
+          uniforms: {
+            uTime: sharedClothUniforms.uTime,
+            uPhase: { value: cfg.phase },
+            uBaseRot: { value: cfg.rot },
+            uCurlR: { value: cfg.radius },
+            uWidth: { value: cfg.width },
+            uHeight: { value: cfg.height },
+            uSpeed: { value: cfg.speed },
+          },
+          vertexShader: `
+            uniform float uTime;
+            uniform float uPhase;
+            uniform float uBaseRot;
+            uniform float uCurlR;
+            uniform float uWidth;
+            uniform float uHeight;
+            uniform float uSpeed;
+            varying vec2 vUv;
+            varying vec3 vWorldPos;
+            varying vec3 vWorldNormal;
+
+            vec3 evalSpine(float v, float t) {
+              float y = v * uHeight;
+              float twist = v * 4.4 - t * 1.65 + uPhase;
+              float expand = 0.55 + v * 2.15;
+              float r = uCurlR * expand * smoothstep(0.0, 0.25, v);
+              // Gentle drift backward with breeze (-X, -Z) as steam rises
+              float windX = -0.18 * pow(v, 1.55);
+              float windZ = -0.14 * pow(v, 1.55);
+              float x = cos(twist) * r + windX + sin(v * 6.0 - t * 2.1 + uPhase) * 0.015 * v;
+              float z = sin(twist) * r + windZ + cos(v * 5.3 - t * 1.9 + uPhase) * 0.015 * v;
+              return vec3(x, y, z);
+            }
+
+            void main() {
+              vUv = uv;
+              float v = uv.y;
+              float t = uTime * uSpeed;
+
+              vec3 c0 = evalSpine(v, t);
+              vec3 c1 = evalSpine(min(1.0, v + 0.015), t);
+              vec3 tangent = normalize(c1 - c0);
+
+              float ribbonRot = uBaseRot + v * 2.4 - t * 0.45;
+              vec3 sideDir = normalize(cross(tangent, vec3(cos(ribbonRot), 0.15, sin(ribbonRot))));
+              vec3 normDir = normalize(cross(sideDir, tangent));
+
+              float widthCurve = uWidth * (0.55 + 1.35 * sin(v * 2.4));
+              float xOff = (uv.x - 0.5) * widthCurve;
+              vec3 pos = c0 + sideDir * xOff;
+
+              vec4 wp = modelMatrix * vec4(pos, 1.0);
+              vWorldPos = wp.xyz;
+              vWorldNormal = normalize(mat3(modelMatrix) * normDir);
+              gl_Position = projectionMatrix * viewMatrix * wp;
+            }
+          `,
+          fragmentShader: `
+            uniform float uTime;
+            uniform float uPhase;
+            uniform float uSpeed;
+            varying vec2 vUv;
+            varying vec3 vWorldPos;
+            varying vec3 vWorldNormal;
+
+            void main() {
+              float u = vUv.x;
+              float v = vUv.y;
+              float t = uTime * uSpeed;
+
+              // Soft gaussian across ribbon width
+              float centerDist = (u - 0.5) * 2.0;
+              float crossFade = exp(-centerDist * centerDist * 3.6) * (1.0 - smoothstep(0.55, 1.0, abs(centerDist)));
+
+              // Smooth fade-in above liquid and wispy dissipation at top
+              float vertFade = smoothstep(0.0, 0.14, v) * (1.0 - smoothstep(0.45, 1.0, v));
+
+              // Traveling internal vapor density filaments
+              float wispNoise = 0.65
+                + 0.22 * sin(v * 14.0 - t * 2.8 + u * 4.5 + uPhase)
+                + 0.15 * cos(v * 23.0 - t * 3.9 - u * 5.2);
+
+              // View-angle grazing softness so edge-on strips never appear sharp
+              vec3 V = normalize(cameraPosition - vWorldPos);
+              vec3 N = normalize(vWorldNormal);
+              float viewSoft = pow(abs(dot(N, V)), 0.85);
+
+              float alpha = crossFade * vertFade * clamp(wispNoise, 0.15, 1.0) * (0.30 + 0.70 * viewSoft) * 0.34;
+              if (alpha < 0.002) discard;
+
+              // Warm coffee-lit mist near mug transitioning into cool moonlight vapor higher up
+              vec3 warmMist = vec3(1.0, 0.68, 0.42);
+              vec3 coolMist = vec3(0.74, 0.90, 0.98);
+              vec3 col = mix(warmMist, coolMist, smoothstep(0.05, 0.58, v));
+
+              gl_FragColor = vec4(col, alpha);
+            }
+          `,
+        });
+
+        const mesh = new THREE.Mesh(geo, mat);
+        wispGroup.add(mesh);
+      });
+
+      wispGroup.position.set(0, 0.125, 0);
+      return wispGroup;
+    }
+
+    const steamWisps = createSteamWispSystem();
+    cupGroup.add(steamWisps);
+
+    // =========================================================================
+    // 10. DRIFTING GLOWING ORANGE EMBERS & SPARKLES FLOATING UPWARD
+    // =========================================================================
+    function createEmbersAndSparkles(count = 165) {
+      const geo = new THREE.BufferGeometry();
+      const positions = new Float32Array(count * 3);
+      const seeds = new Float32Array(count * 4); // [phase, speed, radiusScale, type(0=ember,1=sparkle)]
+
+      for (let i = 0; i < count; i++) {
+        const isSparkle = rng.next() < 0.36 ? 1.0 : 0.0;
+        // Cluster majority near coffee cup & torso, plus dreamy surrounding sparkles
+        const nearCup = rng.next() < 0.62;
+        const baseAngle = rng.range(0, Math.PI * 2);
+        const rad = nearCup ? rng.range(0.05, 0.58) : rng.range(0.45, 1.55);
+
+        positions[i * 3] = (nearCup ? 0.14 : -0.10) + Math.cos(baseAngle) * rad;
+        positions[i * 3 + 1] = rng.range(-0.95, 1.35);
+        positions[i * 3 + 2] = (nearCup ? 0.78 : 0.05) + Math.sin(baseAngle) * rad;
+
+        seeds[i * 4] = rng.range(0, 100);
+        seeds[i * 4 + 1] = isSparkle ? rng.range(0.14, 0.28) : rng.range(0.20, 0.40);
+        seeds[i * 4 + 2] = isSparkle ? rng.range(16.0, 28.0) : rng.range(12.0, 24.0);
+        seeds[i * 4 + 3] = isSparkle;
+      }
+
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 4));
+
+      const mat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        uniforms: {
+          uTime: sharedClothUniforms.uTime,
+          uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+        },
+        vertexShader: `
+          attribute vec4 aSeed;
+          uniform float uTime;
+          uniform float uPixelRatio;
+          varying float vType;
+          varying float vLife;
+          varying float vTwinkle;
+
+          void main() {
+            float phase = aSeed.x;
+            float speed = aSeed.y;
+            float sizeBase = aSeed.z;
+            vType = aSeed.w;
+
+            // Continuous looping upward drift
+            float cycle = fract(uTime * speed * 0.24 + phase * 0.01);
+            vLife = smoothstep(0.0, 0.16, cycle) * (1.0 - smoothstep(0.68, 1.0, cycle));
+
+            vec3 p = position;
+            p.y = mix(-0.85, 1.65, cycle) + (position.y * 0.25);
+
+            // Gentle helical curl + wind drift toward trailing tail (-X, -Z)
+            float swirl = uTime * (0.9 + speed) + phase;
+            p.x += sin(swirl) * 0.16 + cos(swirl * 0.63) * 0.08 - cycle * 0.35;
+            p.z += cos(swirl * 0.85) * 0.14 - cycle * 0.25;
+
+            vTwinkle = 0.55 + 0.45 * sin(uTime * (3.2 + speed * 5.0) + phase * 3.1);
+
+            vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+            gl_PointSize = (sizeBase * uPixelRatio * (0.65 + 0.55 * vLife)) / max(1.0, -mvPosition.z);
+            gl_Position = projectionMatrix * mvPosition;
+          }
+        `,
+        fragmentShader: `
+          varying float vType;
+          varying float vLife;
+          varying float vTwinkle;
+
+          void main() {
+            vec2 uv = gl_PointCoord - 0.5;
+            float r = length(uv) * 2.0;
+            if (r > 1.0) discard;
+
+            float glow = exp(-r * r * 5.5);
+
+            // Crisp 4-point star flare for sparkles
+            float ax = abs(uv.x) * 2.0;
+            float ay = abs(uv.y) * 2.0;
+            float star = exp(-ax * 14.0) * exp(-ay * 2.6) + exp(-ay * 14.0) * exp(-ax * 2.6);
+            float core = exp(-r * r * 18.0);
+
+            float intensity;
+            vec3 col;
+            if (vType > 0.5) {
+              // Twinkling golden-amber sparkle (HDR > 1.0 for subtle bloom)
+              intensity = (core * 1.45 + star * 0.72 + glow * 0.35) * vLife * vTwinkle;
+              col = mix(vec3(1.15, 0.58, 0.18), vec3(1.45, 1.18, 0.72), core);
+            } else {
+              // Soft glowing warm orange ember
+              intensity = (glow * 0.88 + core * 0.65) * vLife * (0.72 + 0.28 * vTwinkle);
+              col = mix(vec3(1.05, 0.32, 0.05), vec3(1.35, 0.76, 0.28), core);
+            }
+
+            if (intensity < 0.005) discard;
+            gl_FragColor = vec4(col * intensity, intensity);
+          }
+        `,
+      });
+
+      return new THREE.Points(geo, mat);
+    }
+
+    const embersPoints = createEmbersAndSparkles(165);
+    scene.add(embersPoints);
+
+    // =========================================================================
+    // 11. SOFT BLURRED CONTACT GLOW BENEATH THE GHOST (NO FLOOR)
+    // =========================================================================
+    const contactGlowUniforms = {
+      uBobHeight: { value: 0 },
+    };
+
+    const contactGlowMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.NormalBlending,
+      uniforms: contactGlowUniforms,
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+        void main() {
+          vUv = uv;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorldPos = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: `
+        uniform float uBobHeight;
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+
+        void main() {
+          vec2 p = (vUv - 0.5) * 2.0;
+
+          // Slightly elongated toward trailing tail (-X, -Z) so the glow echoes the silhouette
+          vec2 tailShift = p - vec2(-0.14, -0.10);
+          float rTeal = length(vec2(tailShift.x * 0.84, tailShift.y * 0.92));
+
+          // Warm orange coffee bounce pocket shifted gently forward-right beneath the mug
+          vec2 warmShift = p - vec2(0.10, 0.28);
+          float rWarm = length(warmShift * 1.38);
+
+          // Bob height modulates spread & softness
+          float prox = 1.0 - uBobHeight * 0.22;
+          float auraTeal = exp(-rTeal * rTeal * (3.1 - uBobHeight * 0.35));
+          float auraInner = exp(-rTeal * rTeal * 8.5);
+          float auraWarm = exp(-rWarm * rWarm * 6.0);
+
+          float edgeClip = 1.0 - smoothstep(0.65, 1.0, length(p));
+
+          // Soft grazing angle attenuation so orbiting edge-on stays silky
+          vec3 V = normalize(cameraPosition - vWorldPos);
+          float viewAngle = pow(abs(V.y), 0.32);
+
+          vec3 tealCol = vec3(0.08, 0.44, 0.58) * auraTeal + vec3(0.18, 0.64, 0.78) * auraInner * 0.38;
+          vec3 warmCol = vec3(0.75, 0.32, 0.10) * auraWarm * 0.46;
+
+          vec3 col = (tealCol + warmCol) * prox;
+          float alpha = clamp((auraTeal * 0.42 + auraWarm * 0.24) * edgeClip * viewAngle * prox, 0.0, 0.72);
+          if (alpha < 0.002) discard;
+
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
+    });
+
+    const contactGlowPlane = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 4.4), contactGlowMat);
+    contactGlowPlane.rotation.x = -Math.PI * 0.5;
+    contactGlowPlane.position.set(-0.08, -1.34, -0.04);
+    scene.add(contactGlowPlane);
+
+    // =========================================================================
+    // 12. CALIBRATED LIGHTING (COOL RIM + WARM COFFEE GLOW + SOFT KEY)
+    // =========================================================================
+    // Soft deep teal-navy ambient hemisphere
+    const hemiLight = new THREE.HemisphereLight(0x52b6d4, 0x041520, 0.40);
+    scene.add(hemiLight);
+
+    // Gentle cool moonlight key from upper-front-left so cotton folds read cleanly
+    const frontKeyLight = new THREE.DirectionalLight(0xbbe7f7, 0.58);
+    frontKeyLight.position.set(-1.8, 3.0, 2.8);
+    scene.add(frontKeyLight);
+
+    // Cool cyan rim light skimming the ghost's back edge, crown, and trailing tail
+    const backRimLight = new THREE.DirectionalLight(0x52d8ff, 1.65);
+    backRimLight.position.set(-2.9, 2.1, -3.3);
+    scene.add(backRimLight);
+
+    // Secondary subtle cool back-right edge catchlight
+    const backSideRim = new THREE.DirectionalLight(0x3ba4cc, 0.62);
+    backSideRim.position.set(2.5, 1.3, -2.9);
+    scene.add(backSideRim);
+
+    // Warm orange glow from the coffee cup illuminating chest, hands & lower face
+    const coffeeGlowLight = new THREE.PointLight(0xff5e14, 0.44, 3.0, 2.0);
+    coffeeGlowLight.position.set(0.12, 0.22, 0.92);
+    ghostRoot.add(coffeeGlowLight);
+
+    // Soft wider warm amber bounce light for gentle chest & chin fill
+    const coffeeBounceLight = new THREE.PointLight(0xff8432, 0.20, 3.4, 1.8);
+    coffeeBounceLight.position.set(0.08, 0.14, 1.04);
+    ghostRoot.add(coffeeBounceLight);
+
+    // =========================================================================
+    // 13. ANIMATION LOOP (BOBBING, CLOTH SWAY, BLINK, SMILE PULSE, RIPPLES)
+    // =========================================================================
+    const clock = new THREE.Clock();
+    const tmpCoffeeWorld = new THREE.Vector3();
+
+    // Deterministic organic blink cycle with occasional playful double-blinks
+    function computeBlinkAmount(t) {
+      const cycleLen = 4.2;
+      const cycleIdx = Math.floor(t / cycleLen);
+      const localT = t - cycleIdx * cycleLen;
+
+      const evalSingleBlink = (dt, dur = 0.26) => {
+        if (dt < 0 || dt > dur) return 0;
+        const u = dt / dur;
+        // Fast close, smooth open
+        const s = u < 0.42 ? u / 0.42 : (1.0 - (u - 0.42) / 0.58);
+        return s * s * (3 - 2 * s);
+      };
+
+      let blink = evalSingleBlink(localT - 2.6, 0.25);
+      // Every 3rd cycle adds a quick cute double-blink
+      if (cycleIdx % 3 === 1) {
+        blink = Math.max(blink, evalSingleBlink(localT - 2.94, 0.22));
+      }
+      return blink;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+
+      sharedClothUniforms.uTime.value = t;
+      coffeeUniforms.uTime.value = t;
+
+      // 1. Slow bobbing float with subtle weightless sway
+      const bobPhase = t * 1.18;
+      const bobY = Math.sin(bobPhase) * 0.085 + Math.sin(t * 0.62) * 0.022;
+      const bobVel = Math.cos(bobPhase) * 1.18 * 0.085;
+      coffeeUniforms.uBobVel.value = bobVel;
+
+      ghostRoot.position.y = bobY;
+      ghostRoot.rotation.z = Math.sin(t * 0.74) * 0.026;
+      ghostRoot.rotation.x = Math.cos(t * 0.88) * 0.018;
+      ghostRoot.rotation.y = Math.sin(t * 0.52) * 0.032;
+
+      // Update world-space coffee light position for subsurface scattering shader
+      coffeeMesh.getWorldPosition(tmpCoffeeWorld);
+      sharedClothUniforms.uCoffeePos.value.copy(tmpCoffeeWorld);
+
+      // Subtle warm coffee glow flicker
+      const coffeePulse = 1.0 + 0.06 * Math.sin(t * 2.9) + 0.03 * Math.cos(t * 4.7);
+      coffeeGlowLight.intensity = 0.44 * coffeePulse;
+      coffeeMaterial.emissiveIntensity = 0.45 * coffeePulse;
+
+      // 2. Blinking oval eyes + subtle smile pulse
+      const blink = computeBlinkAmount(t);
+      const eyeScaleY = 1.0 - blink * 0.91;
+      const eyeScaleX = 1.0 + blink * 0.09;
+      leftEye.pivot.scale.set(eyeScaleX, eyeScaleY, 1.0 - blink * 0.35);
+      rightEye.pivot.scale.set(eyeScaleX, eyeScaleY, 1.0 - blink * 0.35);
+
+      const smilePulse = Math.sin(t * 1.18 - 0.35) * 0.045 + blink * 0.035;
+      mouthPivot.scale.set(1.0 + smilePulse * 0.65, 1.0 + smilePulse, 1.0);
+
+      // 3. Soft contact glow breathing inversely with bob height
+      contactGlowUniforms.uBobHeight.value = (bobY + 0.11) / 0.22;
+
+      controls.update();
+      composer.render();
+    }
+
+    // =========================================================================
+    // 14. RESIZE HANDLER
+    // =========================================================================
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const pr = Math.min(window.devicePixelRatio, 2);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(pr);
+      renderer.setSize(w, h);
+      composer.setPixelRatio(pr);
+      composer.setSize(w, h);
+      bloomPass.resolution.set(w, h);
+    });
+
+    animate();
+  </script>
+</body>
+</html>

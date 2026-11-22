@@ -1,0 +1,3006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hypercar</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #050608;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+
+    /* Compact Studio Controls UI */
+    #ui-wrap {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 20;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      user-select: none;
+    }
+
+    #ui-toggle {
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(12, 14, 18, 0.72);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: rgba(240, 244, 250, 0.9);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, border-color 0.2s, transform 0.2s;
+      padding: 0;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    }
+
+    #ui-toggle:hover {
+      background: rgba(24, 27, 34, 0.88);
+      border-color: rgba(255, 255, 255, 0.32);
+      transform: scale(1.05);
+    }
+
+    #ui-panel {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(12, 14, 18, 0.72);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
+      transition: opacity 0.25s ease, transform 0.25s ease, max-width 0.3s ease, padding 0.25s ease;
+      overflow: hidden;
+    }
+
+    #ui-panel.collapsed {
+      opacity: 0;
+      pointer-events: none;
+      max-width: 0;
+      padding-left: 0;
+      padding-right: 0;
+      border-width: 0;
+      transform: translateY(6px);
+    }
+
+    .ui-swatches {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .swatch {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.24);
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .swatch:hover {
+      transform: scale(1.16);
+      border-color: rgba(255, 255, 255, 0.75);
+    }
+
+    .swatch.active {
+      transform: scale(1.16);
+      border-color: #ffffff;
+      box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.22);
+    }
+
+    .ui-divider {
+      width: 1px;
+      height: 20px;
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    #door-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 13px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      color: #f2f4f8;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+    }
+
+    #door-btn:hover {
+      background: rgba(255, 255, 255, 0.16);
+      border-color: rgba(255, 255, 255, 0.35);
+    }
+
+    #door-btn.open {
+      background: rgba(210, 24, 38, 0.34);
+      border-color: rgba(255, 72, 88, 0.65);
+      color: #ffffff;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<div id="ui-wrap">
+  <button id="ui-toggle" title="Toggle Controls" aria-label="Toggle Controls">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="4" y1="7" x2="20" y2="7"></line>
+      <circle cx="9" cy="7" r="2.2" fill="currentColor"></circle>
+      <line x1="4" y1="17" x2="20" y2="17"></line>
+      <circle cx="15" cy="17" r="2.2" fill="currentColor"></circle>
+    </svg>
+  </button>
+  <div id="ui-panel">
+    <div class="ui-swatches" id="color-swatches">
+      <button class="swatch active" data-color="red" title="Candy Red" style="background:#9e0814"></button>
+      <button class="swatch" data-color="black" title="Stealth Black" style="background:#14171e"></button>
+      <button class="swatch" data-color="white" title="Arctic White" style="background:#e2e6ee"></button>
+      <button class="swatch" data-color="blue" title="Cobalt Blue" style="background:#0c4099"></button>
+      <button class="swatch" data-color="green" title="Emerald Green" style="background:#0a5438"></button>
+      <button class="swatch" data-color="gold" title="Solar Amber" style="background:#c46e0b"></button>
+      <button class="swatch" data-color="silver" title="Liquid Silver" style="background:#7e8794"></button>
+    </div>
+    <div class="ui-divider"></div>
+    <button id="door-btn">Open Doors</button>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+// ============================================================================
+// 1. DETERMINISTIC PRNG & MATH UTILITIES
+// ============================================================================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+const smootherstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * t * (t * (t * 6 - 15) + 10);
+};
+const gauss = (x, mu, sigma) => {
+  const d = (x - mu) / sigma;
+  return Math.exp(-0.5 * d * d);
+};
+
+// ============================================================================
+// 2. RENDERER, SCENE, CAMERA & CONTROLS
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance',
+  stencil: false
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.96;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x06070a);
+
+const camera = new THREE.PerspectiveCamera(34, window.innerWidth / window.innerHeight, 0.1, 140);
+camera.position.set(3.45, 1.24, 4.15);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.048;
+controls.enablePan = false;
+controls.minDistance = 2.85;
+controls.maxDistance = 10.8;
+controls.minPolarAngle = 0.14;
+controls.maxPolarAngle = Math.PI * 0.486;
+controls.rotateSpeed = 0.68;
+controls.zoomSpeed = 0.78;
+controls.target.set(0, 0.46, 0.05);
+controls.update();
+
+// ============================================================================
+// 3. PROCEDURAL STUDIO HDR ENVIRONMENT (STRIP SOFTBOXES + RED RIM)
+// ============================================================================
+function createStudioEnvironment() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  const envScene = new THREE.Scene();
+
+  const envDomeGeo = new THREE.SphereGeometry(28, 48, 32);
+  const envDomeMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {},
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float y = d.y;
+        vec3 floorCol = vec3(0.024, 0.026, 0.032);
+        vec3 horizonCol = vec3(0.36, 0.38, 0.42);
+        vec3 upperCol = vec3(0.045, 0.05, 0.065);
+        vec3 col = y < 0.0
+          ? mix(horizonCol * 0.48, floorCol, smoothstep(0.0, -0.32, y))
+          : mix(horizonCol, upperCol, smoothstep(0.0, 0.46, y));
+
+        // Dramatic red rim ambient band behind rear-left
+        float rimDir = max(0.0, dot(normalize(vec3(d.x, d.y * 0.7, d.z)), normalize(vec3(-0.62, 0.22, -0.75))));
+        col += vec3(1.6, 0.09, 0.07) * pow(rimDir, 6.0) * smoothstep(-0.1, 0.2, y);
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `
+  });
+  envScene.add(new THREE.Mesh(envDomeGeo, envDomeMat));
+
+  function addSoftbox(width, height, pos, target, colorRGB, intensity, feather = 0.24) {
+    const geo = new THREE.PlaneGeometry(width, height);
+    const mat = new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: {
+        uColor: { value: new THREE.Vector3(colorRGB[0], colorRGB[1], colorRGB[2]) },
+        uIntensity: { value: intensity },
+        uFeather: { value: feather }
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uColor;
+        uniform float uIntensity;
+        uniform float uFeather;
+        varying vec2 vUv;
+        void main() {
+          vec2 d = abs(vUv - 0.5) * 2.0;
+          float fx = smoothstep(1.0, 1.0 - uFeather, d.x);
+          float fy = smoothstep(1.0, 1.0 - uFeather, d.y);
+          float hot = 0.8 + 0.2 * (1.0 - dot(d, d) * 0.4);
+          gl_FragColor = vec4(uColor * uIntensity * fx * fy * hot, 1.0);
+        }
+      `
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(pos[0], pos[1], pos[2]);
+    mesh.lookAt(target[0], target[1], target[2]);
+    envScene.add(mesh);
+  }
+
+  // Main overhead longitudinal strip softbox (soft controlled highlight down hood, roof & rear)
+  addSoftbox(3.4, 18.0, [0, 9.5, 0.1], [0, 0, 0.1], [1.0, 0.99, 0.97], 2.5, 0.44);
+
+  // Twin parallel angled side strip softboxes
+  addSoftbox(2.0, 14.5, [7.2, 6.2, 0.4], [0, 0.5, 0.0], [0.95, 0.97, 1.0], 2.0, 0.42);
+  addSoftbox(1.9, 14.0, [-7.2, 6.0, 0.6], [0, 0.5, 0.0], [0.94, 0.96, 1.0], 1.7, 0.42);
+
+  // Low horizontal flank kickers gently sculpting the concave door channel & fender arches
+  addSoftbox(12.5, 1.35, [9.5, 1.75, 0.2], [0, 0.6, 0.2], [0.98, 0.98, 1.0], 1.5, 0.45);
+  addSoftbox(11.5, 1.25, [-9.5, 1.65, 0.6], [0, 0.6, 0.6], [0.96, 0.98, 1.0], 1.25, 0.45);
+
+  // Broad soft front studio fill card (lights nose, hood S-duct & front wheels without glare)
+  addSoftbox(9.8, 4.2, [1.4, 4.0, 10.8], [0, 0.5, 1.0], [1.0, 0.98, 0.96], 1.65, 0.48);
+
+  // Dramatic RED studio rim light strips (rear-left & rear-right)
+  addSoftbox(8.8, 2.4, [-5.8, 3.1, -8.8], [0, 0.6, -0.8], [1.0, 0.05, 0.04], 4.2, 0.40);
+  addSoftbox(6.5, 1.6, [4.4, 2.2, -9.6], [0, 0.5, -1.0], [1.0, 0.08, 0.06], 2.6, 0.42);
+
+  // Rear-overhead soft edge strip highlighting the carbon wing & red engine fins
+  addSoftbox(6.6, 1.2, [0.0, 7.0, -6.5], [0, 0.8, -1.2], [0.98, 0.99, 1.0], 2.0, 0.38);
+
+  const envRT = pmrem.fromScene(envScene, 0.028);
+  envDomeGeo.dispose();
+  envDomeMat.dispose();
+  pmrem.dispose();
+  return envRT.texture;
+}
+
+scene.environment = createStudioEnvironment();
+
+// Real-time studio lights (balanced key, cool fill, dramatic red rim, subtle overhead)
+const keyLight = new THREE.DirectionalLight(0xfffaf4, 1.42);
+keyLight.position.set(4.5, 8.4, 5.8);
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0xdce8ff, 0.72);
+fillLight.position.set(-6.5, 4.4, 3.2);
+scene.add(fillLight);
+
+const redRimLight = new THREE.SpotLight(0xff1420, 14.0, 22, Math.PI * 0.36, 0.72, 1.4);
+redRimLight.position.set(-4.2, 2.55, -5.8);
+redRimLight.target.position.set(0.0, 0.55, -0.6);
+scene.add(redRimLight);
+scene.add(redRimLight.target);
+
+const redRimLight2 = new THREE.DirectionalLight(0xff2028, 0.85);
+redRimLight2.position.set(3.2, 1.9, -6.5);
+scene.add(redRimLight2);
+
+const overheadStripLight = new THREE.PointLight(0xffffff, 2.2, 18, 1.7);
+overheadStripLight.position.set(0.0, 4.8, 0.3);
+scene.add(overheadStripLight);
+
+const hemiLight = new THREE.HemisphereLight(0xd8e0ec, 0x16141a, 0.44);
+scene.add(hemiLight);
+
+// ============================================================================
+// 4. PROCEDURAL CALIBRATED PBR TEXTURES
+// ============================================================================
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return c;
+}
+
+// 4A. Metallic Flake Normal + Roughness Map for Multi-Layer Candy-Red Paint
+function createFlakeTextures() {
+  const size = 256;
+  const rng = mulberry32(77123);
+
+  const normCanvas = makeCanvas(size, size);
+  const nCtx = normCanvas.getContext('2d');
+  const nImg = nCtx.createImageData(size, size);
+
+  const roughCanvas = makeCanvas(size, size);
+  const rCtx = roughCanvas.getContext('2d');
+  const rImg = rCtx.createImageData(size, size);
+
+  for (let i = 0; i < size * size; i++) {
+    const isFlake = rng() > 0.36;
+    let nx = 0, ny = 0, nz = 1;
+    let rough = 0.21;
+    if (isFlake) {
+      const a = rng() * Math.PI * 2;
+      const tilt = (0.04 + rng() * 0.15);
+      nx = Math.cos(a) * tilt;
+      ny = Math.sin(a) * tilt;
+      nz = Math.sqrt(Math.max(0.01, 1 - nx * nx - ny * ny));
+      rough = 0.12 + rng() * 0.14;
+    }
+    const idx = i * 4;
+    nImg.data[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+    nImg.data[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+    nImg.data[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+    nImg.data[idx + 3] = 255;
+
+    const rv = Math.round(rough * 255);
+    rImg.data[idx] = rv;
+    rImg.data[idx + 1] = rv;
+    rImg.data[idx + 2] = rv;
+    rImg.data[idx + 3] = 255;
+  }
+  nCtx.putImageData(nImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+
+  const normalMap = new THREE.CanvasTexture(normCanvas);
+  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+  normalMap.repeat.set(24, 24);
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping;
+  roughnessMap.repeat.set(24, 24);
+
+  return { normalMap, roughnessMap };
+}
+
+// 4B. Fine 2x2 Twill Woven Carbon Fiber (Albedo, Normal, Roughness, Anisotropy)
+function createCarbonFiberTextures() {
+  const size = 256;
+  const cells = 16;
+  const cellPx = size / cells;
+
+  const colC = makeCanvas(size, size);
+  const colCtx = colC.getContext('2d');
+  const colImg = colCtx.createImageData(size, size);
+
+  const normC = makeCanvas(size, size);
+  const normCtx = normC.getContext('2d');
+  const normImg = normCtx.createImageData(size, size);
+
+  const roughC = makeCanvas(size, size);
+  const roughCtx = roughC.getContext('2d');
+  const roughImg = roughCtx.createImageData(size, size);
+
+  const anisoC = makeCanvas(size, size);
+  const anisoCtx = anisoC.getContext('2d');
+  const anisoImg = anisoCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const gx = Math.floor(x / cellPx);
+      const gy = Math.floor(y / cellPx);
+      const fx = (x % cellPx) / cellPx;
+      const fy = (y % cellPx) / cellPx;
+
+      const phase = (gx + gy) % 4;
+      const horiz = phase < 2;
+
+      let shade, nx, ny, rough, ax, ay;
+      if (horiz) {
+        const across = Math.sin(fy * Math.PI);
+        const along = 0.65 + 0.35 * Math.sin((phase === 0 ? fx * 0.5 : 0.5 + fx * 0.5) * Math.PI);
+        const strands = 0.92 + 0.08 * Math.sin(fy * Math.PI * 10.0);
+        shade = (0.10 + 0.14 * across * along) * strands;
+        nx = Math.cos((phase === 0 ? fx * 0.5 : 0.5 + fx * 0.5) * Math.PI) * 0.25;
+        ny = Math.cos(fy * Math.PI) * 0.38;
+        rough = 0.23 + (1.0 - across) * 0.18;
+        ax = 1.0; ay = 0.0;
+      } else {
+        const across = Math.sin(fx * Math.PI);
+        const along = 0.65 + 0.35 * Math.sin((phase === 2 ? fy * 0.5 : 0.5 + fy * 0.5) * Math.PI);
+        const strands = 0.92 + 0.08 * Math.sin(fx * Math.PI * 10.0);
+        shade = (0.065 + 0.105 * across * along) * strands;
+        nx = Math.cos(fx * Math.PI) * 0.38;
+        ny = Math.cos((phase === 2 ? fy * 0.5 : 0.5 + fy * 0.5) * Math.PI) * 0.25;
+        rough = 0.28 + (1.0 - across) * 0.18;
+        ax = 0.0; ay = 1.0;
+      }
+
+      const nz = Math.sqrt(Math.max(0.1, 1.0 - nx * nx - ny * ny));
+      const idx = (y * size + x) * 4;
+
+      const cv = Math.round(clamp(shade, 0, 1) * 255);
+      colImg.data[idx] = cv;
+      colImg.data[idx + 1] = cv;
+      colImg.data[idx + 2] = Math.round(cv * 1.05);
+      colImg.data[idx + 3] = 255;
+
+      normImg.data[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+      normImg.data[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      normImg.data[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      normImg.data[idx + 3] = 255;
+
+      const rv = Math.round(clamp(rough, 0, 1) * 255);
+      roughImg.data[idx] = rv;
+      roughImg.data[idx + 1] = rv;
+      roughImg.data[idx + 2] = rv;
+      roughImg.data[idx + 3] = 255;
+
+      anisoImg.data[idx] = Math.round((ax * 0.5 + 0.5) * 255);
+      anisoImg.data[idx + 1] = Math.round((ay * 0.5 + 0.5) * 255);
+      anisoImg.data[idx + 2] = 225;
+      anisoImg.data[idx + 3] = 255;
+    }
+  }
+  colCtx.putImageData(colImg, 0, 0);
+  normCtx.putImageData(normImg, 0, 0);
+  roughCtx.putImageData(roughImg, 0, 0);
+  anisoCtx.putImageData(anisoImg, 0, 0);
+
+  const setup = (canvas, isSRGB) => {
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(15, 15);
+    tex.anisotropy = 8;
+    if (isSRGB) tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  };
+
+  return {
+    map: setup(colC, true),
+    normalMap: setup(normC, false),
+    roughnessMap: setup(roughC, false),
+    anisotropyMap: setup(anisoC, false)
+  };
+}
+
+// 4C. Linear Brushed Metal Texture
+function createBrushedMetalTextures() {
+  const w = 256, h = 256;
+  const rng = mulberry32(9911);
+  const c = makeCanvas(w, h);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#555';
+  ctx.fillRect(0, 0, w, h);
+  for (let y = 0; y < h; y++) {
+    const v = Math.floor(62 + rng() * 64);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(0, y, w, 1);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4, 4);
+  return tex;
+}
+
+// 4D. Cross-Drilled Radial Brushed Brake Disc Textures
+function createBrakeDiscTextures() {
+  const size = 512;
+  const half = size / 2;
+  const colC = makeCanvas(size, size);
+  const colCtx = colC.getContext('2d');
+  const bumpC = makeCanvas(size, size);
+  const bumpCtx = bumpC.getContext('2d');
+
+  colCtx.fillStyle = '#8d949d';
+  colCtx.fillRect(0, 0, size, size);
+  bumpCtx.fillStyle = '#909090';
+  bumpCtx.fillRect(0, 0, size, size);
+
+  const rng = mulberry32(4041);
+  for (let r = 80; r < 248; r += 1.2) {
+    const lum = Math.floor(128 + (rng() - 0.5) * 34 + Math.sin(r * 0.45) * 10);
+    colCtx.strokeStyle = `rgb(${lum},${lum + 2},${lum + 5})`;
+    colCtx.lineWidth = 1.3;
+    colCtx.beginPath();
+    colCtx.arc(half, half, r, 0, Math.PI * 2);
+    colCtx.stroke();
+
+    const bl = Math.floor(138 + (rng() - 0.5) * 40);
+    bumpCtx.strokeStyle = `rgb(${bl},${bl},${bl})`;
+    bumpCtx.lineWidth = 1.2;
+    bumpCtx.beginPath();
+    bumpCtx.arc(half, half, r, 0, Math.PI * 2);
+    bumpCtx.stroke();
+  }
+
+  colCtx.fillStyle = '#23262c';
+  colCtx.beginPath();
+  colCtx.arc(half, half, 128, 0, Math.PI * 2);
+  colCtx.fill();
+
+  const groups = 12;
+  for (let g = 0; g < groups; g++) {
+    const baseAngle = (g / groups) * Math.PI * 2;
+    for (let k = 0; k < 4; k++) {
+      const rr = 148 + k * 25;
+      const aa = baseAngle + k * 0.085;
+      const hx = half + Math.cos(aa) * rr;
+      const hy = half + Math.sin(aa) * rr;
+
+      colCtx.fillStyle = '#cdd4de';
+      colCtx.beginPath();
+      colCtx.arc(hx, hy, 6.4, 0, Math.PI * 2);
+      colCtx.fill();
+
+      colCtx.fillStyle = '#08090b';
+      colCtx.beginPath();
+      colCtx.arc(hx, hy, 4.9, 0, Math.PI * 2);
+      colCtx.fill();
+
+      bumpCtx.fillStyle = '#040404';
+      bumpCtx.beginPath();
+      bumpCtx.arc(hx, hy, 5.6, 0, Math.PI * 2);
+      bumpCtx.fill();
+    }
+  }
+
+  for (let b = 0; b < 10; b++) {
+    const a = (b / 10) * Math.PI * 2;
+    const bx = half + Math.cos(a) * 124;
+    const by = half + Math.sin(a) * 124;
+    colCtx.fillStyle = '#555b64';
+    colCtx.beginPath();
+    colCtx.arc(bx, by, 7.2, 0, Math.PI * 2);
+    colCtx.fill();
+    colCtx.fillStyle = '#181a1f';
+    colCtx.beginPath();
+    colCtx.arc(bx, by, 3.8, 0, Math.PI * 2);
+    colCtx.fill();
+  }
+
+  const map = new THREE.CanvasTexture(colC);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 8;
+  const bumpMap = new THREE.CanvasTexture(bumpC);
+  bumpMap.anisotropy = 8;
+  return { map, bumpMap };
+}
+
+// 4E. Low-Profile Tire Tread & Sidewall Procedural Maps (Strictly NO text/logos)
+function createTireTextures() {
+  const w = 1024, h = 512;
+  const bumpC = makeCanvas(w, h);
+  const bCtx = bumpC.getContext('2d');
+  const roughC = makeCanvas(w, h);
+  const rCtx = roughC.getContext('2d');
+
+  bCtx.fillStyle = '#b8b8b8';
+  bCtx.fillRect(0, 0, w, h);
+  rCtx.fillStyle = '#c4c4c4';
+  rCtx.fillRect(0, 0, w, h);
+
+  const rng = mulberry32(5512);
+  for (let i = 0; i < 6500; i++) {
+    const x = rng() * w;
+    const y = rng() * h;
+    const v = 165 + Math.floor(rng() * 35);
+    bCtx.fillStyle = `rgb(${v},${v},${v})`;
+    bCtx.fillRect(x, y, 2, 2);
+  }
+
+  const tTop = Math.floor(0.24 * h);
+  const tBot = Math.floor(0.76 * h);
+  const tH = tBot - tTop;
+
+  const grooves = [0.20, 0.42, 0.58, 0.80];
+  for (const g of grooves) {
+    const gy = tTop + g * tH;
+    bCtx.fillStyle = '#161616';
+    bCtx.fillRect(0, gy - 5.5, w, 11);
+    rCtx.fillStyle = '#efefef';
+    rCtx.fillRect(0, gy - 5.5, w, 11);
+  }
+
+  const pitches = 36;
+  const step = w / pitches;
+  bCtx.strokeStyle = '#1e1e1e';
+  bCtx.lineCap = 'round';
+  for (let i = -2; i < pitches + 2; i++) {
+    const x0 = i * step;
+
+    bCtx.lineWidth = 6.5;
+    bCtx.beginPath();
+    bCtx.moveTo(x0, tTop - 2);
+    bCtx.lineTo(x0 + step * 0.55, tTop + 0.19 * tH);
+    bCtx.stroke();
+
+    bCtx.beginPath();
+    bCtx.moveTo(x0 + step * 0.35, tBot + 2);
+    bCtx.lineTo(x0 + step * 0.90, tBot - 0.19 * tH);
+    bCtx.stroke();
+
+    bCtx.lineWidth = 4.2;
+    bCtx.beginPath();
+    bCtx.moveTo(x0 + step * 0.15, tTop + 0.22 * tH);
+    bCtx.lineTo(x0 + step * 0.62, tTop + 0.40 * tH);
+    bCtx.stroke();
+
+    bCtx.beginPath();
+    bCtx.moveTo(x0 + step * 0.52, tTop + 0.60 * tH);
+    bCtx.lineTo(x0 + step * 0.98, tTop + 0.78 * tH);
+    bCtx.stroke();
+
+    bCtx.lineWidth = 3.0;
+    bCtx.beginPath();
+    bCtx.moveTo(x0 + step * 0.2, tTop + 0.44 * tH);
+    bCtx.lineTo(x0 + step * 0.55, tTop + 0.56 * tH);
+    bCtx.stroke();
+  }
+
+  function drawSidewallBand(yStart, yEnd) {
+    const sh = yEnd - yStart;
+    rCtx.fillStyle = '#d8d8d8';
+    rCtx.fillRect(0, yStart + sh * 0.28, w, sh * 0.42);
+
+    bCtx.fillStyle = '#929292';
+    for (let x = 0; x < w; x += 6) {
+      bCtx.fillRect(x, yStart + sh * 0.32, 2.5, sh * 0.34);
+    }
+
+    const rings = [0.22, 0.29, 0.69, 0.78];
+    for (const rn of rings) {
+      const ry = yStart + sh * rn;
+      bCtx.fillStyle = '#e5e5e5';
+      bCtx.fillRect(0, ry - 1.5, w, 3);
+      rCtx.fillStyle = '#9e9e9e';
+      rCtx.fillRect(0, ry - 1.5, w, 3);
+    }
+
+    const notches = 48;
+    for (let i = 0; i < notches; i++) {
+      const nx = (i / notches) * w;
+      bCtx.fillStyle = '#686868';
+      bCtx.fillRect(nx, yStart + sh * 0.04, (w / notches) * 0.42, sh * 0.14);
+    }
+  }
+
+  drawSidewallBand(0, tTop);
+  drawSidewallBand(tBot, h);
+
+  const bumpMap = new THREE.CanvasTexture(bumpC);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.ClampToEdgeWrapping;
+  bumpMap.anisotropy = 8;
+
+  const roughnessMap = new THREE.CanvasTexture(roughC);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.ClampToEdgeWrapping;
+  roughnessMap.anisotropy = 8;
+
+  return { bumpMap, roughnessMap };
+}
+
+// 4F. Fine Hexagonal Carbon Grille Mesh Texture
+function createHexMeshTexture() {
+  const size = 256;
+  const c = makeCanvas(size, size);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#060709';
+  ctx.fillRect(0, 0, size, size);
+
+  ctx.strokeStyle = '#333840';
+  ctx.lineWidth = 3.2;
+  const r = 14;
+  const dx = r * 1.5;
+  const dy = r * Math.sqrt(3);
+  for (let row = -1; row < size / dy + 2; row++) {
+    for (let col = -1; col < size / dx + 2; col++) {
+      const cx = col * dx;
+      const cy = row * dy + (col % 2 === 0 ? 0 : dy * 0.5);
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2;
+        const px = cx + Math.cos(a) * (r * 0.88);
+        const py = cy + Math.sin(a) * (r * 0.88);
+        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(14, 4);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// ============================================================================
+// 5. CALIBRATED PBR MATERIALS
+// ============================================================================
+const flakeTex = createFlakeTextures();
+const carbonTex = createCarbonFiberTextures();
+const brushedTex = createBrushedMetalTextures();
+const brakeTex = createBrakeDiscTextures();
+const tireTex = createTireTextures();
+const hexMeshTex = createHexMeshTexture();
+
+// Multi-layer clearcoat paint (silk-smooth, zero pixel noise)
+const candyRedMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0x920410),
+  metalness: 0.42,
+  roughness: 0.28,
+  clearcoat: 0.72,
+  clearcoatRoughness: 0.095,
+  ior: 1.50,
+  reflectivity: 0.72,
+  sheen: 0.20,
+  sheenRoughness: 0.42,
+  sheenColor: new THREE.Color(0xe61a28),
+  envMapIntensity: 0.84
+});
+
+// Ultra-clean gloss piano-black trim (roof arch, engine louvers, rear wing, splitter, side skirts — zero weave noise)
+const glossCarbonMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0x101218),
+  roughness: 0.24,
+  metalness: 0.22,
+  clearcoat: 0.58,
+  clearcoatRoughness: 0.12,
+  ior: 1.50,
+  envMapIntensity: 0.82
+});
+
+// Clean satin stealth-black structural trim (diffuser, side intakes, structural ducts — zero noise)
+const satinCarbonMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0x151820),
+  roughness: 0.48,
+  metalness: 0.18,
+  clearcoat: 0.14,
+  clearcoatRoughness: 0.28,
+  envMapIntensity: 0.65
+});
+
+// Deep matte black interior & chassis cavity material
+const darkCavityMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x0a0b0e),
+  roughness: 0.86,
+  metalness: 0.08,
+  side: THREE.DoubleSide
+});
+
+// Clean matte-charcoal intake/transom grille material (zero high-frequency aliasing)
+const grilleMeshMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x14171e),
+  roughness: 0.62,
+  metalness: 0.35,
+  side: THREE.DoubleSide
+});
+
+// Smoked canopy glass (deep dark tint with restrained reflections)
+const smokedGlassMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0x05070c),
+  roughness: 0.075,
+  metalness: 0.08,
+  transparent: true,
+  opacity: 0.90,
+  ior: 1.50,
+  clearcoat: 0.62,
+  clearcoatRoughness: 0.065,
+  reflectivity: 0.65,
+  envMapIntensity: 0.78
+});
+
+// Clear polycarbonate headlight lens cover
+const clearLensMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0xdce6f5),
+  roughness: 0.06,
+  metalness: 0.04,
+  transparent: true,
+  opacity: 0.24,
+  ior: 1.50,
+  clearcoat: 0.65,
+  clearcoatRoughness: 0.05,
+  envMapIntensity: 0.95
+});
+
+// Brushed titanium / billet aluminum
+const brushedMetalMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0xbac2cc),
+  metalness: 0.90,
+  roughness: 0.34,
+  roughnessMap: brushedTex,
+  bumpMap: brushedTex,
+  bumpScale: 0.003,
+  anisotropy: 0.72,
+  envMapIntensity: 0.88
+});
+
+// Heat-tinted exhaust inner barrel
+const exhaustInnerMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x16141a),
+  emissive: new THREE.Color(0xff380a),
+  emissiveIntensity: 0.0,
+  metalness: 0.82,
+  roughness: 0.45
+});
+
+// Mirror glass
+const mirrorGlassMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0xdce4ee),
+  metalness: 1.0,
+  roughness: 0.03,
+  envMapIntensity: 1.8
+});
+
+// Matte-black forged aluminum wheels
+const matteBlackWheelMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0x141518),
+  metalness: 0.72,
+  roughness: 0.36,
+  clearcoat: 0.15,
+  clearcoatRoughness: 0.42,
+  envMapIntensity: 1.25
+});
+
+// Calibrated satin-matte performance tire rubber
+const tireRubberMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0x16171a),
+  roughness: 0.76,
+  roughnessMap: tireTex.roughnessMap,
+  bumpMap: tireTex.bumpMap,
+  bumpScale: 0.011,
+  metalness: 0.02,
+  sheen: 0.18,
+  sheenRoughness: 0.65,
+  sheenColor: new THREE.Color(0x2d3038),
+  envMapIntensity: 0.75
+});
+
+// Cross-drilled brake rotor material
+const brakeDiscMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0xd0d6de),
+  map: brakeTex.map,
+  bumpMap: brakeTex.bumpMap,
+  bumpScale: 0.009,
+  metalness: 0.88,
+  roughness: 0.26,
+  anisotropy: 0.5,
+  envMapIntensity: 1.35
+});
+
+// Glossy candy-red monoblock brake calipers
+const caliperRedMat = new THREE.MeshPhysicalMaterial({
+  color: new THREE.Color(0xc80914),
+  metalness: 0.35,
+  roughness: 0.18,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.04,
+  envMapIntensity: 1.4
+});
+
+// Deep ruby-crimson emissive taillight materials (calibrated for ACES rich crimson bloom)
+const tailOuterRingMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x3a0004),
+  emissive: new THREE.Color(0xe60008),
+  emissiveIntensity: 0.4,
+  roughness: 0.12,
+  metalness: 0.1,
+  toneMapped: false
+});
+
+const tailInnerRingMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x460006),
+  emissive: new THREE.Color(0xd8000a),
+  emissiveIntensity: 0.25,
+  roughness: 0.12,
+  metalness: 0.1,
+  toneMapped: false
+});
+
+const rainLightMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x320003),
+  emissive: new THREE.Color(0xe6000a),
+  emissiveIntensity: 0.2,
+  roughness: 0.2,
+  toneMapped: false
+});
+
+// Crisp ice-white LED headlight materials (animated fade-on during engine start)
+const headlightDRLMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x181c22),
+  emissive: new THREE.Color(0xeef6ff),
+  emissiveIntensity: 0.0,
+  roughness: 0.1,
+  toneMapped: false
+});
+
+const headlightProjMat = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0x141820),
+  emissive: new THREE.Color(0xd8ecff),
+  emissiveIntensity: 0.0,
+  roughness: 0.08,
+  toneMapped: false
+});
+
+// ============================================================================
+// 6. SEAMLESS STUDIO BACKDROP (SOFT WHITE-TO-BLACK) & GLOSSY REFLECTIVE FLOOR
+// ============================================================================
+const backdropGeo = new THREE.SphereGeometry(54, 64, 48);
+const backdropMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  depthWrite: false,
+  uniforms: {},
+  vertexShader: /* glsl */ `
+    varying vec3 vWorldPos;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    varying vec3 vWorldPos;
+    void main() {
+      vec3 dir = normalize(vWorldPos);
+      // Seamless soft white-to-black studio cyclorama sweep:
+      // Luminous soft studio white-silver glow rising smoothly from horizon
+      // and fading gracefully upward into rich charcoal and deep studio black.
+      float elev = max(0.0, dir.y);
+      float coveGlow = exp(-pow(elev * 2.55, 1.35));
+      float upperSweep = exp(-pow(elev * 1.15, 1.25));
+
+      float radialGrad = 0.74 + 0.26 * smoothstep(-0.85, 0.75, -dir.z * 0.55 + dir.x * 0.35);
+
+      vec3 softWhite  = vec3(0.76, 0.78, 0.82);
+      vec3 midGrey    = vec3(0.15, 0.165, 0.195);
+      vec3 deepBlack  = vec3(0.010, 0.012, 0.016);
+
+      vec3 col = mix(deepBlack, midGrey, upperSweep * radialGrad);
+      col = mix(col, softWhite, pow(coveGlow, 1.35) * 0.82 * radialGrad);
+
+      // Gentle soft-charcoal grounding right below horizon so floor blends effortlessly
+      vec3 seamCol = vec3(0.24, 0.255, 0.28) * radialGrad;
+      col = mix(seamCol, col, smoothstep(-0.04, 0.045, dir.y));
+
+      // Subtle warm crimson rim wash on dark rear-left studio wall
+      float redWash = pow(max(0.0, dot(normalize(vec3(dir.x, dir.y * 0.6, dir.z)), normalize(vec3(-0.65, 0.16, -0.75)))), 5.0);
+      col += vec3(0.24, 0.012, 0.016) * redWash * smoothstep(0.65, 0.02, elev);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+});
+scene.add(new THREE.Mesh(backdropGeo, backdropMat));
+
+// Real-time Planar Reflection Target & Mirror Camera
+const reflSize = 1024;
+const reflectionRT = new THREE.WebGLRenderTarget(reflSize, reflSize, {
+  type: THREE.HalfFloatType,
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  format: THREE.RGBAFormat,
+  depthBuffer: true
+});
+const reflectionCamera = new THREE.PerspectiveCamera();
+const reflMatrix = new THREE.Matrix4();
+const biasMatrix = new THREE.Matrix4().set(
+  0.5, 0.0, 0.0, 0.5,
+  0.0, 0.5, 0.0, 0.5,
+  0.0, 0.0, 0.5, 0.5,
+  0.0, 0.0, 0.0, 1.0
+);
+
+// Glossy dark gradient studio floor with distance-blurred planar reflection, Fresnel,
+// soft contact shadow, and seamless horizon merge into the white-to-black studio cove
+const floorMat = new THREE.ShaderMaterial({
+  uniforms: {
+    tReflection: { value: reflectionRT.texture },
+    uReflMatrix: { value: reflMatrix },
+    uCamPos: { value: camera.position },
+    uTailGlow: { value: 0.35 },
+    uHeadGlow: { value: 0.0 },
+    uTexelSize: { value: new THREE.Vector2(1 / reflSize, 1 / reflSize) }
+  },
+  vertexShader: /* glsl */ `
+    uniform mat4 uReflMatrix;
+    varying vec3 vWorldPos;
+    varying vec4 vReflUv;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      vReflUv = uReflMatrix * wp;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tReflection;
+    uniform vec3 uCamPos;
+    uniform float uTailGlow;
+    uniform float uHeadGlow;
+    uniform vec2 uTexelSize;
+
+    varying vec3 vWorldPos;
+    varying vec4 vReflUv;
+
+    float sdRoundBox(vec2 p, vec2 b, float r) {
+      vec2 q = abs(p) - b + r;
+      return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+    }
+
+    float hash12(vec2 p) {
+      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
+
+    void main() {
+      vec2 p = vWorldPos.xz;
+      float distFromCenter = length(p * vec2(1.12, 0.72));
+
+      // Dark gradient studio floor: soft lit charcoal pool under car fading seamlessly to infinity cove
+      vec3 centerCol  = vec3(0.056, 0.060, 0.070);
+      vec3 midCol     = vec3(0.025, 0.028, 0.035);
+      vec3 floorBase  = mix(centerCol, midCol, smoothstep(0.6, 7.5, distFromCenter));
+
+      // Soft multi-layer contact shadow under chassis & all 4 tire contact patches
+      float dChassis = sdRoundBox(p - vec2(0.0, -0.02), vec2(0.95, 2.24), 0.42);
+      float wideAO   = 1.0 - 0.64 * exp(-max(0.0, dChassis + 0.12) * 1.65);
+      float tightAO  = 1.0 - 0.88 * (1.0 - smoothstep(-0.22, 0.38, dChassis));
+
+      float tFL = length((p - vec2(-0.855,  1.34)) / vec2(0.18, 0.30));
+      float tFR = length((p - vec2( 0.855,  1.34)) / vec2(0.18, 0.30));
+      float tRL = length((p - vec2(-0.850, -1.38)) / vec2(0.22, 0.33));
+      float tRR = length((p - vec2( 0.850, -1.38)) / vec2(0.22, 0.33));
+      float tireAO = 1.0;
+      tireAO *= mix(0.05, 1.0, smoothstep(0.45, 1.55, tFL));
+      tireAO *= mix(0.05, 1.0, smoothstep(0.45, 1.55, tFR));
+      tireAO *= mix(0.04, 1.0, smoothstep(0.45, 1.55, tRL));
+      tireAO *= mix(0.04, 1.0, smoothstep(0.45, 1.55, tRR));
+
+      float shadowFactor = clamp(wideAO * mix(0.20, 1.0, tightAO) * tireAO, 0.04, 1.0);
+
+      // Planar glossy reflection with distance-based soft studio blur
+      vec2 uv = vReflUv.xy / max(0.0001, vReflUv.w);
+      float blurRad = mix(1.1, 7.2, smoothstep(0.0, 4.2, max(0.0, dChassis)));
+      vec2 texel = uTexelSize * blurRad;
+
+      vec3 refl = texture2D(tReflection, uv).rgb * 0.24;
+      refl += texture2D(tReflection, uv + vec2( 1.0,  0.0) * texel).rgb * 0.11;
+      refl += texture2D(tReflection, uv + vec2(-1.0,  0.0) * texel).rgb * 0.11;
+      refl += texture2D(tReflection, uv + vec2( 0.0,  1.0) * texel).rgb * 0.11;
+      refl += texture2D(tReflection, uv + vec2( 0.0, -1.0) * texel).rgb * 0.11;
+      refl += texture2D(tReflection, uv + vec2( 0.72,  0.72) * texel * 1.45).rgb * 0.08;
+      refl += texture2D(tReflection, uv + vec2(-0.72,  0.72) * texel * 1.45).rgb * 0.08;
+      refl += texture2D(tReflection, uv + vec2( 0.72, -0.72) * texel * 1.45).rgb * 0.08;
+      refl += texture2D(tReflection, uv + vec2(-0.72, -0.72) * texel * 1.45).rgb * 0.08;
+
+      vec3 V = normalize(uCamPos - vWorldPos);
+      float ndotv = clamp(V.y, 0.0, 1.0);
+      float fresnel = 0.06 + 0.34 * pow(1.0 - ndotv, 3.2);
+      float reflMask = smoothstep(20.0, 2.2, distFromCenter);
+      float reflStrength = fresnel * reflMask * mix(0.28, 0.82, shadowFactor);
+
+      // Dynamic ruby taillight & cool-white headlight floor bounce
+      vec2 rearL = p - vec2(-0.56, -2.55);
+      vec2 rearR = p - vec2( 0.56, -2.55);
+      float tailPool = exp(-dot(rearL * vec2(0.85, 0.52), rearL * vec2(0.85, 0.52)) * 1.2)
+                     + exp(-dot(rearR * vec2(0.85, 0.52), rearR * vec2(0.85, 0.52)) * 1.2);
+      vec3 tailBounce = vec3(0.45, 0.015, 0.02) * tailPool * uTailGlow * 0.24;
+
+      vec2 frontL = p - vec2(-0.62, 3.35);
+      vec2 frontR = p - vec2( 0.62, 3.35);
+      float headPool = exp(-dot(frontL * vec2(0.75, 0.32), frontL * vec2(0.75, 0.32)) * 0.9)
+                     + exp(-dot(frontR * vec2(0.75, 0.32), frontR * vec2(0.75, 0.32)) * 0.9);
+      vec3 headBounce = vec3(0.22, 0.26, 0.32) * headPool * uHeadGlow * 0.22;
+
+      float rimPool = exp(-dot((p - vec2(-1.8, -2.2)) * 0.35, (p - vec2(-1.8, -2.2)) * 0.35));
+      vec3 rimBounce = vec3(0.11, 0.006, 0.008) * rimPool;
+
+      vec3 col = floorBase * shadowFactor + refl * reflStrength + tailBounce + headBounce + rimBounce;
+
+      // Seamless fade into the soft white-to-grey studio cyclorama horizon at far distance
+      vec3 dirH = normalize(vWorldPos);
+      float radialGrad = 0.74 + 0.26 * smoothstep(-0.85, 0.75, -dirH.z * 0.55 + dirH.x * 0.35);
+      vec3 coveEdgeCol = vec3(0.24, 0.255, 0.28) * radialGrad;
+      float edgeBlend = smoothstep(10.0, 44.0, length(p));
+      col = mix(col, coveEdgeCol, edgeBlend);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+});
+const floorGeo = new THREE.CircleGeometry(52, 96);
+floorGeo.rotateX(-Math.PI / 2);
+const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+floorMesh.position.y = 0.0;
+scene.add(floorMesh);
+
+// ============================================================================
+// 7. ANALYTIC PARAMETRIC SURFACE LOFT ENGINE (AUTO-OUTWARD GUARANTEED)
+// ============================================================================
+/**
+ * Evaluates a continuous parametric surface P(u, v) and computes true analytic
+ * surface normals directly from continuous partial derivatives dP/du × dP/dv.
+ * Supports:
+ *   - outwardHint: [hx, hy, hz] — automatically ensures average normal faces +hint
+ *   - outwardFromCentroid: true — for closed cross-sections (tubes/airfoils/rings)
+ *   - mirrorX: true — generates exact symmetric left counterpart with flipped winding
+ */
+function buildAnalyticSurface(evalFn, uSegs, vSegs, opts = {}) {
+  const {
+    flipNormal = false,
+    outwardHint = null,
+    outwardFromCentroid = false,
+    uvScaleU = 1.0,
+    uvScaleV = 1.0,
+    mirrorX = false,
+    sideSign = 1
+  } = opts;
+
+  const eps = 1e-4;
+  const p0 = new THREE.Vector3();
+  const pu1 = new THREE.Vector3();
+  const pu2 = new THREE.Vector3();
+  const pv1 = new THREE.Vector3();
+  const pv2 = new THREE.Vector3();
+  const du = new THREE.Vector3();
+  const dv = new THREE.Vector3();
+  const n = new THREE.Vector3();
+
+  // Compute right-side base vertices & analytic normals once
+  const vertCount = (uSegs + 1) * (vSegs + 1);
+  const basePos = new Float32Array(vertCount * 3);
+  const baseNor = new Float32Array(vertCount * 3);
+  const baseUv  = new Float32Array(vertCount * 2);
+
+  let cx = 0, cy = 0, cz = 0;
+  for (let iu = 0; iu <= uSegs; iu++) {
+    const u = iu / uSegs;
+    const uA = Math.max(0, u - eps);
+    const uB = Math.min(1, u + eps);
+    const invDU = 1.0 / (uB - uA);
+
+    for (let iv = 0; iv <= vSegs; iv++) {
+      const v = iv / vSegs;
+      const vA = Math.max(0, v - eps);
+      const vB = Math.min(1, v + eps);
+      const invDV = 1.0 / (vB - vA);
+
+      evalFn(u, v, p0);
+      evalFn(uA, v, pu1);
+      evalFn(uB, v, pu2);
+      evalFn(u, vA, pv1);
+      evalFn(u, vB, pv2);
+
+      du.subVectors(pu2, pu1).multiplyScalar(invDU);
+      dv.subVectors(pv2, pv1).multiplyScalar(invDV);
+      n.crossVectors(du, dv);
+
+      if (n.lengthSq() < 1e-12) {
+        const uAlt = clamp(u + (u < 0.5 ? 0.008 : -0.008), 0, 1);
+        const vAlt = clamp(v + (v < 0.5 ? 0.008 : -0.008), 0, 1);
+        evalFn(Math.max(0, uAlt - eps), vAlt, pu1);
+        evalFn(Math.min(1, uAlt + eps), vAlt, pu2);
+        evalFn(uAlt, Math.max(0, vAlt - eps), pv1);
+        evalFn(uAlt, Math.min(1, vAlt + eps), pv2);
+        du.subVectors(pu2, pu1);
+        dv.subVectors(pv2, pv1);
+        n.crossVectors(du, dv);
+      }
+      if (n.lengthSq() < 1e-12) n.set(0, 1, 0);
+      else n.normalize();
+
+      const idx = iu * (vSegs + 1) + iv;
+      basePos[idx * 3]     = p0.x;
+      basePos[idx * 3 + 1] = p0.y;
+      basePos[idx * 3 + 2] = p0.z;
+      cx += p0.x; cy += p0.y; cz += p0.z;
+
+      baseNor[idx * 3]     = n.x;
+      baseNor[idx * 3 + 1] = n.y;
+      baseNor[idx * 3 + 2] = n.z;
+
+      baseUv[idx * 2]     = u * uvScaleU;
+      baseUv[idx * 2 + 1] = v * uvScaleV;
+    }
+  }
+
+  // Determine exact outward orientation mathematically (never accidentally culled!)
+  let doFlip = flipNormal;
+  if (outwardHint) {
+    let dotSum = 0;
+    const [hx, hy, hz] = outwardHint;
+    for (let i = 0; i < vertCount; i++) {
+      dotSum += baseNor[i * 3] * hx + baseNor[i * 3 + 1] * hy + baseNor[i * 3 + 2] * hz;
+    }
+    if (dotSum < 0) doFlip = true;
+  } else if (outwardFromCentroid) {
+    cx /= vertCount; cy /= vertCount; cz /= vertCount;
+    let dotSum = 0;
+    for (let i = 0; i < vertCount; i++) {
+      const rx = basePos[i * 3] - cx;
+      const ry = basePos[i * 3 + 1] - cy;
+      const rz = basePos[i * 3 + 2] - cz;
+      dotSum += rx * baseNor[i * 3] + ry * baseNor[i * 3 + 1] + rz * baseNor[i * 3 + 2];
+    }
+    if (dotSum < 0) doFlip = true;
+  }
+
+  function emitSide(signX) {
+    const positions = new Float32Array(vertCount * 3);
+    const normals   = new Float32Array(vertCount * 3);
+    const uvs       = new Float32Array(baseUv);
+    const nSign     = doFlip ? -1 : 1;
+
+    for (let i = 0; i < vertCount; i++) {
+      positions[i * 3]     = basePos[i * 3] * signX;
+      positions[i * 3 + 1] = basePos[i * 3 + 1];
+      positions[i * 3 + 2] = basePos[i * 3 + 2];
+
+      normals[i * 3]     = baseNor[i * 3] * nSign * signX;
+      normals[i * 3 + 1] = baseNor[i * 3 + 1] * nSign;
+      normals[i * 3 + 2] = baseNor[i * 3 + 2] * nSign;
+    }
+
+    // Triangle (a, b, d) has geometric normal (b - a) × (d - a) = +du × dv.
+    // Flip triangle winding whenever doFlip XOR (signX < 0).
+    const invertWinding = (doFlip ? 1 : 0) ^ (signX < 0 ? 1 : 0);
+    const indices = new Uint32Array(uSegs * vSegs * 6);
+    let ptr = 0;
+    for (let iu = 0; iu < uSegs; iu++) {
+      for (let iv = 0; iv < vSegs; iv++) {
+        const a = iu * (vSegs + 1) + iv;
+        const b = (iu + 1) * (vSegs + 1) + iv;
+        const c = (iu + 1) * (vSegs + 1) + (iv + 1);
+        const d = iu * (vSegs + 1) + (iv + 1);
+        if (!invertWinding) {
+          indices[ptr++] = a; indices[ptr++] = b; indices[ptr++] = d;
+          indices[ptr++] = b; indices[ptr++] = c; indices[ptr++] = d;
+        } else {
+          indices[ptr++] = a; indices[ptr++] = d; indices[ptr++] = b;
+          indices[ptr++] = b; indices[ptr++] = d; indices[ptr++] = c;
+        }
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+    return geo;
+  }
+
+  if (!mirrorX) return emitSide(sideSign);
+  return mergeSimpleGeos([emitSide(1), emitSide(-1)]);
+}
+
+function mergeSimpleGeos(geos) {
+  let totalVerts = 0;
+  let totalIdx = 0;
+  for (const g of geos) {
+    totalVerts += g.attributes.position.count;
+    totalIdx += g.index.count;
+  }
+  const pos = new Float32Array(totalVerts * 3);
+  const nor = new Float32Array(totalVerts * 3);
+  const uvs = new Float32Array(totalVerts * 2);
+  const idx = new Uint32Array(totalIdx);
+
+  let vOff = 0;
+  let iOff = 0;
+  for (const g of geos) {
+    pos.set(g.attributes.position.array, vOff * 3);
+    nor.set(g.attributes.normal.array, vOff * 3);
+    uvs.set(g.attributes.uv.array, vOff * 2);
+    const ix = g.index.array;
+    for (let k = 0; k < ix.length; k++) idx[iOff + k] = ix[k] + vOff;
+    vOff += g.attributes.position.count;
+    iOff += ix.length;
+    g.dispose();
+  }
+
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  out.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  out.setIndex(new THREE.BufferAttribute(idx, 1));
+  return out;
+}
+
+// ============================================================================
+// 8. HYPERCAR MASTER PARAMETRIC CURVES & SEAMLESS BODY GEOMETRY
+// ============================================================================
+const Z_FRONT_AXLE = 1.34;
+const Y_FRONT_AXLE = 0.345;
+const R_FRONT_TIRE = 0.345;
+const R_FRONT_ARCH = 0.382;
+const F_ARCH_T0 = -0.18;
+const F_ARCH_T1 = Math.PI + 0.18;
+const Z_F_ARCH_FRONT = Z_FRONT_AXLE + Math.cos(F_ARCH_T0) * R_FRONT_ARCH; // ~+1.716
+const Z_F_ARCH_REAR  = Z_FRONT_AXLE + Math.cos(F_ARCH_T1) * R_FRONT_ARCH; // ~+0.964
+
+const Z_REAR_AXLE = -1.38;
+const Y_REAR_AXLE = 0.365;
+const R_REAR_TIRE = 0.365;
+const R_REAR_ARCH = 0.402;
+const R_ARCH_T0 = -0.18;
+const R_ARCH_T1 = Math.PI + 0.18;
+const Z_R_ARCH_FRONT = Z_REAR_AXLE + Math.cos(R_ARCH_T0) * R_REAR_ARCH; // ~-0.984
+const Z_R_ARCH_REAR  = Z_REAR_AXLE + Math.cos(R_ARCH_T1) * R_REAR_ARCH; // ~-1.776
+
+// Shared master fender shoulder / crest curves
+function fenderCrestY(z) {
+  const noseRise = smoothstep(2.35, 1.48, z);
+  const base = 0.255 + 0.462 * noseRise;
+  const frontPeak = 0.092 * gauss(z, 1.33, 0.40);
+  const waistDip = -0.052 * gauss(z, 0.38, 0.44);
+  const rearHaunch = 0.168 * gauss(z, -1.32, 0.60);
+  const tailLift = 0.068 * smoothstep(-0.7, -2.30, z);
+  return base + frontPeak + waistDip + rearHaunch + tailLift;
+}
+
+function fenderCrestX(z) {
+  const noseTaper = smoothstep(2.36, 1.72, z);
+  const base = 0.40 + 0.415 * noseTaper;
+  const frontSwell = 0.042 * gauss(z, 1.33, 0.44);
+  const waistIn = -0.025 * gauss(z, 0.42, 0.40);
+  const rearSwell = 0.095 * gauss(z, -1.32, 0.66);
+  const tailIn = -0.082 * smoothstep(-1.55, -2.32, z);
+  return base + frontSwell + waistIn + rearSwell + tailIn;
+}
+
+function hoodCenterY(z) {
+  const t = clamp((2.34 - z) / (2.34 - 0.85), 0, 1);
+  return 0.248 + 0.445 * Math.pow(t, 0.72) + 0.024 * Math.sin(t * Math.PI);
+}
+
+// Root groups: carRoot holds everything; chassisGroup holds sprung body
+const carRoot = new THREE.Group();
+scene.add(carRoot);
+
+const chassisGroup = new THREE.Group();
+carRoot.add(chassisGroup);
+
+function addPart(geo, mat, parent = chassisGroup) {
+  const m = new THREE.Mesh(geo, mat);
+  parent.add(m);
+  return m;
+}
+
+// ----------------------------------------------------------------------------
+// 8A. UNIFIED SMOOTH SCULPTED BONNET, LONG NOSE & CLEAN FRONT BUMPER
+// ----------------------------------------------------------------------------
+function evalHoodSurface(u, v, out) {
+  // u: 0 = sleek curved nose leading edge -> 1 = windshield cowl (z = +0.84)
+  // v: 0 = centerline (x = 0) -> 1 = front fender crest
+  const zFront = 2.34 - 0.16 * v * v;
+  const z = lerp(zFront, 0.84, u);
+  const x = fenderCrestX(z) * v;
+
+  const yCenter = hoodCenterY(z);
+  const yCrest = fenderCrestY(z);
+
+  // Pure, unbroken sculptural bonnet: subtle central power-dome spine flowing
+  // smoothly into muscular front fender crests (zero jagged vents or emblems)
+  const spineCrown = 0.015 * Math.pow(1.0 - v, 2.2) * Math.sin(u * Math.PI);
+  const smoothValley = -0.024 * Math.sin(v * Math.PI) * smoothstep(0.06, 0.42, u) * smoothstep(1.0, 0.72, u);
+  const y = lerp(yCenter, yCrest, Math.pow(v, 1.52)) + spineCrown + smoothValley;
+  out.set(x, y, z);
+}
+
+{
+  // Unbroken, glass-smooth sculpted bonnet & long nose
+  const hoodGeo = buildAnalyticSurface(evalHoodSurface, 60, 30, {
+    mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 1.5, uvScaleV: 0.9
+  });
+  addPart(hoodGeo, candyRedMat);
+
+  // Windshield base gloss-black cowl panel sealing hood cleanly to cockpit base
+  const cowlGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(0.87, 0.76, u);
+    const x = lerp(0.0, fenderCrestX(z) - 0.04, v);
+    const y = lerp(hoodCenterY(0.85) - 0.008, fenderCrestY(z) + 0.008, Math.pow(v, 1.5)) + u * 0.024;
+    out.set(x, y, z);
+  }, 12, 18, { mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 0.25, uvScaleV: 1.0 });
+  addPart(cowlGeo, glossCarbonMat);
+
+  // Seamless rounded nose bumper apron locked edge-to-edge to evalHoodSurface(0, u)
+  const tmpLead = new THREE.Vector3();
+  const noseApronGeo = buildAnalyticSurface((u, v, out) => {
+    // u: 0 = nose center -> 1 = nose outer corner; v: 0 = hood leading edge -> 1 = upper grille lip
+    evalHoodSurface(0.0, u, tmpLead);
+    const roundFwd = 0.024 * Math.sin(v * Math.PI * 0.85);
+    const tuckBack = -0.055 * Math.pow(v, 1.7);
+    const yLip = lerp(0.205, 0.225, u * u);
+    const xOut = tmpLead.x * (1.0 + 0.14 * Math.pow(v, 1.2) * u);
+    const y = lerp(tmpLead.y, yLip, v) + 0.012 * Math.sin(v * Math.PI);
+    const z = tmpLead.z + roundFwd + tuckBack;
+    out.set(xOut, y, z);
+  }, 36, 16, { mirrorX: true, outwardHint: [0, 0.2, 1], uvScaleU: 1.0, uvScaleV: 0.25 });
+  addPart(noseApronGeo, candyRedMat);
+
+  // Clean recessed dark front radiator grille neatly framing the lower intake mouth
+  const frontGrilleGeo = buildAnalyticSurface((u, v, out) => {
+    const x = lerp(0.0, 0.82, u);
+    const y = lerp(0.095, 0.255, v);
+    const z = 2.27 - 0.28 * u * u - 0.045 * (1.0 - v);
+    out.set(x, y, z);
+  }, 28, 10, { mirrorX: true, outwardHint: [0, 0, 1], uvScaleU: 1.2, uvScaleV: 0.35 });
+  addPart(frontGrilleGeo, grilleMeshMat);
+
+  // Subtle horizontal black aero vane inside the recessed front grille
+  const frontVaneGeo = buildAnalyticSurface((u, v, out) => {
+    const x = lerp(0.0, 0.78, u);
+    const z = 2.29 - 0.26 * u * u - v * 0.07;
+    const y = 0.155 + (v - 0.5) * 0.006;
+    out.set(x, y, z);
+  }, 24, 4, { mirrorX: true, outwardHint: [0, 1, 0.3] });
+  addPart(frontVaneGeo, glossCarbonMat);
+}
+
+// ----------------------------------------------------------------------------
+// 8B. FLOWING FRONT FENDER ARCHES & SEAMLESS FRONT CORNER CHEEKS
+// ----------------------------------------------------------------------------
+{
+  function frontFenderEval(u, v, out) {
+    const theta = lerp(F_ARCH_T0, F_ARCH_T1, u);
+    const zLip = Z_FRONT_AXLE + Math.cos(theta) * R_FRONT_ARCH;
+    const yLip = Math.max(0.105, Y_FRONT_AXLE + Math.sin(theta) * R_FRONT_ARCH);
+    const xLip = 1.012 - 0.030 * Math.pow(Math.cos(theta), 2.0);
+
+    const zCrest = lerp(Z_F_ARCH_FRONT, Z_F_ARCH_REAR, u);
+    const xCrest = fenderCrestX(zCrest);
+    const yCrest = fenderCrestY(zCrest);
+
+    if (v < 0.15) {
+      const t = v / 0.15;
+      const r = lerp(R_FRONT_ARCH - 0.005, R_FRONT_ARCH, t);
+      const x = lerp(xLip - 0.052, xLip, smoothstep(0, 1, t));
+      const y = Math.max(0.10, Y_FRONT_AXLE + Math.sin(theta) * r);
+      const z = Z_FRONT_AXLE + Math.cos(theta) * r;
+      out.set(x, y, z);
+    } else {
+      const t = (v - 0.15) / 0.85;
+      const ts = smoothstep(0, 1, t);
+      const z = lerp(zLip, zCrest, ts);
+      const bulgeX = 0.052 * Math.sin(t * Math.PI) * (0.65 + 0.35 * Math.sin(theta));
+      const bulgeY = 0.038 * Math.sin(t * Math.PI) * Math.max(0, Math.sin(theta));
+      const x = lerp(xLip, xCrest, Math.pow(t, 1.35)) + bulgeX;
+      const y = lerp(yLip, yCrest, Math.pow(t, 0.85)) + bulgeY;
+      out.set(x, y, z);
+    }
+  }
+
+  const frontFenderGeo = buildAnalyticSurface(frontFenderEval, 60, 26, {
+    mirrorX: true, outwardHint: [1, 0.45, 0], uvScaleU: 1.8, uvScaleV: 0.9
+  });
+  addPart(frontFenderGeo, candyRedMat);
+
+  // Seamless, undamaged front bumper corner cheek:
+  // u = 0 locks cleanly to the rounded nose corner (z = 2.18)
+  // u = 1 locks EXACTLY to frontFenderEval(0, v) at the front wheel arch
+  // v = 1 locks EXACTLY to fenderCrest(z) (shared with hoodGeo!)
+  // v = 0 sits cleanly along the smooth front splitter chin (y = 0.10)
+  const tmpArchPt = new THREE.Vector3();
+  const tmpCornerTop = new THREE.Vector3();
+  const frontCornerGeo = buildAnalyticSurface((u, v, out) => {
+    frontFenderEval(0.0, lerp(0.15, 1.0, v), tmpArchPt);
+    evalHoodSurface(0.0, 1.0, tmpCornerTop); // exact nose-hood outer corner (~x=0.51, y=0.33, z=2.18)
+
+    // Smooth forward bumper corner profile (u = 0): gently rounds outward from top to chin
+    const zCorner = lerp(2.12, tmpCornerTop.z, Math.pow(v, 0.75)) + 0.025 * Math.sin(v * Math.PI);
+    const xCorner = lerp(0.76, tmpCornerTop.x, Math.pow(v, 0.92)) + 0.045 * Math.sin(v * Math.PI);
+    const yCorner = lerp(0.102, tmpCornerTop.y, v);
+
+    const su = smoothstep(0, 1, u);
+    const z = lerp(zCorner, tmpArchPt.z, u);
+    let x = lerp(xCorner, tmpArchPt.x, su) + 0.028 * Math.sin(u * Math.PI) * Math.sin(v * Math.PI);
+    let y = lerp(yCorner, tmpArchPt.y, su) + 0.012 * Math.sin(u * Math.PI) * Math.sin(v * Math.PI);
+
+    // Lock top edge (v -> 1) smoothly to exact fenderCrest(z) so zero gap or dent appears!
+    const topLock = Math.pow(v, 4.0);
+    x = lerp(x, fenderCrestX(z), topLock);
+    y = lerp(y, fenderCrestY(z), topLock);
+    out.set(x, y, z);
+  }, 32, 24, { mirrorX: true, outwardHint: [0.85, 0.25, 0.55], uvScaleU: 0.8, uvScaleV: 0.6 });
+  addPart(frontCornerGeo, candyRedMat);
+
+  // Clean curved bumper corner wrap turning smoothly inward into the lower front grille cavity
+  const bumperInWrapGeo = buildAnalyticSurface((u, v, out) => {
+    evalHoodSurface(0.0, 1.0, tmpCornerTop);
+    const zCorner = lerp(2.12, tmpCornerTop.z, Math.pow(v, 0.75)) + 0.025 * Math.sin(v * Math.PI);
+    const xCorner = lerp(0.76, tmpCornerTop.x, Math.pow(v, 0.92)) + 0.045 * Math.sin(v * Math.PI);
+    const yCorner = lerp(0.102, tmpCornerTop.y, v);
+
+    // Curves smoothly inward from the outer corner into the dark recessed intake duct
+    const x = lerp(xCorner, xCorner - 0.14, u);
+    const z = lerp(zCorner, zCorner - 0.11, u * u);
+    const y = lerp(yCorner, lerp(0.102, 0.225, v), u);
+    out.set(x, y, z);
+  }, 14, 16, { mirrorX: true, outwardHint: [-0.4, 0.1, 1] });
+  addPart(bumperInWrapGeo, candyRedMat);
+
+  // Recessed satin-black aero air-curtain outlet behind front wheel arch
+  const frontExitBladeGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(Z_F_ARCH_REAR, 0.72, u);
+    const y = lerp(0.125, fenderCrestY(z) - 0.05, v);
+    const x = lerp(0.955, 0.835, smoothstep(0, 1, u)) - 0.035 * Math.sin(v * Math.PI);
+    out.set(x, y, z);
+  }, 16, 18, { mirrorX: true, outwardHint: [1, 0, -0.3], uvScaleU: 0.4, uvScaleV: 0.6 });
+  addPart(frontExitBladeGeo, satinCarbonMat);
+}
+
+// ----------------------------------------------------------------------------
+// 8C. ARTICULATED DIHEDRAL BUTTERFLY DOORS & DEEP BOOMERANG SIDE INTAKES
+// ----------------------------------------------------------------------------
+const doorPivots = [];
+const doorContentBySide = {};
+{
+  const HINGE_X = 0.86;
+  const HINGE_Y = 0.66;
+  const HINGE_Z = 0.84;
+
+  // Shared outer door skin evaluator
+  function evalDoorOuter(u, v, out) {
+    const z = lerp(Z_F_ARCH_REAR, -0.92, u);
+    const yCrest = fenderCrestY(z);
+    const xCrest = fenderCrestX(z);
+    const yBot = 0.132 + 0.025 * u;
+    const y = lerp(yBot, yCrest, v);
+
+    const deepPinch = Math.pow(smoothstep(0.06, 0.94, u), 1.12);
+    const channelProfile = Math.sin(v * Math.PI);
+    const upperBlade = smoothstep(0.68, 0.99, v);
+    const lowerFlare = (1.0 - smoothstep(0.0, 0.22, v)) * 0.065;
+
+    const baseSideX = lerp(0.952, 0.72, deepPinch);
+    const x = lerp(baseSideX + lowerFlare, xCrest, upperBlade)
+            - 0.088 * channelProfile * smoothstep(0.12, 0.86, u)
+            + 0.032 * Math.sin(v * Math.PI * 0.5) * (1.0 - deepPinch);
+    out.set(x, y, z);
+  }
+
+  for (const sx of [1, -1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(HINGE_X * sx, HINGE_Y, HINGE_Z);
+    pivot.rotation.order = 'YXZ';
+    chassisGroup.add(pivot);
+
+    // Offset content back to chassis origin so all parts keep exact coordinates
+    const content = new THREE.Group();
+    content.position.set(-HINGE_X * sx, -HINGE_Y, -HINGE_Z);
+    pivot.add(content);
+
+    doorPivots.push({ pivot, side: sx });
+    doorContentBySide[sx] = content;
+
+    // Outer sculpted body-color door panel
+    const doorGeo = buildAnalyticSurface(evalDoorOuter, 54, 28, {
+      sideSign: sx, outwardHint: [1, 0.15, 0], uvScaleU: 2.0, uvScaleV: 1.0
+    });
+    addPart(doorGeo, candyRedMat, content);
+
+    // Solid sculpted dark-black interior door card (visible when butterfly doors open!)
+    const doorInnerGeo = buildAnalyticSurface((u, v, out) => {
+      evalDoorOuter(u, v, out);
+      out.x -= 0.055;
+      out.y += 0.015 * (1.0 - v);
+    }, 32, 18, { sideSign: sx, outwardHint: [-1, 0, 0] });
+    addPart(doorInnerGeo, satinCarbonMat, content);
+
+    // Sleek sculpted interior armrest rib tucked cleanly inside inner door card
+    const armrestGeo = buildAnalyticSurface((u, v, out) => {
+      const z = lerp(0.50, -0.40, u);
+      const ang = v * Math.PI * 2.0;
+      out.set(0.67 + Math.cos(ang) * 0.018, 0.48 + Math.sin(ang) * 0.018, z);
+    }, 16, 10, { sideSign: sx, outwardFromCentroid: true });
+    addPart(armrestGeo, glossCarbonMat, content);
+
+    // Upper door horizontal sill shelf sealing seamlessly into bubble canopy base
+    const doorSillTopGeo = buildAnalyticSurface((u, v, out) => {
+      const z = lerp(0.92, -0.84, u);
+      const xOut = fenderCrestX(z);
+      const yOut = fenderCrestY(z);
+      const xIn = lerp(0.60, 0.50, smoothstep(0.0, 1.0, u)) + 0.035 * Math.sin(u * Math.PI);
+      const yIn = yOut + 0.028 * (1.0 - 0.25 * u);
+      const x = lerp(xOut, xIn, v);
+      const y = lerp(yOut, yIn, v) + 0.012 * Math.sin(v * Math.PI);
+      out.set(x, y, z);
+    }, 36, 10, { sideSign: sx, outwardHint: [0, 1, 0], uvScaleU: 1.6, uvScaleV: 0.35 });
+    addPart(doorSillTopGeo, candyRedMat, content);
+
+    // Front & rear door shut-face end caps so door has crisp real-world thickness when open
+    const doorBottomCapGeo = buildAnalyticSurface((u, v, out) => {
+      evalDoorOuter(u, 0.0, out);
+      out.x -= v * 0.06;
+    }, 28, 4, { sideSign: sx, outwardHint: [0, -1, 0] });
+    addPart(doorBottomCapGeo, glossCarbonMat, content);
+  }
+
+  // Solid black monocoque inner doorway sill tub (tucked cleanly inside closed door skin!)
+  const monoSillGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(0.82, -0.76, u);
+    const ang = v * Math.PI;
+    const x = 0.58 + Math.sin(ang) * 0.068;
+    const y = lerp(0.14, 0.43, v);
+    out.set(x, y, z);
+  }, 28, 12, { mirrorX: true, outwardHint: [1, 0.5, 0] });
+  addPart(monoSillGeo, satinCarbonMat);
+
+  // Deep side intake cavity throat (cleanly tucked between side skirt and rear haunch)
+  const intakeMouthGeo = buildAnalyticSurface((u, v, out) => {
+    const zFront = -0.82 - 0.14 * Math.sin(v * Math.PI);
+    const z = lerp(zFront - 0.34, zFront, u);
+    const y = lerp(0.145, 0.77, v);
+    const xInner = 0.69;
+    const xOuter = 0.995 - 0.075 * Math.pow(v - 0.45, 2.0);
+    const x = lerp(xInner, xOuter, Math.pow(u, 0.72));
+    out.set(x, y, z);
+  }, 18, 24, { mirrorX: true, outwardHint: [0.35, 0, 1], uvScaleU: 0.5, uvScaleV: 0.8 });
+  addPart(intakeMouthGeo, satinCarbonMat);
+
+  // Sculpted gloss-black C-blade / boomerang aero intake surround
+  const intakeBladeGeo = buildAnalyticSurface((u, v, out) => {
+    const y = lerp(0.14, 0.79, u);
+    const sweepZ = -0.84 - 0.13 * Math.sin(u * Math.PI) - v * 0.14;
+    const x = 1.005 - 0.095 * Math.pow(u - 0.46, 2.0) - v * 0.025 + 0.018 * Math.sin(v * Math.PI);
+    out.set(x, y, sweepZ);
+  }, 28, 10, { mirrorX: true, outwardHint: [1, 0, 0.25], uvScaleU: 0.9, uvScaleV: 0.22 });
+  addPart(intakeBladeGeo, glossCarbonMat);
+
+  // Two horizontal gloss-black aero splitter vanes inside each side intake
+  for (let i = 0; i < 2; i++) {
+    const yVane = 0.34 + i * 0.175;
+    const sideVaneGeo = buildAnalyticSurface((u, v, out) => {
+      const x = lerp(0.71, 0.97, u);
+      const z = lerp(-0.84, -1.06, v) - 0.05 * u;
+      const y = yVane + 0.014 * Math.sin(u * Math.PI) + (v - 0.5) * 0.010;
+      out.set(x, y, z);
+    }, 12, 8, { mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 0.3, uvScaleV: 0.3 });
+    addPart(sideVaneGeo, glossCarbonMat);
+  }
+
+  // Recessed dark side intercooler radiator grille inside the intake cavity
+  const sideRadGeo = buildAnalyticSurface((u, v, out) => {
+    const x = lerp(0.70, 0.94, u);
+    const y = lerp(0.16, 0.70, v);
+    const z = -1.04 + 0.03 * u;
+    out.set(x, y, z);
+  }, 10, 12, { mirrorX: true, outwardHint: [0, 0, 1], uvScaleU: 0.5, uvScaleV: 0.7 });
+  addPart(sideRadGeo, grilleMeshMat);
+}
+
+// ----------------------------------------------------------------------------
+// 8D. MUSCULAR REAR HAUNCHES, REAR ARCHES & SEAMLESS REAR QUARTER PANELS
+// ----------------------------------------------------------------------------
+{
+  function rearFenderEval(u, v, out) {
+    const theta = lerp(R_ARCH_T0, R_ARCH_T1, u);
+    const zLip = Z_REAR_AXLE + Math.cos(theta) * R_REAR_ARCH;
+    const yLip = Math.max(0.115, Y_REAR_AXLE + Math.sin(theta) * R_REAR_ARCH);
+    const xLip = 1.044 - 0.032 * Math.pow(Math.cos(theta), 2.0);
+
+    // Exact match to Z_R_ARCH_FRONT (-0.984) and Z_R_ARCH_REAR (-1.776) => zero overlap crease!
+    const zCrest = lerp(Z_R_ARCH_FRONT, Z_R_ARCH_REAR, u);
+    const xCrest = fenderCrestX(zCrest);
+    const yCrest = fenderCrestY(zCrest);
+
+    if (v < 0.15) {
+      const t = v / 0.15;
+      const r = lerp(R_REAR_ARCH - 0.005, R_REAR_ARCH, t);
+      const x = lerp(xLip - 0.056, xLip, smoothstep(0, 1, t));
+      const y = Math.max(0.11, Y_REAR_AXLE + Math.sin(theta) * r);
+      const z = Z_REAR_AXLE + Math.cos(theta) * r;
+      out.set(x, y, z);
+    } else {
+      const t = (v - 0.15) / 0.85;
+      const ts = smoothstep(0, 1, t);
+      const z = lerp(zLip, zCrest, ts);
+      const swellX = 0.064 * Math.sin(t * Math.PI) * (0.55 + 0.45 * Math.sin(theta));
+      const swellY = 0.048 * Math.sin(t * Math.PI) * Math.max(0, Math.sin(theta));
+      const x = lerp(xLip, xCrest, Math.pow(t, 1.38)) + swellX;
+      const y = lerp(yLip, yCrest, Math.pow(t, 0.84)) + swellY;
+      out.set(x, y, z);
+    }
+  }
+
+  const rearFenderGeo = buildAnalyticSurface(rearFenderEval, 64, 28, {
+    mirrorX: true, outwardHint: [1, 0.4, 0], uvScaleU: 2.0, uvScaleV: 1.0
+  });
+  addPart(rearFenderGeo, candyRedMat);
+
+  // Seamless rear quarter panel: u=0 locks EXACTLY to rearFenderEval(1.0, v), sweeping to tail (-2.30)
+  const tmpRearPt = new THREE.Vector3();
+  const rearQuarterGeo = buildAnalyticSurface((u, v, out) => {
+    rearFenderEval(1.0, lerp(0.15, 1.0, v), tmpRearPt);
+
+    // Kammback tail outer contour at z = -2.30
+    const zTail = -2.30 + 0.045 * (1.0 - v);
+    const yTail = lerp(0.39, fenderCrestY(-2.30), v);
+    const xTail = lerp(0.90, fenderCrestX(-2.30), Math.pow(v, 1.15)) + 0.032 * Math.sin(v * Math.PI);
+
+    const su = smoothstep(0, 1, u);
+    const z = lerp(tmpRearPt.z, zTail, u);
+    const x = lerp(tmpRearPt.x, xTail, su) + 0.022 * Math.sin(u * Math.PI) * Math.sin(v * Math.PI);
+    const y = lerp(tmpRearPt.y, yTail, su);
+
+    out.set(x, y, z);
+  }, 28, 22, { mirrorX: true, outwardHint: [1, 0.15, -0.3], uvScaleU: 0.8, uvScaleV: 0.6 });
+  addPart(rearQuarterGeo, candyRedMat);
+
+  // Rear upper deck shoulders flanking the vented carbon engine cover (outwardHint: [0, 1, 0]!)
+  const rearDeckShoulderGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.68, -2.30, u);
+    const xOut = fenderCrestX(z);
+    const yOut = fenderCrestY(z);
+    const xIn = lerp(0.49, 0.45, u);
+    const yIn = lerp(0.86, 0.77, u) + 0.03 * gauss(z, -1.35, 0.55);
+
+    const x = lerp(xOut, xIn, v);
+    const y = lerp(yOut, yIn, v) + 0.024 * Math.sin(v * Math.PI);
+    out.set(x, y, z);
+  }, 44, 16, { mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 1.6, uvScaleV: 0.5 });
+  addPart(rearDeckShoulderGeo, candyRedMat);
+
+  // Sculpted candy-red rear Kammback tail upper brow arch framing the rear transom
+  const tailRimGeo = buildAnalyticSurface((u, v, out) => {
+    const x = lerp(0.0, 0.88, u);
+    const z = -2.30 + 0.055 * u * u + v * 0.048;
+    const yTop = lerp(0.768, 0.798, Math.sin(u * Math.PI * 0.5));
+    const y = yTop - v * 0.044;
+    out.set(x, y, z);
+  }, 28, 8, { mirrorX: true, outwardHint: [0, 0.4, -1], uvScaleU: 1.0, uvScaleV: 0.15 });
+  addPart(tailRimGeo, candyRedMat);
+}
+
+// ----------------------------------------------------------------------------
+// 8E. TEARDROP BUBBLE CANOPY, FLYING BUTTRESSES & DARKENED COCKPIT
+// ----------------------------------------------------------------------------
+{
+  function canopyProfile(u, v, out) {
+    // u: 0 = windshield base (z=+0.86) -> 1 = rear canopy taper (z=-0.76)
+    // v: 0 = centerline roof spine -> 1 = seated cleanly into door sill & cowl
+    const z = lerp(0.86, -0.76, u);
+    const maxSillX = fenderCrestX(z) - 0.12;
+    const teardropW = Math.min(
+      maxSillX,
+      0.685 * Math.sin(Math.pow(u, 0.72) * Math.PI * 0.85 + 0.18) + 0.04 * (1.0 - u)
+    );
+    const apexCurve = Math.sin(Math.pow(u, 0.80) * Math.PI * 0.84 + 0.13);
+    const ySpine = 0.682 + 0.436 * apexCurve;
+    // Lower edge seats slightly INSIDE the door sill & cowl so ZERO gap is ever visible!
+    const ySill = fenderCrestY(z) + 0.004 + 0.08 * smoothstep(0.68, 1.0, u);
+
+    const ang = v * Math.PI * 0.5;
+    const x = teardropW * Math.sin(ang);
+    const y = lerp(ySill, ySpine, Math.pow(Math.cos(ang), 0.78));
+    out.set(x, y, z);
+  }
+
+  // Wrap-around smoked glass bubble canopy (outwardHint: [0, 1, 0] guarantees outward glass!)
+  const canopyGlassGeo = buildAnalyticSurface(canopyProfile, 56, 26, {
+    mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 1.4, uvScaleV: 0.8
+  });
+  addPart(canopyGlassGeo, smokedGlassMat);
+
+  // Glossy woven-carbon central roof arch & subtle aero roof scoop
+  const roofCarbonGeo = buildAnalyticSurface((u, v, out) => {
+    const cu = lerp(0.36, 1.0, u);
+    const cv = v * lerp(0.44, 0.66, u);
+    canopyProfile(cu, cv, out);
+    const scoop = 0.024 * gauss(cu, 0.62, 0.22) * (1.0 - smoothstep(0.0, 0.45, v));
+    out.y += 0.005 + scoop;
+  }, 32, 14, { mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 0.9, uvScaleV: 0.4 });
+  addPart(roofCarbonGeo, glossCarbonMat);
+
+  // Slender carbon A-pillars & canopy side roof rails
+  const aPillarGeo = buildAnalyticSurface((u, v, out) => {
+    const cu = lerp(0.01, 0.48, u);
+    const cv = lerp(0.78, 0.90, v);
+    canopyProfile(cu, cv, out);
+    out.x += 0.006;
+    out.y += 0.006;
+  }, 24, 6, { mirrorX: true, outwardHint: [0.6, 0.8, 0], uvScaleU: 0.8, uvScaleV: 0.1 });
+  addPart(aPillarGeo, glossCarbonMat);
+
+  // Twin sculpted candy-red flying buttresses arching cleanly from rear canopy to rear haunches
+  const buttressGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.34, -1.80, u);
+    const cx = lerp(0.45, 0.69, smoothstep(0, 1, u));
+    const cy = lerp(1.015, 0.855, Math.pow(u, 0.88)) + 0.022 * Math.sin(u * Math.PI);
+    const wSec = lerp(0.040, 0.072, u) * (1.0 - 0.35 * Math.pow(u, 2.0));
+    const hSec = lerp(0.034, 0.052, u) * (1.0 - 0.55 * u);
+    const ang = v * Math.PI * 2.0;
+    out.set(cx + Math.cos(ang) * wSec, cy + Math.sin(ang) * hSec, z);
+  }, 34, 16, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 1.4, uvScaleV: 0.3 });
+  addPart(buttressGeo, candyRedMat);
+
+  // Darkened cockpit interior tub + rear cockpit bulkhead
+  const cockpitTubGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(0.84, -0.74, u);
+    const x = lerp(0.0, 0.64, v) * Math.sin(u * Math.PI * 0.82 + 0.18);
+    const y = lerp(0.24, 0.66, Math.pow(v, 2.0));
+    out.set(x, y, z);
+  }, 18, 12, { mirrorX: true, outwardHint: [0, 1, 0] });
+  addPart(cockpitTubGeo, darkCavityMat);
+
+  const bulkheadGeo = new THREE.PlaneGeometry(1.02, 0.66);
+  const bulkhead = new THREE.Mesh(bulkheadGeo, darkCavityMat);
+  bulkhead.position.set(0, 0.62, -0.70);
+  chassisGroup.add(bulkhead);
+
+  // Twin low-slung sculpted carbon racing bucket seats
+  for (const sx of [-0.24, 0.24]) {
+    const seatGeo = buildAnalyticSurface((u, v, out) => {
+      const z = lerp(0.26, -0.44, u);
+      const yBase = u < 0.42
+        ? 0.32 + 0.04 * (1.0 - u / 0.42)
+        : lerp(0.32, 0.86, (u - 0.42) / 0.58);
+      const width = lerp(0.20, 0.115, smoothstep(0.65, 1.0, u));
+      const lv = (v - 0.5) * 2.0;
+      const bolster = 0.052 * lv * lv;
+      out.set(sx + lv * width, yBase + bolster * 0.4, z + bolster * 0.65);
+    }, 22, 14, { outwardHint: [0, 0.6, 0.8] });
+    addPart(seatGeo, satinCarbonMat);
+
+    const seatTrimGeo = buildAnalyticSurface((u, v, out) => {
+      const lv = (v - 0.5) * 2.0;
+      const z = lerp(-0.18, -0.34, u);
+      const y = lerp(0.60, 0.76, u);
+      out.set(sx + lv * 0.14, y, z + 0.04 * lv * lv + 0.009);
+    }, 8, 8, { outwardHint: [0, 0.3, 1] });
+    addPart(seatTrimGeo, candyRedMat);
+  }
+
+  // Steering wheel (driver side -X) & sculpted dashboard cowl
+  const wheelRingGeo = new THREE.TorusGeometry(0.13, 0.014, 10, 28);
+  const wheelRing = new THREE.Mesh(wheelRingGeo, satinCarbonMat);
+  wheelRing.position.set(-0.24, 0.65, 0.34);
+  wheelRing.rotation.x = 0.38;
+  chassisGroup.add(wheelRing);
+
+  const dashGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(0.80, 0.32, u);
+    const x = lerp(0.0, 0.58, v);
+    const y = lerp(0.61, 0.71, Math.sin(u * Math.PI * 0.7)) - 0.04 * v * v;
+    out.set(x, y, z);
+  }, 14, 10, { mirrorX: true, outwardHint: [0, 1, 0] });
+  addPart(dashGeo, darkCavityMat);
+}
+
+// ----------------------------------------------------------------------------
+// 8F. VENTED CARBON ENGINE COVER WITH RED FINS & MID-ENGINE BAY DETAIL
+// ----------------------------------------------------------------------------
+{
+  // Recessed dark engine bay floor
+  const engineBayGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.68, -2.26, u);
+    const x = lerp(0.0, 0.50, v);
+    const y = lerp(0.64, 0.56, u);
+    out.set(x, y, z);
+  }, 16, 10, { mirrorX: true, outwardHint: [0, 1, 0] });
+  addPart(engineBayGeo, darkCavityMat);
+
+  // Twin sculpted V12 carbon intake plenums gleaming subtly beneath the louvers
+  const plenumGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.88, -1.78, u);
+    const ang = v * Math.PI;
+    const rx = 0.11 * Math.sin(u * Math.PI * 0.8 + 0.2);
+    const ry = 0.065 * Math.sin(u * Math.PI * 0.85 + 0.15);
+    out.set(0.17 + Math.cos(ang) * rx, 0.64 + Math.sin(ang) * ry, z);
+  }, 20, 12, { mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 0.8, uvScaleV: 0.3 });
+  addPart(plenumGeo, glossCarbonMat);
+
+  // Anodized candy-red engine cam covers visible through the vented carbon louvers
+  const camRailGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.92, -1.74, u);
+    const x = lerp(0.28, 0.35, v);
+    const y = 0.665 + 0.018 * Math.sin(v * Math.PI);
+    out.set(x, y, z);
+  }, 16, 8, { mirrorX: true, outwardHint: [0, 1, 0] });
+  addPart(camRailGeo, caliperRedMat);
+
+  // Brushed titanium X-brace strut bar inside engine bay
+  for (const s of [-1, 1]) {
+    const curve = new THREE.LineCurve3(
+      new THREE.Vector3(-0.35 * s, 0.72, -0.96),
+      new THREE.Vector3(0.35 * s, 0.69, -1.68)
+    );
+    addPart(new THREE.TubeGeometry(curve, 12, 0.010, 8, false), brushedMetalMat);
+  }
+
+  // Contoured woven-carbon engine cover outer perimeter frame
+  const coverFrameGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.66, -2.26, u);
+    const xOut = lerp(0.50, 0.46, u);
+    const xIn = lerp(0.38, 0.34, u);
+    const x = lerp(xOut, xIn, v);
+    const yBase = lerp(0.925, 0.765, Math.pow(u, 0.86));
+    out.set(x, yBase + 0.008 * Math.sin(v * Math.PI), z);
+  }, 36, 8, { mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 1.5, uvScaleV: 0.18 });
+  addPart(coverFrameGeo, glossCarbonMat);
+
+  // 7 precision-lofted angled woven-carbon engine cover louver slats (solid double-face airfoil slats!)
+  const louverCount = 7;
+  for (let i = 0; i < louverCount; i++) {
+    const t0 = i / louverCount;
+    const zFront = lerp(-0.74, -2.02, t0);
+    const zLen = 0.165;
+    const yFront = lerp(0.918, 0.778, Math.pow(t0, 0.86));
+    const halfSpan = lerp(0.405, 0.355, t0);
+
+    // Closed-section sculpted carbon louver blade (outwardFromCentroid: true => visible from every angle!)
+    const slatGeo = buildAnalyticSurface((u, v, out) => {
+      const x = halfSpan * u;
+      const chevron = -0.055 * u * u;
+      const tChord = v < 0.5 ? v * 2.0 : (1.0 - v) * 2.0;
+      const side = v < 0.5 ? 1 : -1;
+      const z = zFront - tChord * zLen + chevron;
+      const arch = 0.018 * Math.cos(u * Math.PI * 0.5);
+      const lift = 0.022 * tChord + 0.006 * Math.sin(tChord * Math.PI);
+      const thick = 0.0065 * Math.sin(tChord * Math.PI * 0.92 + 0.04);
+      const y = yFront - 0.012 * (1.0 - tChord) + lift + arch + side * thick;
+      out.set(x, y, z);
+    }, 22, 12, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 0.45, uvScaleV: 0.22 });
+    addPart(slatGeo, glossCarbonMat);
+  }
+
+  // SIGNATURE RED FINS on the vented carbon engine cover:
+  // 1) Central sculpted candy-red dorsal shark fin running down the spine
+  const centralFinGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.56, -2.14, u);
+    const yBase = lerp(0.935, 0.758, Math.pow(u, 0.88));
+    const finH = 0.095 * Math.sin(Math.pow(u, 0.65) * Math.PI * 0.92 + 0.08);
+    const y = yBase + finH * v;
+    const thick = lerp(0.018, 0.0035, Math.pow(v, 0.72)) * (1.0 - 0.38 * u);
+    out.set(thick, y, z);
+  }, 40, 12, { mirrorX: true, outwardHint: [1, 0.2, 0], uvScaleU: 1.4, uvScaleV: 0.15 });
+  addPart(centralFinGeo, candyRedMat);
+
+  const centralFinCapGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.56, -2.14, u);
+    const yBase = lerp(0.935, 0.758, Math.pow(u, 0.88));
+    const finH = 0.095 * Math.sin(Math.pow(u, 0.65) * Math.PI * 0.92 + 0.08);
+    const thick = 0.0035 * (1.0 - 0.38 * u);
+    out.set(lerp(0, thick, v), yBase + finH + 0.002 * (1 - v), z);
+  }, 36, 4, { mirrorX: true, outwardHint: [0, 1, 0] });
+  addPart(centralFinCapGeo, candyRedMat);
+
+  // 2) Twin flanking sculpted candy-red longitudinal aero fins framing the carbon louver bay
+  const sideFinGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.72, -2.20, u);
+    const cx = lerp(0.415, 0.375, u);
+    const yBase = lerp(0.905, 0.762, Math.pow(u, 0.86));
+    const finH = 0.058 * Math.sin(u * Math.PI * 0.92 + 0.08);
+    const ang = v * Math.PI * 2.0;
+    const halfT = lerp(0.013, 0.004, Math.max(0, Math.sin(ang)));
+    out.set(cx + Math.cos(ang) * halfT, yBase + (0.5 + 0.5 * Math.sin(ang)) * finH, z);
+  }, 36, 12, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 1.3, uvScaleV: 0.12 });
+  addPart(sideFinGeo, candyRedMat);
+}
+
+// ----------------------------------------------------------------------------
+// 8G. CARBON MONOCOQUE LOWER CHASSIS, FRONT SPLITTER, SIDE SKIRTS & WHEELHOUSES
+// ----------------------------------------------------------------------------
+{
+  // Full flat carbon underbody tray
+  const underbodyGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(2.26, -1.68, u);
+    const halfW = lerp(0.68, 0.86, Math.sin(u * Math.PI * 0.85 + 0.15));
+    const x = halfW * v;
+    const y = 0.092 + 0.01 * smoothstep(0.85, 1.0, u);
+    out.set(x, y, z);
+  }, 24, 10, { mirrorX: true, outwardHint: [0, -1, 0] });
+  addPart(underbodyGeo, darkCavityMat);
+
+  // Sleek gloss-black front aero splitter blade matching the curved nose planform
+  const splitterGeo = buildAnalyticSurface((u, v, out) => {
+    const zLead = 2.375 - 0.34 * Math.pow(u, 1.75);
+    const zBack = lerp(1.90, 1.71, u);
+    const z = lerp(zLead, zBack, v);
+    const x = lerp(0.0, 0.965, u);
+    const y = 0.088 + 0.009 * Math.sin(v * Math.PI);
+    out.set(x, y, z);
+  }, 36, 12, { mirrorX: true, outwardHint: [0, 1, 0], uvScaleU: 1.2, uvScaleV: 0.4 });
+  addPart(splitterGeo, glossCarbonMat);
+
+  // Subtle body-color leading-edge lip along front splitter
+  const splitterTrimGeo = buildAnalyticSurface((u, v, out) => {
+    const zLead = 2.378 - 0.34 * Math.pow(u, 1.75);
+    const x = lerp(0.0, 0.962, u);
+    const y = 0.085 + v * 0.010;
+    out.set(x, y, zLead - (v - 0.5) * 0.006);
+  }, 36, 4, { mirrorX: true, outwardHint: [0, 0, 1] });
+  addPart(splitterTrimGeo, candyRedMat);
+
+  // Sleek upturned gloss-black front splitter endplates
+  const frontEndplateGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(2.035, 1.72, u);
+    const t = v < 0.5 ? v * 2.0 : (1.0 - v) * 2.0;
+    const side = v < 0.5 ? 1 : -1;
+    const yMax = lerp(0.135, 0.225, Math.pow(u, 0.72));
+    const y = lerp(0.088, yMax, t);
+    const x = 0.966 - 0.014 * u * t + side * 0.0055 * Math.sin(t * Math.PI * 0.9 + 0.05);
+    out.set(x, y, z);
+  }, 16, 12, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 0.4, uvScaleV: 0.25 });
+  addPart(frontEndplateGeo, glossCarbonMat);
+
+  // Sculpted woven-carbon side skirts / rocker aero blades (outwardHint: [0, 1, 0]!)
+  const sideSkirtGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(Z_F_ARCH_REAR, Z_R_ARCH_FRONT, u);
+    const xIn = 0.72;
+    const xOut = lerp(0.965, 1.022, smoothstep(0.0, 1.0, u));
+    const x = lerp(xIn, xOut, v);
+    const y = lerp(0.138, 0.095, Math.pow(v, 0.65)) + 0.012 * Math.sin(v * Math.PI);
+    out.set(x, y, z);
+  }, 34, 10, { mirrorX: true, outwardHint: [0, 1, 0.0], uvScaleU: 2.0, uvScaleV: 0.35 });
+  addPart(sideSkirtGeo, glossCarbonMat);
+
+  // Side skirt vertical outer lip
+  const sideSkirtLipGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(Z_F_ARCH_REAR, Z_R_ARCH_FRONT, u);
+    const x = lerp(0.965, 1.022, smoothstep(0.0, 1.0, u));
+    const y = lerp(0.088, 0.112, v);
+    out.set(x, y, z);
+  }, 30, 4, { mirrorX: true, outwardHint: [1, 0, 0] });
+  addPart(sideSkirtLipGeo, glossCarbonMat);
+
+  // Sleek vertical carbon aero winglet ahead of each rear wheel (cleanly seated on side skirt)
+  const sideWingletGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-0.62, Z_R_ARCH_FRONT, u);
+    const t = v < 0.5 ? v * 2.0 : (1.0 - v) * 2.0;
+    const side = v < 0.5 ? 1 : -1;
+    const hMax = lerp(0.015, 0.19, Math.pow(u, 0.85));
+    const y = 0.098 + hMax * t;
+    const x = lerp(0.992, 1.024, u) - 0.012 * t + side * 0.0055 * Math.sin(t * Math.PI * 0.9 + 0.05);
+    out.set(x, y, z);
+  }, 16, 12, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 0.45, uvScaleV: 0.22 });
+  addPart(sideWingletGeo, glossCarbonMat);
+
+  // Inner dark wheelhouse liners (tucked cleanly beneath fender skin with ample tire clearance)
+  function addWheelhouse(zAxle, yAxle, rArch, xCenter, width) {
+    const linerGeo = buildAnalyticSurface((u, v, out) => {
+      const ang = lerp(-0.18, Math.PI + 0.18, u);
+      const x = lerp(xCenter - width * 0.50, xCenter + width * 0.42, v);
+      const r = rArch - 0.010;
+      out.set(x, Math.max(0.095, yAxle + Math.sin(ang) * r), zAxle + Math.cos(ang) * r);
+    }, 28, 6, { mirrorX: true, outwardHint: [0, -1, 0] });
+    addPart(linerGeo, darkCavityMat);
+
+    const wallGeo = new THREE.CircleGeometry(rArch - 0.010, 24);
+    for (const sx of [-1, 1]) {
+      const wMesh = new THREE.Mesh(wallGeo, darkCavityMat);
+      wMesh.position.set((xCenter - width * 0.48) * sx, yAxle, zAxle);
+      wMesh.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2;
+      chassisGroup.add(wMesh);
+    }
+  }
+  addWheelhouse(Z_FRONT_AXLE, Y_FRONT_AXLE, R_FRONT_ARCH, 0.855, 0.34);
+  addWheelhouse(Z_REAR_AXLE, Y_REAR_AXLE, R_REAR_ARCH, 0.850, 0.40);
+}
+
+// ----------------------------------------------------------------------------
+// 8H. TALL REAR WING ON SWAN-NECK PYLONS
+// ----------------------------------------------------------------------------
+{
+  function airfoilXY(s, chord, thick, camber) {
+    const isTop = s < 0.5;
+    const t = isTop ? s * 2.0 : (1.0 - s) * 2.0;
+    const xc = 0.5 * (1.0 - Math.cos(t * Math.PI));
+    const yt = 5.0 * thick * (
+      0.2969 * Math.sqrt(Math.max(1e-6, xc))
+      - 0.1260 * xc - 0.3516 * xc * xc + 0.2843 * xc * xc * xc - 0.1015 * Math.pow(xc, 4)
+    );
+    const yc = -camber * Math.sin(xc * Math.PI);
+    const y = isTop ? yc + yt : yc - yt;
+    return { x: xc * chord, y: y * chord };
+  }
+
+  // Main cambered woven-carbon rear wing airfoil (gull-profile span)
+  const wingMainGeo = buildAnalyticSurface((u, v, out) => {
+    const x = 0.935 * u;
+    const chord = lerp(0.30, 0.25, Math.pow(u, 1.4));
+    const sweepZ = -2.14 - 0.062 * u * u;
+    const gullY = 1.065 + 0.030 * smoothstep(0.0, 0.72, u);
+    const aoa = lerp(0.16, 0.11, u);
+
+    const af = airfoilXY(v, chord, 0.125, 0.085);
+    const cz = Math.cos(aoa) * af.x - Math.sin(aoa) * af.y;
+    const cy = Math.sin(aoa) * af.x + Math.cos(aoa) * af.y;
+    out.set(x, gullY + cy, sweepZ - cz);
+  }, 40, 32, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 1.6, uvScaleV: 0.7 });
+  addPart(wingMainGeo, glossCarbonMat);
+
+  // Secondary DRS upper carbon flap element
+  const wingFlapGeo = buildAnalyticSurface((u, v, out) => {
+    const x = 0.925 * u;
+    const chord = lerp(0.11, 0.092, u);
+    const sweepZ = -2.35 - 0.050 * u * u;
+    const gullY = 1.122 + 0.026 * smoothstep(0.0, 0.72, u);
+    const aoa = 0.34;
+    const af = airfoilXY(v, chord, 0.11, 0.065);
+    const cz = Math.cos(aoa) * af.x - Math.sin(aoa) * af.y;
+    const cy = Math.sin(aoa) * af.x + Math.cos(aoa) * af.y;
+    out.set(x, gullY + cy, sweepZ - cz);
+  }, 32, 20, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 1.5, uvScaleV: 0.3 });
+  addPart(wingFlapGeo, glossCarbonMat);
+
+  // Sleek sculpted carbon wing endplates with razor-crisp red upper accent
+  const endplateGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-2.14, -2.51, u);
+    const yBot = lerp(0.985, 0.915, u) + 0.02 * Math.sin(u * Math.PI);
+    const yTop = lerp(1.148, 1.215, Math.pow(u, 0.8));
+    const xBase = 0.938 + 0.010 * u;
+
+    const t = v < 0.5 ? v * 2.0 : (1.0 - v) * 2.0;
+    const side = v < 0.5 ? 1 : -1;
+    const y = lerp(yBot, yTop, t);
+    const halfThick = 0.0075 * Math.sin(t * Math.PI * 0.92 + 0.04);
+    out.set(xBase + side * halfThick, y, z);
+  }, 24, 16, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 0.5, uvScaleV: 0.35 });
+  addPart(endplateGeo, glossCarbonMat);
+
+  const endplateRedGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-2.14, -2.51, u);
+    const yTop = lerp(1.149, 1.216, Math.pow(u, 0.8));
+    out.set(0.946 + 0.010 * u + 0.0025 * Math.sin(v * Math.PI), yTop - v * 0.020, z);
+  }, 20, 6, { mirrorX: true, outwardHint: [1, 0, 0] });
+  addPart(endplateRedGeo, candyRedMat);
+
+  // TRUE SWAN-NECK PYLONS: curve up and over the airfoil, clamping down from above
+  const pylonCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.24, 0.77, -1.78),
+    new THREE.Vector3(0.24, 0.92, -1.96),
+    new THREE.Vector3(0.24, 1.07, -2.07),
+    new THREE.Vector3(0.24, 1.145, -2.14),
+    new THREE.Vector3(0.24, 1.125, -2.23),
+    new THREE.Vector3(0.24, 1.085, -2.26)
+  ]);
+
+  const swanNeckGeo = buildAnalyticSurface((u, v, out) => {
+    const pt = pylonCurve.getPoint(u);
+    const tan = pylonCurve.getTangent(u);
+    const perpY = -tan.z;
+    const perpZ = tan.y;
+    const chord = lerp(0.11, 0.052, smoothstep(0.0, 1.0, u));
+    const thick = lerp(0.013, 0.0085, u);
+    const ang = v * Math.PI * 2.0;
+    const localLong = Math.cos(ang) * chord * 0.5;
+    const localX = Math.sin(ang) * thick;
+    out.set(pt.x + localX, pt.y + perpY * localLong, pt.z + perpZ * localLong);
+  }, 44, 16, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 1.0, uvScaleV: 0.25 });
+  addPart(swanNeckGeo, satinCarbonMat);
+
+  for (const sx of [-1, 1]) {
+    const clevisGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.042, 12);
+    clevisGeo.rotateZ(Math.PI / 2);
+    const clevis = new THREE.Mesh(clevisGeo, brushedMetalMat);
+    clevis.position.set(0.24 * sx, 1.095, -2.235);
+    chassisGroup.add(clevis);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// 8I. SHARP MULTI-STRAKE REAR DIFFUSER, REAR FASCIA & QUAD EXHAUST TIPS
+// ----------------------------------------------------------------------------
+{
+  // Recessed dark hexagonal rear transom grille
+  const rearFasciaGeo = buildAnalyticSurface((u, v, out) => {
+    const x = lerp(0.0, 0.89, u);
+    const y = lerp(0.39, 0.77, v);
+    const z = -2.24 + 0.055 * u * u;
+    out.set(x, y, z);
+  }, 28, 12, { mirrorX: true, outwardHint: [0, 0, -1], uvScaleU: 1.4, uvScaleV: 0.4 });
+  addPart(rearFasciaGeo, grilleMeshMat);
+
+  // Sharp upswept carbon Venturi rear diffuser tunnel floor
+  const diffuserFloorGeo = buildAnalyticSurface((u, v, out) => {
+    const z = lerp(-1.62, -2.35, u);
+    const x = 0.88 * v;
+    const archTunnel = 0.016 * Math.sin(v * Math.PI * 3.0) * u;
+    const y = 0.095 + 0.285 * Math.pow(u, 1.38) + archTunnel;
+    out.set(x, y, z);
+  }, 24, 24, { mirrorX: true, outwardHint: [0, 0.4, -1], uvScaleU: 1.0, uvScaleV: 1.2 });
+  addPart(diffuserFloorGeo, satinCarbonMat);
+
+  // Sleek tapered vertical carbon diffuser strake fins with crisp swept trailing edge
+  const strakeXs = [0.16, 0.43, 0.70, 0.88];
+  for (let i = 0; i < strakeXs.length; i++) {
+    const sx = strakeXs[i];
+    const isOuter = i === strakeXs.length - 1;
+    const zBack = -2.362 + (isOuter ? 0.032 : 0.0);
+
+    const strakeGeo = buildAnalyticSurface((u, v, out) => {
+      const z = lerp(-1.66, zBack, u);
+      const yTop = 0.095 + 0.288 * Math.pow(u, 1.38) + (isOuter ? 0.025 * u : 0.0);
+      const yBot = 0.090 + 0.044 * Math.pow(u, 2.0) + (isOuter ? 0.045 * u : 0.0);
+      const t = v < 0.5 ? v * 2.0 : (1.0 - v) * 2.0;
+      const side = v < 0.5 ? 1 : -1;
+      const y = lerp(yBot, yTop, t);
+      const thick = 0.0072 * (1.0 - 0.52 * (1.0 - t));
+      out.set(sx + side * thick, y, z);
+    }, 20, 10, { mirrorX: true, outwardFromCentroid: true, uvScaleU: 0.7, uvScaleV: 0.3 });
+    addPart(strakeGeo, glossCarbonMat);
+
+    // Tapered parametric candy-red trailing-edge aero trim on inner & mid strakes
+    if (i === 0 || i === 2) {
+      const trimGeo = buildAnalyticSurface((u, v, out) => {
+        const yBot = 0.136;
+        const yTop = 0.378;
+        const y = lerp(yBot, yTop, u);
+        const z = zBack - 0.005 * Math.sin(u * Math.PI);
+        const ang = v * Math.PI * 2.0;
+        const rx = 0.006 * Math.sin(u * Math.PI * 0.90 + 0.05);
+        const rz = 0.007 * Math.sin(u * Math.PI * 0.90 + 0.05);
+        out.set(sx + Math.cos(ang) * rx, y, z + Math.sin(ang) * rz);
+      }, 14, 10, { mirrorX: true, outwardFromCentroid: true });
+      addPart(trimGeo, candyRedMat);
+    }
+  }
+
+  // Sculpted brushed-titanium quad exhaust surround bezel
+  const bezelShape = new THREE.Shape();
+  bezelShape.moveTo(-0.34, -0.072);
+  bezelShape.lineTo(0.34, -0.072);
+  bezelShape.lineTo(0.30, 0.072);
+  bezelShape.lineTo(-0.30, 0.072);
+  bezelShape.closePath();
+
+  const bezelHole = new THREE.Path();
+  bezelHole.moveTo(-0.31, -0.050);
+  bezelHole.lineTo(0.31, -0.050);
+  bezelHole.lineTo(0.275, 0.050);
+  bezelHole.lineTo(-0.275, 0.050);
+  bezelHole.closePath();
+  bezelShape.holes.push(bezelHole);
+
+  const bezelGeo = new THREE.ExtrudeGeometry(bezelShape, {
+    depth: 0.055,
+    bevelEnabled: true,
+    bevelSegments: 3,
+    bevelSize: 0.007,
+    bevelThickness: 0.007
+  });
+  const bezelMesh = new THREE.Mesh(bezelGeo, brushedMetalMat);
+  bezelMesh.position.set(0, 0.525, -2.29);
+  chassisGroup.add(bezelMesh);
+
+  // Quad bevelled brushed-titanium exhaust pipes with dark recessed bores
+  const exhaustXs = [-0.21, -0.075, 0.075, 0.21];
+  for (const ex of exhaustXs) {
+    const outerPipe = new THREE.CylinderGeometry(0.043, 0.046, 0.14, 24, 1, true);
+    outerPipe.rotateX(Math.PI / 2);
+    const pMesh = new THREE.Mesh(outerPipe, brushedMetalMat);
+    pMesh.position.set(ex, 0.525, -2.265);
+    chassisGroup.add(pMesh);
+
+    const lipGeo = new THREE.TorusGeometry(0.041, 0.0044, 10, 24);
+    const lipMesh = new THREE.Mesh(lipGeo, brushedMetalMat);
+    lipMesh.position.set(ex, 0.525, -2.334);
+    chassisGroup.add(lipMesh);
+
+    const boreGeo = new THREE.CylinderGeometry(0.038, 0.035, 0.13, 20);
+    boreGeo.rotateX(Math.PI / 2);
+    const boreMesh = new THREE.Mesh(boreGeo, exhaustInnerMat);
+    boreMesh.position.set(ex, 0.525, -2.26);
+    chassisGroup.add(boreMesh);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// 8J. GLOWING OVAL-RING RED TAILLIGHTS, THIN LED HEADLIGHTS & WING MIRRORS
+// ----------------------------------------------------------------------------
+{
+  function buildOvalRing(rx, ry, tubeR, cx, cy, cz, tiltY) {
+    return buildAnalyticSurface((u, v, out) => {
+      const a = u * Math.PI * 2.0;
+      const b = v * Math.PI * 2.0;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const sx = Math.sign(ca) * Math.pow(Math.abs(ca), 0.78) * rx;
+      const sy = Math.sign(sa) * Math.pow(Math.abs(sa), 0.78) * ry;
+
+      const nx = Math.cos(a) / rx;
+      const ny = Math.sin(a) / ry;
+      const nLen = Math.hypot(nx, ny) || 1;
+      const onx = nx / nLen;
+      const ony = ny / nLen;
+
+      const lx = sx + onx * Math.cos(b) * tubeR;
+      const ly = sy + ony * Math.cos(b) * tubeR;
+      const lz = Math.sin(b) * tubeR * 1.15;
+
+      const wx = cx + lx * Math.cos(tiltY) + lz * Math.sin(tiltY);
+      const wz = cz - lx * Math.sin(tiltY) + lz * Math.cos(tiltY);
+      out.set(wx, cy + ly, wz);
+    }, 56, 14, { outwardFromCentroid: true });
+  }
+
+  for (const side of [-1, 1]) {
+    const cx = 0.605 * side;
+    const cy = 0.635;
+    const cz = -2.255;
+    const yaw = 0.14 * side;
+
+    addPart(buildOvalRing(0.225, 0.082, 0.017, cx, cy, cz + 0.012, yaw), glossCarbonMat);
+    addPart(buildOvalRing(0.205, 0.068, 0.012, cx, cy, cz - 0.008, yaw), tailOuterRingMat);
+    addPart(buildOvalRing(0.145, 0.042, 0.0075, cx, cy, cz + 0.006, yaw), tailInnerRingMat);
+  }
+
+  // Central vertical F1-style diffuser rain light
+  const rainBarGeo = new THREE.BoxGeometry(0.018, 0.075, 0.014);
+  const rainBar = new THREE.Mesh(rainBarGeo, rainLightMat);
+  rainBar.position.set(0, 0.255, -2.352);
+  chassisGroup.add(rainBar);
+
+  // RAZOR-THIN LED HEADLIGHTS seamlessly hugging evalHoodSurface with zero gaps or artifacts
+  function evalHeadlightSurf(u, v, yOff, out) {
+    // u: 0 = forward nose corner -> 1 = swept smoothly along outer fender crest
+    // v: 0 = inner edge -> 1 = outer fender crest edge
+    const hu = lerp(0.03, 0.34, u);
+    const widthFrac = lerp(0.11, 0.17, Math.sin(u * Math.PI * 0.85 + 0.15));
+    const hv = lerp(0.985 - widthFrac, 0.985, v);
+    evalHoodSurface(hu, hv, out);
+    out.y += yOff;
+  }
+
+  // Sleek dark gloss-black headlight housing bezel flush on the hood-fender shoulder
+  const hlPocketGeo = buildAnalyticSurface((u, v, out) => {
+    const crown = 0.004 * Math.sin(v * Math.PI) * Math.sin(u * Math.PI);
+    evalHeadlightSurf(u, v, 0.0045 + crown, out);
+  }, 24, 12, { mirrorX: true, outwardHint: [0.3, 1, 0.45] });
+  addPart(hlPocketGeo, darkCavityMat);
+
+  // Swept twin thin LED DRL blades & compact twin projectors resting cleanly inside housing
+  const mainPts = [];
+  const browPts = [];
+  const pTmp = new THREE.Vector3();
+  for (let i = 0; i <= 6; i++) {
+    const u = i / 6;
+    evalHeadlightSurf(u, lerp(0.18, 0.78, Math.pow(u, 0.85)), 0.011, pTmp);
+    mainPts.push(pTmp.clone());
+    if (i <= 5) {
+      const ub = lerp(0.08, 0.90, i / 5);
+      evalHeadlightSurf(ub, lerp(0.15, 0.36, i / 5), 0.0115, pTmp);
+      browPts.push(pTmp.clone());
+    }
+  }
+  const drlMainCurve = new THREE.CatmullRomCurve3(mainPts);
+  const drlBrowCurve = new THREE.CatmullRomCurve3(browPts);
+
+  for (const sx of [-1, 1]) {
+    const gMain = new THREE.TubeGeometry(drlMainCurve, 28, 0.0072, 8, false);
+    if (sx < 0) gMain.scale(-1, 1, 1);
+    addPart(gMain, headlightDRLMat);
+
+    const gBrow = new THREE.TubeGeometry(drlBrowCurve, 22, 0.0046, 8, false);
+    if (sx < 0) gBrow.scale(-1, 1, 1);
+    addPart(gBrow, headlightDRLMat);
+
+    for (let p = 0; p < 2; p++) {
+      const pu = 0.34 + p * 0.28;
+      evalHeadlightSurf(pu, 0.52, 0.010, pTmp);
+      const projGeo = new THREE.SphereGeometry(0.014, 14, 10);
+      projGeo.scale(1.3, 0.65, 0.72);
+      const proj = new THREE.Mesh(projGeo, headlightProjMat);
+      proj.position.set(pTmp.x * sx, pTmp.y, pTmp.z);
+      chassisGroup.add(proj);
+    }
+  }
+
+  // Flush clear polycarbonate headlight covers
+  const hlCoverGeo = buildAnalyticSurface((u, v, out) => {
+    evalHeadlightSurf(u, v, 0.015 + 0.005 * Math.sin(v * Math.PI) * Math.sin(u * Math.PI), out);
+  }, 20, 10, { mirrorX: true, outwardHint: [0.3, 1, 0.45] });
+  addPart(hlCoverGeo, clearLensMat);
+
+  // AERODYNAMIC WING MIRRORS mounted directly onto each articulated door
+  const stalkCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.79, 0.722, 0.62),
+    new THREE.Vector3(0.90, 0.755, 0.57),
+    new THREE.Vector3(1.00, 0.795, 0.50),
+    new THREE.Vector3(1.06, 0.805, 0.45)
+  ]);
+
+  const mGlassGeo = new THREE.CircleGeometry(0.052, 20);
+  mGlassGeo.scale(1.45, 0.72, 1.0);
+
+  for (const sx of [1, -1]) {
+    const doorParent = doorContentBySide[sx];
+
+    const mirrorStalkGeo = buildAnalyticSurface((u, v, out) => {
+      const pt = stalkCurve.getPoint(u);
+      const ang = v * Math.PI * 2.0;
+      const rx = 0.008;
+      const ry = lerp(0.014, 0.009, u);
+      const rz = lerp(0.030, 0.020, u);
+      out.set(pt.x + Math.cos(ang) * rx, pt.y + Math.sin(ang) * ry, pt.z + Math.cos(ang) * rz);
+    }, 18, 10, { sideSign: sx, outwardFromCentroid: true });
+    addPart(mirrorStalkGeo, glossCarbonMat, doorParent);
+
+    const mirrorPodGeo = buildAnalyticSurface((u, v, out) => {
+      const ang = v * Math.PI * 2.0;
+      const rx = 0.088 * Math.sin(Math.pow(u, 0.65) * Math.PI * 0.75 + 0.05);
+      const ry = 0.044 * Math.sin(Math.pow(u, 0.65) * Math.PI * 0.75 + 0.05);
+      const z = lerp(0.55, 0.37, u);
+      out.set(1.065 + Math.cos(ang) * rx, 0.812 + Math.sin(ang) * ry, z);
+    }, 18, 18, { sideSign: sx, outwardFromCentroid: true });
+    addPart(mirrorPodGeo, candyRedMat, doorParent);
+
+    const mg = new THREE.Mesh(mGlassGeo, mirrorGlassMat);
+    mg.position.set(1.065 * sx, 0.812, 0.382);
+    mg.rotation.y = Math.PI - 0.16 * sx;
+    doorParent.add(mg);
+  }
+}
+
+// ============================================================================
+// 9. FIVE-SPOKE MATTE-BLACK WHEELS, DRILLED BRAKE DISCS, RED CALIPERS & TIRES
+// ============================================================================
+const spinningWheelGroups = [];
+
+function createWheelAssembly({ isRear, side }) {
+  const R_OUT = isRear ? R_REAR_TIRE : R_FRONT_TIRE;
+  const R_RIM = isRear ? 0.278 : 0.262;
+  const W_TIRE = isRear ? 0.345 : 0.275;
+  const R_ROTOR = isRear ? 0.214 : 0.204;
+  const X_POS = (isRear ? 0.850 : 0.855) * side;
+  const Z_POS = isRear ? Z_REAR_AXLE : Z_FRONT_AXLE;
+
+  const hubAssembly = new THREE.Group();
+  hubAssembly.position.set(X_POS, R_OUT, Z_POS);
+  carRoot.add(hubAssembly);
+
+  const spinGroup = new THREE.Group();
+  hubAssembly.add(spinGroup);
+  spinningWheelGroups.push(spinGroup);
+
+  // 9A. Low-profile tire (parametrically lathed with tread & sidewall detail)
+  const halfW = W_TIRE * 0.5;
+  const profilePts = [];
+  const profileSteps = 44;
+  for (let i = 0; i <= profileSteps; i++) {
+    const v = i / profileSteps;
+    let r, y;
+    if (v < 0.24) {
+      const t = v / 0.24;
+      r = lerp(R_RIM - 0.008, R_OUT - 0.012, t);
+      const bulge = 0.012 * Math.sin(t * Math.PI);
+      const lipBead = 0.008 * Math.exp(-t * 14.0);
+      y = -halfW * (0.94 + 0.06 * Math.sin(t * Math.PI * 0.5)) - bulge - lipBead;
+    } else if (v <= 0.76) {
+      const t = (v - 0.24) / 0.52;
+      const s = (t - 0.5) * 2.0;
+      r = R_OUT - 0.012 * Math.pow(Math.abs(s), 2.8);
+      y = s * halfW * 0.94;
+    } else {
+      const t = (v - 0.76) / 0.24;
+      r = lerp(R_OUT - 0.012, R_RIM - 0.008, t);
+      const bulge = 0.013 * Math.sin(t * Math.PI);
+      const rimProtector = 0.009 * Math.exp(-(1.0 - t) * 12.0);
+      y = halfW * (0.94 + 0.06 * Math.sin((1.0 - t) * Math.PI * 0.5)) + bulge + rimProtector;
+    }
+    profilePts.push(new THREE.Vector2(r, y));
+  }
+
+  const tireGeo = new THREE.LatheGeometry(profilePts, 64);
+  tireGeo.rotateZ(side > 0 ? -Math.PI / 2 : Math.PI / 2);
+  spinGroup.add(new THREE.Mesh(tireGeo, tireRubberMat));
+
+  // 9B. Five-spoke concave matte-black forged wheel
+  const wheelVisual = new THREE.Group();
+  if (side < 0) wheelVisual.rotation.y = Math.PI;
+  spinGroup.add(wheelVisual);
+
+  const barrelPts = [
+    new THREE.Vector2(R_RIM - 0.016, -halfW * 0.88),
+    new THREE.Vector2(R_RIM - 0.002, -halfW * 0.86),
+    new THREE.Vector2(R_RIM - 0.002, halfW * 0.86),
+    new THREE.Vector2(R_RIM + 0.002, halfW * 0.92),
+    new THREE.Vector2(R_RIM - 0.014, halfW * 0.92),
+    new THREE.Vector2(R_RIM - 0.019, halfW * 0.72),
+    new THREE.Vector2(R_RIM - 0.025, halfW * 0.25),
+    new THREE.Vector2(R_RIM - 0.022, -halfW * 0.78),
+    new THREE.Vector2(R_RIM - 0.016, -halfW * 0.88)
+  ];
+  const barrelGeo = new THREE.LatheGeometry(barrelPts, 48);
+  barrelGeo.rotateZ(-Math.PI / 2);
+  wheelVisual.add(new THREE.Mesh(barrelGeo, matteBlackWheelMat));
+
+  const hubX = isRear ? halfW * 0.14 : halfW * 0.30;
+  const lipX = halfW * 0.82;
+
+  const spokeGeo = buildAnalyticSurface((u, v, out) => {
+    const r = lerp(0.062, R_RIM - 0.010, u);
+    const concaveX = lerp(hubX, lipX, Math.pow(u, 0.82));
+    const halfWidth = lerp(0.026, 0.018, smoothstep(0.0, 0.72, u))
+                    + 0.011 * smoothstep(0.75, 1.0, u);
+    const halfDepth = lerp(0.018, 0.012, u);
+
+    const ang = v * Math.PI * 2.0;
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const lx = Math.sign(ca) * Math.pow(Math.abs(ca), 0.58) * halfDepth;
+    const ly = Math.sign(sa) * Math.pow(Math.abs(sa), 0.58) * halfWidth;
+    out.set(concaveX + lx, r, ly);
+  }, 22, 16, { outwardFromCentroid: true });
+
+  for (let i = 0; i < 5; i++) {
+    const spoke = new THREE.Mesh(spokeGeo, matteBlackWheelMat);
+    spoke.rotation.x = (i / 5) * Math.PI * 2.0;
+    wheelVisual.add(spoke);
+
+    const ribGeo = new THREE.CylinderGeometry(0.0055, 0.004, R_RIM - 0.11, 8);
+    const rib = new THREE.Mesh(ribGeo, matteBlackWheelMat);
+    const a = (i / 5) * Math.PI * 2.0;
+    const rMid = (0.08 + R_RIM - 0.02) * 0.5;
+    rib.position.set(lerp(hubX, lipX, 0.52) - 0.012, Math.cos(a) * rMid, Math.sin(a) * rMid);
+    rib.rotation.x = a;
+    wheelVisual.add(rib);
+  }
+
+  const hubGeo = new THREE.CylinderGeometry(0.068, 0.076, 0.055, 24);
+  hubGeo.rotateZ(-Math.PI / 2);
+  const hubMesh = new THREE.Mesh(hubGeo, matteBlackWheelMat);
+  hubMesh.position.x = hubX - 0.005;
+  wheelVisual.add(hubMesh);
+
+  const lockNutGeo = new THREE.CylinderGeometry(0.036, 0.042, 0.032, 12);
+  lockNutGeo.rotateZ(-Math.PI / 2);
+  const lockNut = new THREE.Mesh(lockNutGeo, brushedMetalMat);
+  lockNut.position.x = hubX + 0.018;
+  wheelVisual.add(lockNut);
+
+  const lockRingGeo = new THREE.TorusGeometry(0.045, 0.0042, 10, 24);
+  lockRingGeo.rotateY(Math.PI / 2);
+  const lockRing = new THREE.Mesh(lockRingGeo, caliperRedMat);
+  lockRing.position.x = hubX + 0.020;
+  wheelVisual.add(lockRing);
+
+  // 9C. Cross-drilled ventilated brake disc (spins with wheel)
+  const rotorX = hubX - 0.062;
+  const rotorGeo = new THREE.CylinderGeometry(R_ROTOR, R_ROTOR, 0.026, 48);
+  rotorGeo.rotateZ(-Math.PI / 2);
+  const rotorMesh = new THREE.Mesh(rotorGeo, brakeDiscMat);
+  rotorMesh.position.x = rotorX;
+  wheelVisual.add(rotorMesh);
+
+  const rotorHatGeo = new THREE.CylinderGeometry(0.105, 0.112, 0.044, 24);
+  rotorHatGeo.rotateZ(-Math.PI / 2);
+  const rotorHat = new THREE.Mesh(rotorHatGeo, matteBlackWheelMat);
+  rotorHat.position.x = rotorX + 0.008;
+  wheelVisual.add(rotorHat);
+
+  // 9D. Stationary sculpted 6-piston red brake caliper
+  const caliperVisual = new THREE.Group();
+  if (side < 0) caliperVisual.rotation.y = Math.PI;
+  hubAssembly.add(caliperVisual);
+
+  const calCenterAng = isRear ? (side > 0 ? 0.12 : Math.PI - 0.12)
+                              : (side > 0 ? Math.PI - 0.12 : 0.12);
+  const calSpan = 0.96;
+
+  const caliperGeo = buildAnalyticSurface((u, v, out) => {
+    const ang = calCenterAng + (u - 0.5) * calSpan;
+    const endTaper = Math.sin(Math.pow(u, 0.85) * Math.PI * 0.92 + 0.04);
+    const rMid = R_ROTOR - 0.022;
+    const radH = 0.042 * (0.65 + 0.35 * endTaper);
+    const widX = 0.044 * (0.72 + 0.28 * endTaper);
+
+    const b = v * Math.PI * 2.0;
+    const cb = Math.cos(b), sb = Math.sin(b);
+    const lx = Math.sign(cb) * Math.pow(Math.abs(cb), 0.55) * widX;
+    const lr = Math.sign(sb) * Math.pow(Math.abs(sb), 0.55) * radH;
+
+    const rr = rMid + lr;
+    out.set(rotorX + 0.008 + lx, Math.sin(ang) * rr, Math.cos(ang) * rr);
+  }, 24, 18, { outwardFromCentroid: true });
+
+  caliperVisual.add(new THREE.Mesh(caliperGeo, caliperRedMat));
+
+  for (let k = -1; k <= 1; k++) {
+    const a = calCenterAng + k * 0.24;
+    const boltGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.092, 8);
+    boltGeo.rotateZ(Math.PI / 2);
+    const bolt = new THREE.Mesh(boltGeo, brushedMetalMat);
+    bolt.position.set(rotorX + 0.008, Math.sin(a) * (R_ROTOR + 0.008), Math.cos(a) * (R_ROTOR + 0.008));
+    caliperVisual.add(bolt);
+  }
+}
+
+createWheelAssembly({ isRear: false, side: 1 });
+createWheelAssembly({ isRear: false, side: -1 });
+createWheelAssembly({ isRear: true, side: 1 });
+createWheelAssembly({ isRear: true, side: -1 });
+
+// ============================================================================
+// 10. POST-PROCESSING (BLOOM + ACES OUTPUT + SUBTLE FILM GRAIN & VIGNETTE)
+// ============================================================================
+const composerRT = new THREE.WebGLRenderTarget(
+  window.innerWidth * Math.min(window.devicePixelRatio, 2),
+  window.innerHeight * Math.min(window.devicePixelRatio, 2),
+  { type: THREE.HalfFloatType, samples: 4 }
+);
+
+const composer = new EffectComposer(renderer, composerRT);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.22,
+  0.38,
+  1.18
+);
+composer.addPass(bloomPass);
+
+composer.addPass(new OutputPass());
+
+const filmGrainShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uGrainAmount: { value: 0.0 },
+    uVignette: { value: 0.22 }
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uGrainAmount;
+    uniform float uVignette;
+    varying vec2 vUv;
+
+    float rand(vec2 co) {
+      return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+      vec4 col = texture2D(tDiffuse, vUv);
+
+      float g = rand(vUv * 1100.0 + fract(uTime * 17.37)) - 0.5;
+      float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+      float grainWeight = mix(1.0, 0.45, luma);
+      col.rgb += g * uGrainAmount * grainWeight;
+
+      vec2 centered = (vUv - 0.5) * vec2(1.18, 1.0);
+      float vig = 1.0 - dot(centered, centered) * uVignette;
+      col.rgb *= clamp(vig, 0.68, 1.0);
+
+      gl_FragColor = vec4(col.rgb, col.a);
+    }
+  `
+};
+const filmGrainPass = new ShaderPass(filmGrainShader);
+composer.addPass(filmGrainPass);
+
+// ============================================================================
+// 11. CINEMATIC TURNTABLE CAMERA SWEEP -> SMOOTH DAMPED ORBITCONTROLS
+// ============================================================================
+let userInteracted = false;
+let introBlend = 1.0;
+const INTRO_DURATION = 16.5;
+
+function releaseToUser() {
+  userInteracted = true;
+}
+renderer.domElement.addEventListener('pointerdown', releaseToUser, { passive: true });
+renderer.domElement.addEventListener('wheel', releaseToUser, { passive: true });
+renderer.domElement.addEventListener('touchstart', releaseToUser, { passive: true });
+
+const sweepPos = new THREE.Vector3();
+const sweepTarget = new THREE.Vector3();
+
+function evalCinematicCamera(t) {
+  const p = smootherstep(0.0, INTRO_DURATION, t);
+
+  const azimuth = lerp(0.64, -2.52, p);
+  const elevation = 0.165 + 0.125 * Math.sin(p * Math.PI) + 0.035 * p;
+  const radius = 5.45 + 0.45 * Math.sin(p * Math.PI * 1.15);
+
+  const cosE = Math.cos(elevation);
+  sweepPos.set(
+    Math.sin(azimuth) * cosE * radius,
+    Math.sin(elevation) * radius + 0.34,
+    Math.cos(azimuth) * cosE * radius
+  );
+
+  sweepTarget.set(
+    0.0,
+    lerp(0.42, 0.48, smootherstep(0.0, 4.5, t)),
+    lerp(0.24, -0.04, smootherstep(0.0, 7.0, t))
+  );
+}
+
+evalCinematicCamera(0);
+camera.position.copy(sweepPos);
+controls.target.copy(sweepTarget);
+controls.update();
+
+// ============================================================================
+// 12. RESIZE HANDLER & MAIN ANIMATION LOOP
+// ============================================================================
+function onResize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio, 2);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setPixelRatio(dpr);
+  renderer.setSize(w, h);
+  composer.setPixelRatio(dpr);
+  composer.setSize(w, h);
+  bloomPass.setSize(w, h);
+}
+window.addEventListener('resize', onResize);
+
+// ============================================================================
+// 11B. COMPACT UI CONTROLS: PAINT COLOR SWITCHER & DIHEDRAL DOOR SYSTEM
+// ============================================================================
+const PAINT_PRESETS = {
+  red:    { color: 0x920410, sheen: 0xe61a28, metalness: 0.42, roughness: 0.28 },
+  black:  { color: 0x0e1015, sheen: 0x2a303c, metalness: 0.35, roughness: 0.26 },
+  white:  { color: 0xdce1ea, sheen: 0xffffff, metalness: 0.22, roughness: 0.26 },
+  blue:   { color: 0x09388c, sheen: 0x2675ff, metalness: 0.48, roughness: 0.27 },
+  green:  { color: 0x084a31, sheen: 0x1aa870, metalness: 0.44, roughness: 0.28 },
+  gold:   { color: 0xb86408, sheen: 0xffae2b, metalness: 0.56, roughness: 0.27 },
+  silver: { color: 0x7b8492, sheen: 0xd0d8e4, metalness: 0.68, roughness: 0.26 }
+};
+
+let activePaint = PAINT_PRESETS.red;
+const targetPaintColor = new THREE.Color(activePaint.color);
+const targetSheenColor = new THREE.Color(activePaint.sheen);
+
+let doorsOpen = false;
+let doorAnimRaw = 0.0; // linear 0..1 progress, smoothed via smootherstep
+
+const uiWrap = document.getElementById('ui-wrap');
+const uiToggle = document.getElementById('ui-toggle');
+const uiPanel = document.getElementById('ui-panel');
+const doorBtn = document.getElementById('door-btn');
+const swatches = document.querySelectorAll('#color-swatches .swatch');
+
+// Keep pointer/wheel events on the compact UI from rotating/zooming OrbitControls
+for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'wheel']) {
+  uiWrap.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
+}
+
+uiToggle.addEventListener('click', () => {
+  uiPanel.classList.toggle('collapsed');
+});
+
+swatches.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.color;
+    const preset = PAINT_PRESETS[key];
+    if (!preset) return;
+    activePaint = preset;
+    targetPaintColor.setHex(preset.color);
+    targetSheenColor.setHex(preset.sheen);
+    swatches.forEach((s) => s.classList.toggle('active', s === btn));
+  });
+});
+
+doorBtn.addEventListener('click', () => {
+  doorsOpen = !doorsOpen;
+  doorBtn.textContent = doorsOpen ? 'Close Doors' : 'Open Doors';
+  doorBtn.classList.toggle('open', doorsOpen);
+});
+
+let wheelAngle = 0;
+let wheelOmega = 0;
+let prevTime = performance.now() * 0.001;
+const startTime = prevTime;
+
+function updatePlanarReflection() {
+  reflectionCamera.fov = camera.fov;
+  reflectionCamera.aspect = camera.aspect;
+  reflectionCamera.near = camera.near;
+  reflectionCamera.far = camera.far;
+  reflectionCamera.updateProjectionMatrix();
+
+  reflectionCamera.position.set(camera.position.x, -camera.position.y, camera.position.z);
+  reflectionCamera.up.set(0, 1, 0);
+  reflectionCamera.lookAt(controls.target.x, -controls.target.y, controls.target.z);
+  reflectionCamera.updateMatrixWorld();
+
+  reflMatrix.copy(biasMatrix)
+    .multiply(reflectionCamera.projectionMatrix)
+    .multiply(reflectionCamera.matrixWorldInverse);
+
+  floorMesh.visible = false;
+  renderer.setRenderTarget(reflectionRT);
+  renderer.clear();
+  renderer.render(scene, reflectionCamera);
+  renderer.setRenderTarget(null);
+  floorMesh.visible = true;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const now = performance.now() * 0.001;
+  const dt = Math.min(now - prevTime, 0.05);
+  prevTime = now;
+  const elapsed = now - startTime;
+
+  // A. ENGINE-START SEQUENCE & CONTINUOUS SHOWCASE ANIMATION
+  const crankFlare = gauss(elapsed, 1.18, 0.42) * 2.4 + gauss(elapsed, 1.65, 0.65) * 0.9;
+  const idleWake = smoothstep(0.55, 1.55, elapsed);
+  const pulse = 0.5 + 0.5 * Math.sin(elapsed * 2.15);
+  const tailIntensity = 0.30 + idleWake * (1.15 + 0.40 * pulse) + crankFlare;
+
+  tailOuterRingMat.emissiveIntensity = tailIntensity;
+  tailInnerRingMat.emissiveIntensity = tailIntensity * 0.78;
+  rainLightMat.emissiveIntensity = 0.18 + idleWake * (0.95 + 0.38 * Math.sin(elapsed * 4.3)) + crankFlare * 0.50;
+
+  const exhaustGlow = gauss(elapsed, 1.12, 0.24) * 2.1 + gauss(elapsed, 1.48, 0.32) * 0.8;
+  exhaustInnerMat.emissiveIntensity = exhaustGlow;
+
+  const drlFade = smootherstep(0.95, 2.25, elapsed);
+  const projFade = smootherstep(1.45, 2.95, elapsed);
+  headlightDRLMat.emissiveIntensity = drlFade * 3.0;
+  headlightProjMat.emissiveIntensity = projFade * 4.0;
+
+  floorMat.uniforms.uTailGlow.value = clamp(tailIntensity * 0.42, 0.15, 2.2);
+  floorMat.uniforms.uHeadGlow.value = drlFade * 0.55 + projFade * 0.45;
+
+  // Subtle sprung-chassis engine vibration (starter crank -> smooth V12 idle hum)
+  const crankEnv = smoothstep(0.70, 0.86, elapsed) * Math.exp(-Math.max(0, elapsed - 0.90) * 2.4);
+  const idleEnv = smoothstep(0.95, 2.0, elapsed);
+
+  const crankHeave = crankEnv * (Math.sin(elapsed * 78.0) * 0.0028 + Math.sin(elapsed * 124.0) * 0.0014);
+  const crankRoll = crankEnv * (Math.sin(elapsed * 54.0) * 0.0052 + Math.cos(elapsed * 92.0) * 0.0024);
+  const idleHeave = idleEnv * (Math.sin(elapsed * 165.0) * 0.00038 + Math.sin(elapsed * 82.0) * 0.00024);
+  const idleRoll = idleEnv * Math.sin(elapsed * 112.0) * 0.00055;
+
+  chassisGroup.position.y = crankHeave + idleHeave;
+  chassisGroup.rotation.z = crankRoll + idleRoll;
+  chassisGroup.rotation.x = crankEnv * Math.sin(elapsed * 44.0) * 0.0016;
+
+  // Slow continuous wheel & drilled brake disc rotation
+  const targetOmega = smoothstep(2.4, 5.2, elapsed) * 0.62;
+  wheelOmega = lerp(wheelOmega, targetOmega, 1.0 - Math.exp(-dt * 2.5));
+  wheelAngle += wheelOmega * dt;
+  for (let i = 0; i < spinningWheelGroups.length; i++) {
+    spinningWheelGroups[i].rotation.x = wheelAngle;
+  }
+
+  // Smooth paint color transition
+  const colorAlpha = 1.0 - Math.exp(-dt * 6.5);
+  candyRedMat.color.lerp(targetPaintColor, colorAlpha);
+  candyRedMat.sheenColor.lerp(targetSheenColor, colorAlpha);
+  candyRedMat.metalness = lerp(candyRedMat.metalness, activePaint.metalness, colorAlpha);
+  candyRedMat.roughness = lerp(candyRedMat.roughness, activePaint.roughness, colorAlpha);
+
+  // Smooth dihedral butterfly door open/close animation
+  const doorSpeed = 1.05; // ~0.95s full smooth stroke
+  if (doorsOpen) {
+    doorAnimRaw = Math.min(1.0, doorAnimRaw + dt * doorSpeed);
+  } else {
+    doorAnimRaw = Math.max(0.0, doorAnimRaw - dt * doorSpeed);
+  }
+  const dEase = smootherstep(0.0, 1.0, doorAnimRaw);
+  for (let i = 0; i < doorPivots.length; i++) {
+    const { pivot, side } = doorPivots[i];
+    // Dihedral butterfly motion: swings wide outward and lifts high skyward
+    pivot.rotation.y = -0.46 * side * dEase;
+    pivot.rotation.x = 0.60 * dEase;
+    pivot.rotation.z = 0.36 * side * dEase;
+  }
+
+  // B. CINEMATIC TURNTABLE CAMERA SWEEP -> SMOOTH DAMPED ORBITCONTROLS
+  if (userInteracted) {
+    introBlend = Math.max(0, introBlend - dt * 3.2);
+  } else if (elapsed > INTRO_DURATION - 2.2) {
+    introBlend = 1.0 - smootherstep(INTRO_DURATION - 2.2, INTRO_DURATION, elapsed);
+  }
+
+  if (introBlend > 0.0005) {
+    evalCinematicCamera(elapsed);
+    const follow = 1.0 - Math.exp(-dt * 6.5 * introBlend);
+    camera.position.lerp(sweepPos, follow);
+    controls.target.lerp(sweepTarget, follow);
+  }
+
+  controls.update();
+
+  // C. PLANAR FLOOR REFLECTION & POST-PROCESSED RENDER
+  updatePlanarReflection();
+  filmGrainPass.uniforms.uTime.value = elapsed;
+  composer.render();
+}
+
+animate();
+</script>
+</body>
+</html>

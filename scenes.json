@@ -3,6 +3,78 @@
     "id": "chandrayaan-3-landing",
     "title": "Chandrayaan-3 Landing",
     "file": "chandrayaan-3-landing.html",
-    "description": "25s procedural ISRO Vikram descent, soft touchdown, ramp unfolding & Pragyan rover rollout near the lunar south pole."
+    "description": "25s procedural ISRO Vikram descent, soft touchdown with leg compression, ramp unfolding & Pragyan rover rollout leaving wheel tracks near the lunar south pole."
+  },
+  {
+    "id": "spacex-starship-launch",
+    "title": "SpaceX Starship Launch",
+    "file": "spacex-starship-launch.html",
+    "description": "Mirror-polished stainless steel Starship & Super Heavy launch simulation with procedural launch tower, ignition plume, and camera choreography."
+  },
+  {
+    "id": "spacex-starship-landing",
+    "title": "SpaceX Starship Belly-Flop Landing",
+    "file": "spacex-starship-landing.html",
+    "description": "Starship atmospheric belly-flop descent through clouds, aerodynamic flip maneuver, and Raptor propulsive vertical landing."
+  },
+  {
+    "id": "mysore-palace-dasara",
+    "title": "Mysore Palace — Dasara Night",
+    "file": "mysore-palace-dasara.html",
+    "description": "Procedural Indo-Saracenic architecture illuminated with thousands of warm Dasara festival lights against a night sky."
+  },
+  {
+    "id": "chess-grandmaster-study",
+    "title": "Grandmaster's Study — 3D Chess",
+    "file": "chess-grandmaster-study.html",
+    "description": "Photorealistic procedural Staunton chess set, inlaid wooden board, and warm candlelit study atmosphere."
+  },
+  {
+    "id": "f1-four-car-race",
+    "title": "F1 Four-Car Grand Prix",
+    "file": "f1-four-car-race.html",
+    "description": "Four procedural Formula 1 cars racing on a banked circuit with dynamic overtaking, wheel spin, and broadcast camera tracking."
+  },
+  {
+    "id": "red-black-hypercar",
+    "title": "Red & Black Hypercar",
+    "file": "red-black-hypercar.html",
+    "description": "Procedural studio hypercar showcase with calibrated metallic paint, carbon-fiber details, opening doors, and studio softbox reflections."
+  },
+  {
+    "id": "pagoda-bridge-gate",
+    "title": "Pagoda Bridge Gate",
+    "file": "pagoda-bridge-gate.html",
+    "description": "Multi-tiered East Asian pagoda, arched wooden bridge, torii gate, lantern glow, and reflective water pond."
+  },
+  {
+    "id": "tropical-coast-city",
+    "title": "Tropical Coast City",
+    "file": "tropical-coast-city.html",
+    "description": "Procedural coastal skyline, animated ocean waves, shoreline cliffs, palm trees, and sunlit tropical atmosphere."
+  },
+  {
+    "id": "snowy-cabin-diorama",
+    "title": "Snowy Log Cabin Diorama",
+    "file": "snowy-cabin-diorama.html",
+    "description": "Cozy winter timber cabin diorama with falling snow, glowing hearth windows, pine trees, and chimney smoke."
+  },
+  {
+    "id": "supermassive-black-hole",
+    "title": "Supermassive Black Hole",
+    "file": "supermassive-black-hole.html",
+    "description": "Relativistic accretion disk, gravitational lensing halo, and deep-space starfield rendered with custom GLSL shaders."
+  },
+  {
+    "id": "coffee-ghost",
+    "title": "Coffee Ghost",
+    "file": "coffee-ghost.html",
+    "description": "Stylized procedural 3D character scene with warm cafe lighting, rising steam, and playful animation."
+  },
+  {
+    "id": "07-galaxy-hologram",
+    "title": "Sci-Fi Galaxy Hologram",
+    "file": "07-galaxy-hologram.html",
+    "description": "Spiral galaxy holographic projection with volumetric particle arms, scanlines, and futuristic emitter pedestal."
   }
 ]

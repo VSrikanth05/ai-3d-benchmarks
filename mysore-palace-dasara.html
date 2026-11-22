@@ -1,0 +1,2751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mysore Palace — Dasara Night</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #03050c;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ============================================================================
+// 1. DETERMINISTIC PRNG & MATH UTILITIES
+// ============================================================================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hash2i(ix, iy, seed = 0) {
+  let n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 1442695041);
+  n = (n ^ (n >>> 13)) | 0;
+  n = Math.imul(n, 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function tileNoise2D(x, y, periodX, periodY, seed = 0) {
+  const gx = ((x % periodX) + periodX) % periodX;
+  const gy = ((y % periodY) + periodY) % periodY;
+  const x0 = Math.floor(gx);
+  const y0 = Math.floor(gy);
+  const x1 = (x0 + 1) % periodX;
+  const y1 = (y0 + 1) % periodY;
+  const fx = gx - x0;
+  const fy = gy - y0;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hash2i(x0, y0, seed);
+  const b = hash2i(x1, y0, seed);
+  const c = hash2i(x0, y1, seed);
+  const d = hash2i(x1, y1, seed);
+  return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
+}
+
+function tileFbm(u, v, baseFreq, octaves, seed = 0) {
+  let val = 0;
+  let amp = 0.5;
+  let norm = 0;
+  let freq = baseFreq;
+  for (let i = 0; i < octaves; i++) {
+    val += amp * tileNoise2D(u * freq, v * freq, freq, freq, seed + i * 97);
+    norm += amp;
+    amp *= 0.5;
+    freq *= 2;
+  }
+  return val / norm;
+}
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function smoothstep(e0, e1, x) {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+// Safely prepare any BufferGeometry for mergeGeometries
+function pushGeo(bucket, rawGeo, matrix = null) {
+  let g = rawGeo.index ? rawGeo.toNonIndexed() : rawGeo.clone();
+  if (matrix) g.applyMatrix4(matrix);
+
+  const posAttr = g.getAttribute('position');
+  if (!posAttr) return;
+  const count = posAttr.count;
+
+  if (!g.getAttribute('normal')) {
+    g.computeVertexNormals();
+  }
+  if (!g.getAttribute('uv')) {
+    const uvs = new Float32Array(count * 2);
+    const p = posAttr.array;
+    const n = g.getAttribute('normal').array;
+    for (let i = 0; i < count; i++) {
+      const px = p[i * 3], py = p[i * 3 + 1], pz = p[i * 3 + 2];
+      const nx = Math.abs(n[i * 3]), ny = Math.abs(n[i * 3 + 1]), nz = Math.abs(n[i * 3 + 2]);
+      if (ny >= nx && ny >= nz) {
+        uvs[i * 2] = px * 0.25;
+        uvs[i * 2 + 1] = pz * 0.25;
+      } else if (nx >= nz) {
+        uvs[i * 2] = pz * 0.25;
+        uvs[i * 2 + 1] = py * 0.25;
+      } else {
+        uvs[i * 2] = px * 0.25;
+        uvs[i * 2 + 1] = py * 0.25;
+      }
+    }
+    g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  }
+
+  // Strip any extra attributes so all bucket geometries match strictly
+  for (const key of Object.keys(g.attributes)) {
+    if (key !== 'position' && key !== 'normal' && key !== 'uv') {
+      g.deleteAttribute(key);
+    }
+  }
+  g.clearGroups();
+  bucket.push(g);
+}
+
+const _tmpMat = new THREE.Matrix4();
+const _tmpQuat = new THREE.Quaternion();
+const _tmpPos = new THREE.Vector3();
+const _tmpScale = new THREE.Vector3();
+const _tmpEuler = new THREE.Euler();
+
+function makeMatrix(x, y, z, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) {
+  _tmpPos.set(x, y, z);
+  _tmpEuler.set(rx, ry, rz);
+  _tmpQuat.setFromEuler(_tmpEuler);
+  _tmpScale.set(sx, sy, sz);
+  return new THREE.Matrix4().compose(_tmpPos, _tmpQuat, _tmpScale);
+}
+
+function addBox(bucket, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  // World-scale planar UVs for clean granite ashlar mapping
+  const pos = geo.getAttribute('position');
+  const norm = geo.getAttribute('normal');
+  const uv = geo.getAttribute('uv');
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
+    const nx = Math.abs(norm.getX(i)), ny = Math.abs(norm.getY(i)), nz = Math.abs(norm.getZ(i));
+    if (ny > 0.5) {
+      uv.setXY(i, (px + x) * 0.16, (pz + z) * 0.16);
+    } else if (nx > 0.5) {
+      uv.setXY(i, (pz + z) * 0.16, (py + y) * 0.16);
+    } else {
+      uv.setXY(i, (px + x) * 0.16, (py + y) * 0.16);
+    }
+  }
+  pushGeo(bucket, geo, makeMatrix(x, y, z, rx, ry, rz));
+  geo.dispose();
+}
+
+function addCylinder(bucket, rTop, rBot, h, segs, x, y, z, rx = 0, ry = 0, rz = 0) {
+  const geo = new THREE.CylinderGeometry(rTop, rBot, h, segs, 1, false);
+  pushGeo(bucket, geo, makeMatrix(x, y, z, rx, ry, rz));
+  geo.dispose();
+}
+
+// ============================================================================
+// 2. PROCEDURAL PBR TEXTURES & NIGHT-GLOW PMREM ENVIRONMENT
+// ============================================================================
+function createGraniteTextures(variant = 'ashlar') {
+  const size = 512;
+  const albedoC = document.createElement('canvas');
+  const roughC = document.createElement('canvas');
+  const bumpC = document.createElement('canvas');
+  albedoC.width = roughC.width = bumpC.width = size;
+  albedoC.height = roughC.height = bumpC.height = size;
+
+  const aCtx = albedoC.getContext('2d');
+  const rCtx = roughC.getContext('2d');
+  const bCtx = bumpC.getContext('2d');
+
+  const aImg = aCtx.createImageData(size, size);
+  const rImg = rCtx.createImageData(size, size);
+  const bImg = bCtx.createImageData(size, size);
+
+  const cols = variant === 'ashlar' ? 4 : 8;
+  const rows = variant === 'ashlar' ? 8 : 12;
+  const seedBase = variant === 'ashlar' ? 101 : 409;
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    const rowIdx = Math.floor(v * rows);
+    const rowFrac = (v * rows) - rowIdx;
+    const rowOffset = (rowIdx % 2) * 0.5;
+
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const uShift = (u * cols + rowOffset) % cols;
+      const colIdx = Math.floor(uShift);
+      const colFrac = uShift - colIdx;
+
+      // Subtle per-block tonal shift
+      const blockHash = hash2i(colIdx, rowIdx, seedBase);
+      const blockTone = (blockHash - 0.5) * (variant === 'ashlar' ? 18 : 10);
+
+      // Granite mineral speckle (feldspar, quartz, dark mica)
+      const fbmCoarse = tileFbm(u, v, 8, 4, seedBase + 11);
+      const fbmFine = tileFbm(u, v, 32, 3, seedBase + 53);
+      const speckle = hash2i(x, y, seedBase + 99);
+      const mica = speckle < 0.14 ? -18 : (speckle > 0.88 ? 14 : (speckle - 0.5) * 14);
+
+      // Ashlar mortar joint groove
+      const jointW = variant === 'ashlar' ? 0.028 : 0.018;
+      const jointH = variant === 'ashlar' ? 0.045 : 0.032;
+      const distX = Math.min(colFrac, 1 - colFrac);
+      const distY = Math.min(rowFrac, 1 - rowFrac);
+      const mortarX = 1.0 - smoothstep(0.0, jointW, distX);
+      const mortarY = 1.0 - smoothstep(0.0, jointH, distY);
+      const mortar = Math.max(mortarX, mortarY);
+
+      // Subtle vertical rain patina
+      const streak = (tileFbm(u, v * 0.25, 16, 3, seedBase + 211) - 0.5) * 12;
+
+      // Calibrated cool-warm grey Mysore granite albedo
+      const baseGrey = variant === 'ashlar' ? 124 : 138;
+      let lum = baseGrey + blockTone + (fbmCoarse - 0.5) * 26 + (fbmFine - 0.5) * 16 + mica + streak;
+      lum = lum * (1.0 - mortar * 0.38);
+
+      const r = clamp(Math.round(lum * 1.01), 35, 215);
+      const g = clamp(Math.round(lum * 1.00), 35, 215);
+      const b = clamp(Math.round(lum * 1.03), 38, 222);
+
+      // Calibrated stone roughness (0.64 to 0.90)
+      const roughVal = clamp(
+        Math.round((0.72 + (fbmCoarse - 0.5) * 0.16 + mortar * 0.18 - (speckle > 0.92 ? 0.10 : 0.0)) * 255),
+        140,
+        242
+      );
+
+      // Crisp bump height
+      const bumpVal = clamp(
+        Math.round((0.62 + (fbmFine - 0.5) * 0.24 + (fbmCoarse - 0.5) * 0.14 - mortar * 0.48) * 255),
+        0,
+        255
+      );
+
+      const idx = (y * size + x) * 4;
+      aImg.data[idx] = r;
+      aImg.data[idx + 1] = g;
+      aImg.data[idx + 2] = b;
+      aImg.data[idx + 3] = 255;
+
+      rImg.data[idx] = rImg.data[idx + 1] = rImg.data[idx + 2] = roughVal;
+      rImg.data[idx + 3] = 255;
+
+      bImg.data[idx] = bImg.data[idx + 1] = bImg.data[idx + 2] = bumpVal;
+      bImg.data[idx + 3] = 255;
+    }
+  }
+
+  aCtx.putImageData(aImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+  bCtx.putImageData(bImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(albedoC);
+  const roughnessMap = new THREE.CanvasTexture(roughC);
+  const bumpMap = new THREE.CanvasTexture(bumpC);
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  for (const t of [map, roughnessMap, bumpMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  }
+  return { map, roughnessMap, bumpMap };
+}
+
+function createGildedGoldTextures() {
+  const size = 512;
+  const albedoC = document.createElement('canvas');
+  const roughC = document.createElement('canvas');
+  const bumpC = document.createElement('canvas');
+  albedoC.width = roughC.width = bumpC.width = size;
+  albedoC.height = roughC.height = bumpC.height = size;
+
+  const aCtx = albedoC.getContext('2d');
+  const rCtx = roughC.getContext('2d');
+  const bCtx = bumpC.getContext('2d');
+
+  const aImg = aCtx.createImageData(size, size);
+  const rImg = rCtx.createImageData(size, size);
+  const bImg = bCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+
+      // Hammered gold leaf + fine gilded sheet seams
+      const leafX = Math.floor(u * 24);
+      const leafY = Math.floor(v * 16);
+      const leafVar = (hash2i(leafX, leafY, 707) - 0.5) * 0.08;
+      const hammered = tileFbm(u, v, 16, 4, 733);
+      const micro = tileFbm(u, v, 64, 2, 777);
+
+      // Subtle vertical gilded plate seams aligned with dome segments
+      const segFrac = (u * 24) % 1;
+      const seam = 1.0 - smoothstep(0.0, 0.045, Math.min(segFrac, 1 - segFrac));
+
+      // Subtle horizontal lotus band near bottom & crown
+      const baseLotus = Math.exp(-Math.pow((v - 0.10) / 0.07, 2)) * (0.5 + 0.5 * Math.cos(u * 24 * Math.PI * 2));
+      const topLotus = Math.exp(-Math.pow((v - 0.88) / 0.06, 2)) * (0.5 + 0.5 * Math.cos(u * 24 * Math.PI * 2));
+      const lotusRelief = (baseLotus + topLotus) * 0.25;
+
+      const shade = 1.0 + leafVar + (hammered - 0.5) * 0.14 - seam * 0.18 + lotusRelief * 0.10;
+      const r = clamp(Math.round(238 * shade), 160, 255);
+      const g = clamp(Math.round(188 * shade), 115, 224);
+      const b = clamp(Math.round(78 * shade), 38, 125);
+
+      // Burnished gold roughness (0.16 - 0.36)
+      const roughVal = clamp(
+        Math.round((0.23 + (hammered - 0.5) * 0.12 + (micro - 0.5) * 0.06 + seam * 0.22 - lotusRelief * 0.05) * 255),
+        36,
+        135
+      );
+
+      const bumpVal = clamp(
+        Math.round((0.52 + (hammered - 0.5) * 0.22 + (micro - 0.5) * 0.10 - seam * 0.36 + lotusRelief * 0.42) * 255),
+        0,
+        255
+      );
+
+      const idx = (y * size + x) * 4;
+      aImg.data[idx] = r;
+      aImg.data[idx + 1] = g;
+      aImg.data[idx + 2] = b;
+      aImg.data[idx + 3] = 255;
+
+      rImg.data[idx] = rImg.data[idx + 1] = rImg.data[idx + 2] = roughVal;
+      rImg.data[idx + 3] = 255;
+
+      bImg.data[idx] = bImg.data[idx + 1] = bImg.data[idx + 2] = bumpVal;
+      bImg.data[idx + 3] = 255;
+    }
+  }
+
+  aCtx.putImageData(aImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+  bCtx.putImageData(bImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(albedoC);
+  const roughnessMap = new THREE.CanvasTexture(roughC);
+  const bumpMap = new THREE.CanvasTexture(bumpC);
+  map.colorSpace = THREE.SRGBColorSpace;
+  for (const t of [map, roughnessMap, bumpMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  }
+  return { map, roughnessMap, bumpMap };
+}
+
+function createPavingTextures() {
+  const size = 512;
+  const albedoC = document.createElement('canvas');
+  const roughC = document.createElement('canvas');
+  albedoC.width = roughC.width = size;
+  albedoC.height = roughC.height = size;
+  const aCtx = albedoC.getContext('2d');
+  const rCtx = roughC.getContext('2d');
+
+  const aImg = aCtx.createImageData(size, size);
+  const rImg = rCtx.createImageData(size, size);
+
+  const tiles = 8;
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    const ty = Math.floor(v * tiles);
+    const fy = (v * tiles) - ty;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const tx = Math.floor(u * tiles);
+      const fx = (u * tiles) - tx;
+
+      const checker = ((tx + ty) % 2 === 0) ? 1.0 : 0.88;
+      const n = tileFbm(u, v, 12, 3, 911);
+      const damp = tileFbm(u, v, 4, 3, 953);
+      const groove = Math.max(
+        1.0 - smoothstep(0.0, 0.03, Math.min(fx, 1 - fx)),
+        1.0 - smoothstep(0.0, 0.03, Math.min(fy, 1 - fy))
+      );
+
+      const lum = (72 * checker + (n - 0.5) * 18) * (1.0 - groove * 0.42);
+      const r = clamp(Math.round(lum * 1.02), 20, 140);
+      const g = clamp(Math.round(lum * 1.00), 20, 138);
+      const b = clamp(Math.round(lum * 1.05), 24, 145);
+
+      // Damp ceremonial polished granite reflects palace light subtly
+      const roughVal = clamp(
+        Math.round((0.36 + (damp - 0.5) * 0.24 + groove * 0.42) * 255),
+        48,
+        230
+      );
+
+      const idx = (y * size + x) * 4;
+      aImg.data[idx] = r;
+      aImg.data[idx + 1] = g;
+      aImg.data[idx + 2] = b;
+      aImg.data[idx + 3] = 255;
+
+      rImg.data[idx] = rImg.data[idx + 1] = rImg.data[idx + 2] = roughVal;
+      rImg.data[idx + 3] = 255;
+    }
+  }
+  aCtx.putImageData(aImg, 0, 0);
+  rCtx.putImageData(rImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(albedoC);
+  const roughnessMap = new THREE.CanvasTexture(roughC);
+  map.colorSpace = THREE.SRGBColorSpace;
+  for (const t of [map, roughnessMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(14, 14);
+    t.anisotropy = 8;
+  }
+  return { map, roughnessMap };
+}
+
+// Procedural recessed Durbar colonnade corridor texture (deep shadowed arches + subtle warm ceiling chandelier bounce)
+function createInteriorCorridorTexture() {
+  const w = 256, h = 256;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+
+  // Rich vertical shadow gradient: warm vaulted ceiling glow -> deep shadowy stone corridor -> faint floor bounce
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0.0, '#6b3812');
+  grad.addColorStop(0.18, '#3f1f0a');
+  grad.addColorStop(0.55, '#190d06');
+  grad.addColorStop(0.86, '#261408');
+  grad.addColorStop(1.0, '#140b05');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Subtle recessed interior pilaster / doorway rhythm so hallways feel three-dimensional
+  for (let i = 0; i < 8; i++) {
+    const x = (i / 8) * w;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
+    ctx.fillRect(x, 0, 7, h);
+    ctx.fillStyle = 'rgba(255, 165, 70, 0.09)';
+    ctx.fillRect(x + 9, h * 0.14, 14, h * 0.28);
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// Tailored Night + Golden Dasara Radiance PMREM Environment for Metallic Gold PBR
+function createNightEnvMap(renderer) {
+  const envScene = new THREE.Scene();
+  const envGeo = new THREE.SphereGeometry(50, 32, 24);
+  const envMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float y = d.y;
+
+        // Deep midnight sapphire overhead, warm golden Dasara horizon & lower bounce
+        vec3 zenith = vec3(0.03, 0.05, 0.14);
+        vec3 midSky = vec3(0.10, 0.14, 0.28);
+        vec3 warmHorizon = vec3(1.55, 0.82, 0.24);
+        vec3 warmGround = vec3(0.75, 0.38, 0.10);
+
+        vec3 col = mix(midSky, zenith, smoothstep(0.05, 0.75, max(y, 0.0)));
+        float horizonBand = exp(-pow((y - 0.02) / 0.22, 2.0));
+        col += warmHorizon * horizonBand * 1.15;
+
+        if (y < 0.0) {
+          col = mix(col, warmGround, smoothstep(0.0, -0.45, y));
+        }
+
+        // Crisp bright incandescent specular ribbons around the horizon to make gilded domes gleam
+        float az = atan(d.x, d.z);
+        float glintRing = pow(max(0.0, cos(az * 6.0)), 8.0) * exp(-pow((y - 0.12) / 0.14, 2.0));
+        float lowerGlint = pow(max(0.0, sin(az * 8.0 + 0.6)), 6.0) * exp(-pow((y + 0.14) / 0.18, 2.0));
+        col += vec3(3.2, 2.0, 0.75) * (glintRing * 0.85 + lowerGlint * 0.65);
+
+        // Cool subtle moon highlight on upper left-rear
+        vec3 moonDir = normalize(vec3(-0.45, 0.68, -0.58));
+        float moonSpec = pow(max(0.0, dot(d, moonDir)), 24.0);
+        col += vec3(0.55, 0.75, 1.25) * moonSpec * 1.1;
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+  envScene.add(new THREE.Mesh(envGeo, envMat));
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const rt = pmrem.fromScene(envScene, 0.025);
+  envGeo.dispose();
+  envMat.dispose();
+  pmrem.dispose();
+  return rt.texture;
+}
+
+// ============================================================================
+// 3. BULB PLACER (HIGH-DENSITY INSTANCED DASARA LIGHTS)
+// ============================================================================
+class BulbPlacer {
+  constructor() {
+    this.positions = [];
+    this.scales = [];
+    this.warmths = [];
+  }
+
+  addPoint(x, y, z, scale = 1.0, warmth = -1) {
+    this.positions.push(x, y, z);
+    this.scales.push(scale);
+    this.warmths.push(warmth);
+  }
+
+  addLine(x0, y0, z0, x1, y1, z1, spacing = 0.42, scale = 1.0, includeEnds = true) {
+    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-4) return;
+    const steps = Math.max(1, Math.round(len / spacing));
+    const start = includeEnds ? 0 : 1;
+    const end = includeEnds ? steps : steps - 1;
+    for (let i = start; i <= end; i++) {
+      const t = i / steps;
+      this.addPoint(x0 + dx * t, y0 + dy * t, z0 + dz * t, scale);
+    }
+  }
+
+  // Arc-length uniform placement along any 3D polyline
+  addPolyline(pts, spacing = 0.36, scale = 1.0) {
+    if (pts.length < 2) return;
+    const cumLen = [0];
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      total += pts[i].distanceTo(pts[i - 1]);
+      cumLen.push(total);
+    }
+    if (total < 1e-4) return;
+    const count = Math.max(2, Math.round(total / spacing));
+    let seg = 0;
+    for (let i = 0; i <= count; i++) {
+      const targetDist = (i / count) * total;
+      while (seg < cumLen.length - 2 && cumLen[seg + 1] < targetDist) seg++;
+      const segLen = Math.max(1e-6, cumLen[seg + 1] - cumLen[seg]);
+      const t = clamp((targetDist - cumLen[seg]) / segLen, 0, 1);
+      const a = pts[seg], b = pts[seg + 1];
+      this.addPoint(
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+        scale
+      );
+    }
+  }
+
+  addHorizontalRing(cx, cy, cz, radius, spacing = 0.40, scale = 1.0, angleStart = 0, angleSpan = Math.PI * 2) {
+    const arcLen = Math.abs(angleSpan) * radius;
+    const count = Math.max(6, Math.round(arcLen / spacing));
+    const closed = Math.abs(angleSpan - Math.PI * 2) < 1e-3;
+    const n = closed ? count : count + 1;
+    for (let i = 0; i < n; i++) {
+      const a = angleStart + (i / count) * angleSpan;
+      this.addPoint(cx + Math.cos(a) * radius, cy, cz + Math.sin(a) * radius, scale);
+    }
+  }
+
+  addRectOutline(cx, cy, cz, w, d, spacing = 0.44, scale = 1.0, sides = 'all') {
+    const hw = w * 0.5, hd = d * 0.5;
+    if (sides === 'all' || sides === 'front' || sides === 'frontSides') {
+      this.addLine(cx - hw, cy, cz + hd, cx + hw, cy, cz + hd, spacing, scale, true);
+    }
+    if (sides === 'all' || sides === 'frontSides') {
+      this.addLine(cx - hw, cy, cz - hd, cx - hw, cy, cz + hd, spacing, scale, false);
+      this.addLine(cx + hw, cy, cz - hd, cx + hw, cy, cz + hd, spacing, scale, false);
+    }
+    if (sides === 'all') {
+      this.addLine(cx - hw, cy, cz - hd, cx + hw, cy, cz - hd, spacing, scale, true);
+    }
+  }
+
+  buildInstancedMesh(seed = 2026) {
+    const rand = mulberry32(seed);
+    const count = this.scales.length;
+
+    const baseGeo = new THREE.IcosahedronGeometry(0.056, 1);
+    const randomData = new Float32Array(count * 4);
+    const scaleData = new Float32Array(count);
+
+    for (let i = 0; i < count; i++) {
+      const phase = rand() * Math.PI * 2;
+      const freq = 0.85 + rand() * 2.45;
+      const warmth = this.warmths[i] >= 0 ? this.warmths[i] : rand();
+      // Subtle realistic filament brightness variance
+      const dimmed = rand() < 0.025 ? 0.45 : 1.0;
+      const bright = (0.78 + rand() * 0.38) * dimmed;
+
+      randomData[i * 4 + 0] = phase;
+      randomData[i * 4 + 1] = freq;
+      randomData[i * 4 + 2] = warmth;
+      randomData[i * 4 + 3] = bright;
+      scaleData[i] = this.scales[i];
+    }
+
+    baseGeo.setAttribute('aRandom', new THREE.InstancedBufferAttribute(randomData, 4));
+    baseGeo.setAttribute('aScale', new THREE.InstancedBufferAttribute(scaleData, 1));
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+      },
+      vertexShader: /* glsl */ `
+        attribute vec4 aRandom;
+        attribute float aScale;
+        uniform float uTime;
+
+        varying vec3 vNormalView;
+        varying vec3 vViewDir;
+        varying vec4 vRandom;
+        varying float vWorldY;
+
+        void main() {
+          vec4 instanceOrigin = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+          vec4 worldOrigin = modelMatrix * instanceOrigin;
+          vWorldY = worldOrigin.y;
+
+          // Gentle distance compensation so distant bulbs stay discrete jewel pinpoints without merging into bands
+          float camDist = length(cameraPosition - worldOrigin.xyz);
+          float distBoost = clamp(0.92 + (camDist - 28.0) * 0.0062, 0.85, 1.42);
+          float twinkleScale = 1.0 + 0.06 * sin(uTime * aRandom.y + aRandom.x);
+
+          vec3 localPos = position * aScale * distBoost * twinkleScale;
+          vec4 worldPos = modelMatrix * (instanceMatrix * vec4(localPos, 1.0));
+          vec4 mvPos = viewMatrix * worldPos;
+
+          vNormalView = normalize(normalMatrix * mat3(instanceMatrix) * normal);
+          vViewDir = normalize(-mvPos.xyz);
+          vRandom = aRandom;
+
+          gl_Position = projectionMatrix * mvPos;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        varying vec3 vNormalView;
+        varying vec3 vViewDir;
+        varying vec4 vRandom;
+        varying float vWorldY;
+
+        void main() {
+          if (vWorldY < -0.02) discard;
+
+          float phase = vRandom.x;
+          float freq = vRandom.y;
+          float warmth = vRandom.z;
+          float baseBright = vRandom.w;
+
+          // Gentle organic incandescent twinkle + slight night-air scintillation
+          float t1 = sin(uTime * freq + phase);
+          float t2 = sin(uTime * (freq * 2.13 + 0.4) + phase * 1.71);
+          float t3 = sin(uTime * 0.45 + phase * 3.1);
+          float twinkle = 1.0 + 0.16 * t1 + 0.08 * t2 + 0.05 * t3;
+
+          float ndotv = clamp(abs(dot(normalize(vNormalView), normalize(vViewDir))), 0.0, 1.0);
+          float core = pow(ndotv, 1.85);
+
+          // Rich warm tungsten Dasara palette (deep golden amber rim -> warm incandescent filament core)
+          vec3 rimAmber = mix(vec3(1.0, 0.34, 0.04), vec3(1.0, 0.50, 0.10), warmth);
+          vec3 hotCore = mix(vec3(1.0, 0.74, 0.28), vec3(1.0, 0.86, 0.48), warmth);
+
+          vec3 col = mix(rimAmber, hotCore, core);
+          // Calibrated HDR intensity: triggers lush soft golden bloom while preserving distinct pinpoint bulbs
+          float hdrIntensity = (1.28 + core * 1.68) * baseBright * twinkle;
+
+          gl_FragColor = vec4(col * hdrIntensity, 1.0);
+        }
+      `,
+      toneMapped: true,
+    });
+
+    const mesh = new THREE.InstancedMesh(baseGeo, mat, count);
+    mesh.frustumCulled = false;
+
+    const dummy = new THREE.Matrix4();
+    for (let i = 0; i < count; i++) {
+      dummy.makeTranslation(
+        this.positions[i * 3],
+        this.positions[i * 3 + 1],
+        this.positions[i * 3 + 2]
+      );
+      mesh.setMatrixAt(i, dummy);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    return { mesh, material: mat, count };
+  }
+}
+
+// ============================================================================
+// 4. PARAMETRIC INDO-SARACENIC ARCHITECTURAL GENERATORS
+// ============================================================================
+
+// Returns 2D points of an authentic pointed cusped (multifoil) Indo-Saracenic arch
+// Centered at x = 0, spanning [-halfW, +halfW], springing at y = springY, peaking at y = springY + archH
+function sampleCuspedArch2D(width, springY, archH, cuspCount = 7, samples = 36) {
+  const halfW = width * 0.5;
+  const pts = [];
+  for (let i = 0; i <= samples; i++) {
+    const u = i / samples; // 0 (right spring) -> 1 (left spring)
+    const theta = u * Math.PI; // 0 -> PI
+
+    // Pointed Indo-Saracenic ogee/pointed envelope
+    const cosT = Math.cos(theta);
+    const sinT = Math.sin(theta);
+
+    // Slight pointed lift toward apex (theta = PI/2)
+    const apexFactor = Math.pow(sinT, 0.82);
+    const pinch = 1.0 - 0.16 * Math.pow(Math.sin(theta), 2.4);
+    let x = cosT * halfW * (0.98 + 0.02 * (1 - apexFactor));
+    // Bring apex to a crisp graceful point
+    const sgn = x >= 0 ? 1 : -1;
+    x = sgn * Math.pow(Math.abs(x / halfW), 1.08) * halfW;
+
+    let y = springY + apexFactor * archH;
+
+    // Add graceful scalloped cusps (multifoil lobes) inward along the arch intrados
+    if (cuspCount > 0) {
+      const lobe = Math.abs(Math.sin(u * cuspCount * Math.PI));
+      const cuspDepth = Math.min(halfW, archH) * 0.085 * Math.sin(theta);
+      // Push inward along radial vector toward center (0, springY)
+      const dx = x;
+      const dy = y - springY;
+      const r = Math.hypot(dx, dy) || 1;
+      const inset = (1.0 - lobe) * cuspDepth;
+      x -= (dx / r) * inset * pinch;
+      y -= (dy / r) * inset * pinch;
+    }
+
+    pts.push(new THREE.Vector2(x, y));
+  }
+  return pts;
+}
+
+// Builds one 3D Indo-Saracenic arched bay (spandrel wall + recessed soffit + arch moulding + twin columns + bulb outlines)
+function buildArchedBay(buckets, bulbs, opts) {
+  const {
+    cx, baseY, zFront,
+    bayW, bayH,
+    archW, springH, archH,
+    depth = 0.95,
+    cusps = 7,
+    rotY = 0,
+    twinColumns = true,
+    hasBalustrade = false,
+    balustradeH = 1.05,
+    bulbSpacing = 0.36,
+    bulbScale = 1.0,
+    outlineColumns = true,
+    isDarkRecess = false,
+  } = opts;
+
+  const halfBay = bayW * 0.5;
+  const halfArch = archW * 0.5;
+  const archPts = sampleCuspedArch2D(archW, springH, archH, cusps, 32);
+
+  // Transform helper for local (lx, ly, lz) -> world
+  const cosR = Math.cos(rotY);
+  const sinR = Math.sin(rotY);
+  const toWorld = (lx, ly, lz) => new THREE.Vector3(
+    cx + lx * cosR + lz * sinR,
+    baseY + ly,
+    zFront - lx * sinR + lz * cosR
+  );
+
+  // 1. Extruded spandrel wall with cusped arch opening cut out
+  const shape = new THREE.Shape();
+  shape.moveTo(-halfBay, 0);
+  shape.lineTo(-halfArch, 0);
+  // Trace arch from left (-halfArch, springH) to right (+halfArch, springH)
+  shape.lineTo(-halfArch, springH);
+  for (let i = archPts.length - 1; i >= 0; i--) {
+    shape.lineTo(archPts[i].x, archPts[i].y);
+  }
+  shape.lineTo(halfArch, 0);
+  shape.lineTo(halfBay, 0);
+  shape.lineTo(halfBay, bayH);
+  shape.lineTo(-halfBay, bayH);
+  shape.closePath();
+
+  const wallGeo = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: false,
+    curveSegments: 1,
+  });
+  // Shift extrusion so front face sits at local lz = 0 and extends backward to -depth
+  wallGeo.translate(0, 0, -depth);
+
+  // Clean world-scaled UVs on extruded wall
+  const pAttr = wallGeo.getAttribute('position');
+  const uvAttr = wallGeo.getAttribute('uv');
+  for (let i = 0; i < pAttr.count; i++) {
+    uvAttr.setXY(i, pAttr.getX(i) * 0.16, pAttr.getY(i) * 0.16);
+  }
+
+  const matWall = makeMatrix(cx, baseY, zFront, 0, rotY, 0);
+  pushGeo(buckets.graniteWall, wallGeo, matWall);
+  wallGeo.dispose();
+
+  // 2. Protruding carved stone architrave rim around the arch curve
+  const rimCurvePts = archPts.map(p => new THREE.Vector3(p.x * 1.045, p.y + 0.04, 0.05));
+  const rimCurve = new THREE.CatmullRomCurve3(rimCurvePts);
+  const rimGeo = new THREE.TubeGeometry(rimCurve, 32, 0.095, 6, false);
+  pushGeo(buckets.graniteTrim, rimGeo, matWall);
+  rimGeo.dispose();
+
+  // Subtle ornamental keystone medallion at arch apex
+  const apexPt = archPts[Math.floor(archPts.length / 2)];
+  const keyGeo = new THREE.BoxGeometry(0.32, 0.42, 0.24);
+  pushGeo(buckets.graniteTrim, keyGeo, matWall.clone().multiply(makeMatrix(0, apexPt.y + 0.18, 0.08)));
+  keyGeo.dispose();
+
+  // 3. Carved Indo-Saracenic Columns flanking the bay piers
+  const colH = springH - 0.1;
+  const colPositions = twinColumns
+    ? [-halfBay + 0.22, -halfArch - 0.16, halfArch + 0.16, halfBay - 0.22]
+    : [-halfArch - 0.22, halfArch + 0.22];
+
+  // Deduplicate if pier is narrow
+  const uniqueCols = [];
+  for (const xPos of colPositions) {
+    if (!uniqueCols.some(u => Math.abs(u - xPos) < 0.24)) uniqueCols.push(xPos);
+  }
+
+  const colR = twinColumns ? 0.145 : 0.19;
+  for (const lx of uniqueCols) {
+    const colM = matWall.clone().multiply(makeMatrix(lx, 0, 0.06));
+    // Plinth base
+    const baseG = new THREE.BoxGeometry(colR * 2.7, 0.45, colR * 2.7);
+    pushGeo(buckets.graniteTrim, baseG, colM.clone().multiply(makeMatrix(0, 0.225, 0)));
+    baseG.dispose();
+    // Molded torus base
+    const torG = new THREE.CylinderGeometry(colR * 1.18, colR * 1.32, 0.22, 10);
+    pushGeo(buckets.graniteTrim, torG, colM.clone().multiply(makeMatrix(0, 0.56, 0)));
+    torG.dispose();
+    // Column shaft
+    const shaftH = Math.max(0.5, colH - 1.25);
+    const shaftG = new THREE.CylinderGeometry(colR * 0.92, colR * 1.04, shaftH, 10);
+    pushGeo(buckets.graniteTrim, shaftG, colM.clone().multiply(makeMatrix(0, 0.67 + shaftH * 0.5, 0)));
+    shaftG.dispose();
+    // Lotus capital & abacus
+    const capG = new THREE.CylinderGeometry(colR * 1.58, colR * 0.96, 0.36, 10);
+    pushGeo(buckets.graniteTrim, capG, colM.clone().multiply(makeMatrix(0, colH - 0.36, 0)));
+    capG.dispose();
+    const abG = new THREE.BoxGeometry(colR * 3.1, 0.20, colR * 3.1);
+    pushGeo(buckets.graniteTrim, abG, colM.clone().multiply(makeMatrix(0, colH - 0.08, 0)));
+    abG.dispose();
+  }
+
+  // 4. Optional carved balustrade across lower opening
+  if (hasBalustrade) {
+    const balM = matWall.clone().multiply(makeMatrix(0, 0, -0.10));
+    const railG = new THREE.BoxGeometry(archW + 0.16, 0.16, 0.26);
+    pushGeo(buckets.graniteTrim, railG, balM.clone().multiply(makeMatrix(0, 0.08, 0)));
+    pushGeo(buckets.graniteTrim, railG, balM.clone().multiply(makeMatrix(0, balustradeH - 0.08, 0)));
+    railG.dispose();
+
+    const numBalusters = Math.max(4, Math.floor(archW / 0.36));
+    const bGeo = new THREE.CylinderGeometry(0.055, 0.075, balustradeH - 0.28, 6);
+    for (let i = 0; i < numBalusters; i++) {
+      const bx = -halfArch + 0.22 + (i / (numBalusters - 1)) * (archW - 0.44);
+      pushGeo(buckets.graniteTrim, bGeo, balM.clone().multiply(makeMatrix(bx, balustradeH * 0.5, 0)));
+    }
+    bGeo.dispose();
+
+    // Glowing bulb string along top of balustrade rail
+    const b0 = toWorld(-halfArch, balustradeH + 0.04, 0.08);
+    const b1 = toWorld(halfArch, balustradeH + 0.04, 0.08);
+    bulbs.addLine(b0.x, b0.y, b0.z, b1.x, b1.y, b1.z, bulbSpacing * 1.15, bulbScale * 0.85, false);
+  }
+
+  // 5. Optional recessed dark window / jali backing for upper tower bays
+  if (isDarkRecess) {
+    const winG = new THREE.PlaneGeometry(archW + 0.1, springH + archH + 0.1);
+    pushGeo(buckets.windowGlow, winG, matWall.clone().multiply(makeMatrix(0, (springH + archH) * 0.5, -depth + 0.08)));
+    winG.dispose();
+  }
+
+  // 6. Glowing Dasara bulbs hugging the exact cusped arch profile!
+  const archWorldPts = archPts.map(p => toWorld(p.x * 1.035, p.y + 0.03, 0.16));
+  bulbs.addPolyline(archWorldPts, bulbSpacing, bulbScale);
+
+  // Vertical bulb lines along pier edges up to springing point
+  if (outlineColumns) {
+    const pL0 = toWorld(-halfArch - 0.05, hasBalustrade ? balustradeH : 0.2, 0.16);
+    const pL1 = toWorld(-halfArch - 0.05, springH, 0.16);
+    bulbs.addLine(pL0.x, pL0.y, pL0.z, pL1.x, pL1.y, pL1.z, bulbSpacing * 1.1, bulbScale * 0.88, false);
+
+    const pR0 = toWorld(halfArch + 0.05, hasBalustrade ? balustradeH : 0.2, 0.16);
+    const pR1 = toWorld(halfArch + 0.05, springH, 0.16);
+    bulbs.addLine(pR0.x, pR0.y, pR0.z, pR1.x, pR1.y, pR1.z, bulbSpacing * 1.1, bulbScale * 0.88, false);
+  }
+}
+
+// Parametric bulbous Indo-Saracenic onion dome profile
+// Returns { r, y, nr, ny } for normalized t in [0, 1]
+function sampleDomeProfile(t, radius, height) {
+  // Smooth neck pinch at t=0 -> bulbous swell at t~0.28 -> graceful ogee curve to sharp crown at t=1
+  const neck = 0.88;
+  const swell = Math.sin(Math.pow(t, 0.72) * Math.PI);
+  const belly = 0.22 * Math.sin(clamp(t * 2.1, 0, 1) * Math.PI);
+  const ogeeTip = Math.pow(1.0 - t, 1.35);
+
+  const r = radius * (
+    (1.0 - t) * neck * Math.exp(-t * 4.5) +
+    (1.0 - Math.exp(-t * 5.0)) * (swell * 0.94 + belly) * (0.35 + 0.65 * ogeeTip)
+  );
+
+  // Smooth elevation profile (slightly faster rise near bottom and pointed crown)
+  const y = height * (t + 0.04 * Math.sin(t * Math.PI));
+
+  // Numerical derivative for outward normal
+  const eps = 0.004;
+  const t0 = clamp(t - eps, 0, 1);
+  const t1 = clamp(t + eps, 0, 1);
+  const evalR = (tt) => {
+    const sw = Math.sin(Math.pow(tt, 0.72) * Math.PI);
+    const bl = 0.22 * Math.sin(clamp(tt * 2.1, 0, 1) * Math.PI);
+    const og = Math.pow(1.0 - tt, 1.35);
+    return radius * (
+      (1.0 - tt) * neck * Math.exp(-tt * 4.5) +
+      (1.0 - Math.exp(-tt * 5.0)) * (sw * 0.94 + bl) * (0.35 + 0.65 * og)
+    );
+  };
+  const evalY = (tt) => height * (tt + 0.04 * Math.sin(tt * Math.PI));
+  const dr = evalR(t1) - evalR(t0);
+  const dy = evalY(t1) - evalY(t0);
+  const len = Math.hypot(dr, dy) || 1;
+  // Outward normal is (+dy, -dr) normalized
+  return { r: Math.max(0.015, r), y, nr: dy / len, ny: -dr / len };
+}
+
+// Builds a complete Gilded Indo-Saracenic Bulbous Dome + Lotus Collar + Ribs + Kalasha Finial + Bulb Rib Strings
+function buildGildedDome(buckets, bulbs, opts) {
+  const {
+    cx, baseY, cz,
+    radius, height,
+    ribs = 16,
+    goldBucket = buckets.gildedGold,
+    finialH = height * 0.42,
+    bulbSpacing = 0.38,
+    bulbScale = 1.0,
+    ringCount = 3,
+    drumH = 0,
+    drumSides = 16,
+    drumArches = true,
+  } = opts;
+
+  let domeStartY = baseY;
+
+  // Optional carved stone drum / clerestory gallery beneath the dome
+  if (drumH > 0.1) {
+    const drumR = radius * 1.04;
+    // Stepped plinth ring
+    addCylinder(buckets.graniteTrim, drumR * 1.07, drumR * 1.11, drumH * 0.14, drumSides, cx, baseY + drumH * 0.07, cz);
+    // Main drum body
+    addCylinder(buckets.graniteWall, drumR * 0.98, drumR * 1.01, drumH * 0.74, drumSides, cx, baseY + drumH * 0.50, cz);
+    // Projecting drum cornice + chhajja
+    addCylinder(buckets.graniteTrim, drumR * 1.15, drumR * 1.01, drumH * 0.14, drumSides, cx, baseY + drumH * 0.92, cz);
+
+    // Decorative arched niches & pilasters around drum perimeter
+    if (drumArches) {
+      for (let i = 0; i < drumSides; i++) {
+        const a = (i / drumSides) * Math.PI * 2;
+        const aNext = ((i + 0.5) / drumSides) * Math.PI * 2;
+        // Pilaster at vertices
+        const px = cx + Math.cos(a) * (drumR * 1.02);
+        const pz = cz + Math.sin(a) * (drumR * 1.02);
+        addCylinder(buckets.graniteTrim, radius * 0.042, radius * 0.048, drumH * 0.72, 6, px, baseY + drumH * 0.50, pz);
+
+        // Glowing recessed arched niche at each facet midpoint
+        const nx = cx + Math.cos(aNext) * (drumR * 0.99);
+        const nz = cz + Math.sin(aNext) * (drumR * 0.99);
+        const nicheW = (2 * Math.PI * drumR / drumSides) * 0.62;
+        const nicheH = drumH * 0.48;
+        const nGeo = new THREE.PlaneGeometry(nicheW, nicheH);
+        const nMat = makeMatrix(nx, baseY + drumH * 0.48, nz, 0, Math.atan2(Math.cos(aNext), Math.sin(aNext)), 0);
+        pushGeo(buckets.windowGlow, nGeo, nMat);
+        nGeo.dispose();
+
+        // Bulb archlets on drum facets (every facet on big domes)
+        if (radius > 2.2) {
+          const rot = Math.atan2(Math.cos(aNext), Math.sin(aNext));
+          const cosR = Math.cos(rot), sinR = Math.sin(rot);
+          const aPts = sampleCuspedArch2D(nicheW * 1.05, baseY + drumH * 0.36, nicheH * 0.42, 3, 10);
+          const wPts = aPts.map(p => new THREE.Vector3(
+            nx + p.x * cosR + 0.16 * sinR,
+            p.y,
+            nz - p.x * sinR + 0.16 * cosR
+          ));
+          bulbs.addPolyline(wPts, bulbSpacing * 1.05, bulbScale * 0.85);
+        }
+      }
+    }
+
+    // Horizontal bulb rings framing the drum
+    bulbs.addHorizontalRing(cx, baseY + drumH * 0.14, cz, drumR * 1.11, bulbSpacing * 1.15, bulbScale * 0.92);
+    bulbs.addHorizontalRing(cx, baseY + drumH * 0.96, cz, drumR * 1.17, bulbSpacing * 1.0, bulbScale * 1.02);
+
+    domeStartY = baseY + drumH;
+  }
+
+  // 1. Carved lotus-petal base collar (padma)
+  const collarH = height * 0.12;
+  addCylinder(goldBucket, radius * 0.93, radius * 1.02, collarH, 24, cx, domeStartY + collarH * 0.45, cz);
+
+  // Sculpted lotus petals around the base collar
+  const petalCount = ribs;
+  for (let i = 0; i < petalCount; i++) {
+    const a = (i / petalCount) * Math.PI * 2;
+    const pr = radius * 0.96;
+    const pGeo = new THREE.ConeGeometry(radius * 0.16, collarH * 1.25, 4);
+    const pMat = makeMatrix(
+      cx + Math.cos(a) * pr,
+      domeStartY + collarH * 0.65,
+      cz + Math.sin(a) * pr,
+      0, -a, 0
+    );
+    pushGeo(goldBucket, pGeo, pMat);
+    pGeo.dispose();
+  }
+
+  // 2. Sculpted Bulbous Gilded Dome Shell via LatheGeometry
+  const lathePts = [];
+  const vSteps = 28;
+  for (let i = 0; i <= vSteps; i++) {
+    const t = i / vSteps;
+    const p = sampleDomeProfile(t, radius, height);
+    lathePts.push(new THREE.Vector2(p.r, p.y));
+  }
+  const domeGeo = new THREE.LatheGeometry(lathePts, Math.max(24, ribs * 2));
+  pushGeo(goldBucket, domeGeo, makeMatrix(cx, domeStartY, cz));
+  domeGeo.dispose();
+
+  // 3. Sculpted 3D Vertical Ribs + Glowing Bulb Rib Lines
+  const ribRadius = Math.max(0.055, radius * 0.022);
+  for (let rIdx = 0; rIdx < ribs; rIdx++) {
+    const angle = (rIdx / ribs) * Math.PI * 2;
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+
+    const ribPts = [];
+    const bulbPts = [];
+    const segs = 22;
+    for (let j = 0; j <= segs; j++) {
+      const t = j / segs;
+      const p = sampleDomeProfile(t, radius, height);
+      const rx = cx + ca * (p.r + ribRadius * 0.35);
+      const ry = domeStartY + p.y;
+      const rz = cz + sa * (p.r + ribRadius * 0.35);
+      ribPts.push(new THREE.Vector3(rx, ry, rz));
+
+      // Place bulbs proudly along the rib crest, stopping just below peak so they don't clump
+      if (t >= 0.02 && t <= 0.96) {
+        const offset = ribRadius + 0.085;
+        bulbPts.push(new THREE.Vector3(
+          cx + ca * (p.r + p.nr * offset),
+          domeStartY + p.y + p.ny * offset,
+          cz + sa * (p.r + p.nr * offset)
+        ));
+      }
+    }
+
+    const ribCurve = new THREE.CatmullRomCurve3(ribPts);
+    const ribGeo = new THREE.TubeGeometry(ribCurve, 18, ribRadius, 5, false);
+    pushGeo(goldBucket, ribGeo);
+    ribGeo.dispose();
+
+    bulbs.addPolyline(bulbPts, bulbSpacing, bulbScale);
+  }
+
+  // 4. Horizontal glowing bulb rings encircling the dome
+  const ringTs = ringCount >= 3 ? [0.02, 0.30, 0.88] : [0.03, 0.86];
+  for (const rt of ringTs) {
+    const p = sampleDomeProfile(rt, radius, height);
+    const off = ribRadius + 0.11;
+    bulbs.addHorizontalRing(
+      cx,
+      domeStartY + p.y + p.ny * off,
+      cz,
+      p.r + p.nr * off,
+      bulbSpacing * 1.05,
+      bulbScale * (rt < 0.1 ? 1.05 : 0.92)
+    );
+  }
+
+  // 5. Upper Inverted Lotus Cap (Mahapadma) + Stacked Gilded Kalasha Finial
+  const crownY = domeStartY + height;
+  const capGeo = new THREE.CylinderGeometry(radius * 0.09, radius * 0.28, height * 0.09, 16);
+  pushGeo(goldBucket, capGeo, makeMatrix(cx, crownY + height * 0.02, cz));
+  capGeo.dispose();
+
+  // Stacked ornate spheres (kalasha pots) + slender spire
+  const fBase = crownY + height * 0.06;
+  const orb1R = Math.max(0.16, radius * 0.125);
+  const orb2R = orb1R * 0.72;
+  const orb3R = orb1R * 0.46;
+
+  const s1 = new THREE.SphereGeometry(orb1R, 12, 10);
+  pushGeo(goldBucket, s1, makeMatrix(cx, fBase + orb1R * 0.9, cz, 0, 0, 0, 1.15, 0.88, 1.15));
+  s1.dispose();
+
+  const s2 = new THREE.SphereGeometry(orb2R, 12, 10);
+  pushGeo(goldBucket, s2, makeMatrix(cx, fBase + orb1R * 1.9 + orb2R * 0.7, cz, 0, 0, 0, 1.1, 0.92, 1.1));
+  s2.dispose();
+
+  const s3 = new THREE.SphereGeometry(orb3R, 10, 8);
+  pushGeo(goldBucket, s3, makeMatrix(cx, fBase + orb1R * 1.9 + orb2R * 1.6 + orb3R * 0.7, cz));
+  s3.dispose();
+
+  const spireBase = fBase + orb1R * 1.9 + orb2R * 1.6 + orb3R * 1.2;
+  const spireH = Math.max(0.8, finialH * 0.56);
+  const spireG = new THREE.ConeGeometry(orb3R * 0.45, spireH, 10);
+  pushGeo(goldBucket, spireG, makeMatrix(cx, spireBase + spireH * 0.5, cz));
+  spireG.dispose();
+
+  // Jewel-like glowing bulbs crowning the kalasha finial
+  bulbs.addHorizontalRing(cx, fBase + orb1R * 0.9, cz, orb1R * 1.28, Math.max(0.28, bulbSpacing * 0.9), bulbScale * 1.05);
+  bulbs.addLine(cx, fBase + orb1R * 1.8, cz, cx, spireBase + spireH + 0.12, cz, Math.max(0.32, bulbSpacing * 0.95), bulbScale * 1.15, true);
+}
+
+// Delicate octagonal domed kiosk (Chhatri) framing the central dome and towers
+function buildMiniChhatri(buckets, bulbs, cx, baseY, cz, scale = 1.0) {
+  const r = 1.55 * scale;
+  const colH = 3.1 * scale;
+  const sides = 8;
+
+  // Octagonal plinth base
+  addCylinder(buckets.graniteTrim, r * 1.14, r * 1.20, 0.42 * scale, sides, cx, baseY + 0.21 * scale, cz);
+
+  // 8 slender columns + miniature arched frieze
+  for (let i = 0; i < sides; i++) {
+    const a = (i / sides) * Math.PI * 2 + Math.PI / 8;
+    const px = cx + Math.cos(a) * r;
+    const pz = cz + Math.sin(a) * r;
+    addCylinder(buckets.graniteTrim, 0.11 * scale, 0.13 * scale, colH, 8, px, baseY + 0.42 * scale + colH * 0.5, pz);
+
+    // Subtle glowing bulb lines on front-facing columns
+    if (Math.sin(a) > -0.3) {
+      bulbs.addLine(px, baseY + 0.5 * scale, pz, px, baseY + 0.42 * scale + colH, pz, 0.46 * scale, 0.85 * scale, false);
+    }
+  }
+
+  // Projecting octagonal chhajja eave
+  const eaveY = baseY + 0.42 * scale + colH;
+  addCylinder(buckets.graniteTrim, r * 1.08, r * 1.38, 0.45 * scale, sides, cx, eaveY + 0.22 * scale, cz);
+  bulbs.addHorizontalRing(cx, eaveY + 0.08 * scale, cz, r * 1.40, 0.38 * scale, 0.92 * scale);
+
+  // Small gilded onion dome + finial
+  buildGildedDome(buckets, bulbs, {
+    cx,
+    baseY: eaveY + 0.45 * scale,
+    cz,
+    radius: r * 0.98,
+    height: 2.55 * scale,
+    ribs: 8,
+    goldBucket: buckets.gildedGold,
+    finialH: 1.55 * scale,
+    bulbSpacing: 0.34 * scale,
+    bulbScale: 0.88 * scale,
+    ringCount: 2,
+  });
+}
+
+// Ornamental Indo-Saracenic stepped parapet merlons (Kangura)
+function buildParapetMerlons(buckets, bulbs, x0, x1, y, z, step = 1.05, rotY = 0, bulbScale = 0.85) {
+  const len = Math.abs(x1 - x0);
+  const count = Math.max(2, Math.floor(len / step));
+  const cosR = Math.cos(rotY), sinR = Math.sin(rotY);
+  const cx = (x0 + x1) * 0.5;
+
+  // Base parapet wall
+  addBox(buckets.graniteTrim, len, 0.65, 0.45, cx, y + 0.325, z, 0, rotY, 0);
+
+  for (let i = 0; i <= count; i++) {
+    const localX = -len * 0.5 + (i / count) * len;
+    const wx = cx + localX * cosR;
+    const wz = z - localX * sinR;
+
+    const mGeo = new THREE.ConeGeometry(step * 0.32, 0.68, 4);
+    pushGeo(buckets.graniteTrim, mGeo, makeMatrix(wx, y + 0.95, wz, 0, rotY + Math.PI * 0.25, 0));
+    mGeo.dispose();
+
+    // Jewel bulb crowning each merlon peak
+    bulbs.addPoint(wx + sinR * 0.14, y + 1.32, wz + cosR * 0.14, bulbScale);
+  }
+
+  // Continuous horizontal bulb line along parapet cornice
+  const p0x = cx - (len * 0.5) * cosR + sinR * 0.30;
+  const p0z = z + (len * 0.5) * sinR + cosR * 0.30;
+  const p1x = cx + (len * 0.5) * cosR + sinR * 0.30;
+  const p1z = z - (len * 0.5) * sinR + cosR * 0.30;
+  bulbs.addLine(p0x, y + 0.04, p0z, p1x, y + 0.04, p1z, 0.40, bulbScale * 1.06, true);
+}
+
+// Curved Rajasthani Bangla overhanging canopy eave (iconic Mysore Palace accent)
+function buildBanglaCanopy(buckets, bulbs, cx, baseY, zFront, width, depth, rise = 1.15) {
+  const segs = 16;
+  const ptsFront = [];
+  const ptsBack = [];
+  for (let i = 0; i <= segs; i++) {
+    const u = (i / segs) * 2 - 1; // -1..1
+    const x = cx + u * (width * 0.5);
+    const archY = baseY + rise * Math.cos(u * Math.PI * 0.5);
+    ptsFront.push(new THREE.Vector3(x, archY, zFront + depth * 0.5));
+    ptsBack.push(new THREE.Vector3(x, archY + 0.55, zFront - depth * 0.5));
+  }
+
+  // Swept roof slab strips
+  for (let i = 0; i < segs; i++) {
+    const a = ptsFront[i], b = ptsFront[i + 1];
+    const midX = (a.x + b.x) * 0.5;
+    const midY = (a.y + b.y) * 0.5 + 0.24;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const segLen = Math.hypot(dx, dy);
+    const rz = Math.atan2(dy, dx);
+    addBox(buckets.gildedGold, segLen + 0.06, 0.22, depth, midX, midY, zFront, 0.26, 0, rz);
+  }
+
+  // Bulb string tracing the graceful curved bangla eave edge
+  const bulbPts = ptsFront.map(p => new THREE.Vector3(p.x, p.y - 0.02, p.z + 0.14));
+  bulbs.addPolyline(bulbPts, 0.34, 1.0);
+}
+
+// Decorative Guldasta (corner lotus pinnacle turret)
+function buildGuldasta(buckets, bulbs, x, y, z, scale = 1.0) {
+  addCylinder(buckets.graniteTrim, 0.22 * scale, 0.28 * scale, 1.35 * scale, 8, x, y + 0.675 * scale, z);
+  const cap = new THREE.SphereGeometry(0.32 * scale, 8, 8);
+  pushGeo(buckets.gildedGold, cap, makeMatrix(x, y + 1.52 * scale, z, 0, 0, 0, 1, 1.25, 1));
+  cap.dispose();
+  const tip = new THREE.ConeGeometry(0.10 * scale, 0.65 * scale, 6);
+  pushGeo(buckets.gildedGold, tip, makeMatrix(x, y + 2.08 * scale, z));
+  tip.dispose();
+  bulbs.addPoint(x, y + 2.48 * scale, z, 1.05 * scale);
+}
+
+// ============================================================================
+// 5. COMPLETE MYSORE PALACE (AMBA VILAS) PROCEDURAL ASSEMBLY
+// ============================================================================
+function buildMysorePalace(materials) {
+  const buckets = {
+    graniteWall: [],
+    graniteTrim: [],
+    graniteDark: [],
+    gildedGold: [],
+    antiqueGold: [],
+    interiorGlow: [],
+    windowGlow: [],
+    foliage: [],
+  };
+  const bulbs = new BulbPlacer();
+
+  // --------------------------------------------------------------------------
+  // A. GRAND GRANITE STYLOBATE PLINTH & CEREMONIAL STAIRCASE
+  // --------------------------------------------------------------------------
+  // Main palace raised podium (Y = 0 to 1.8)
+  addBox(buckets.graniteDark, 107.0, 1.85, 31.0, 0, 0.925, -10.5);
+  // Central projecting portico podium
+  addBox(buckets.graniteDark, 21.6, 1.85, 8.2, 0, 0.925, 4.2);
+  // Crisp top coping ledge along entire plinth
+  addBox(buckets.graniteTrim, 108.0, 0.28, 31.8, 0, 1.84, -10.5);
+  addBox(buckets.graniteTrim, 22.4, 0.28, 8.8, 0, 1.84, 4.2);
+
+  // Grand ceremonial steps descending from central portico to forecourt apron (Z = 8.4 -> 11.8)
+  const stepCount = 9;
+  for (let s = 0; s < stepCount; s++) {
+    const t = s / (stepCount - 1);
+    const sy = 1.72 - t * 1.54;
+    const sz = 8.4 + t * 3.1;
+    const sw = 12.6 + t * 2.4;
+    addBox(buckets.graniteTrim, sw, sy, 0.44, 0, sy * 0.5, sz);
+  }
+  // Stepped stair cheek walls & granite urn pedestals
+  for (const side of [-1, 1]) {
+    addBox(buckets.graniteTrim, 1.1, 1.65, 3.8, side * 7.6, 0.825, 9.8);
+    buildGuldasta(buckets, bulbs, side * 7.6, 1.65, 11.4, 0.72);
+    // Low podium outline bulbs along front terrace wings
+    bulbs.addLine(side * 11.2, 1.98, 5.1, side * 53.5, 1.98, 5.1, 0.65, 0.88);
+  }
+
+  // --------------------------------------------------------------------------
+  // B. CENTRAL FIVE-STORY GRAND PAVILION & CENTRAL GILDED DOME TOWER (X = 0)
+  // --------------------------------------------------------------------------
+  const cZ = 5.4; // Front face of projecting central pavilion
+
+  // --- Story 1: Monumental Ground Ceremonial Portico (Y = 1.85 -> 9.2) ---
+  // Central wide triumphal cusped arch
+  buildArchedBay(buckets, bulbs, {
+    cx: 0, baseY: 1.85, zFront: cZ,
+    bayW: 8.6, bayH: 7.35,
+    archW: 6.2, springH: 3.9, archH: 2.55,
+    depth: 1.45, cusps: 9, twinColumns: true,
+    bulbSpacing: 0.34, bulbScale: 1.06,
+  });
+  // Flanking portals on central pavilion
+  for (const side of [-1, 1]) {
+    buildArchedBay(buckets, bulbs, {
+      cx: side * 6.5, baseY: 1.85, zFront: cZ,
+      bayW: 4.4, bayH: 7.35,
+      archW: 2.6, springH: 3.8, archH: 1.85,
+      depth: 1.45, cusps: 5, twinColumns: true,
+      bulbSpacing: 0.36, bulbScale: 0.98,
+    });
+    // Corner heavy pilasters
+    addBox(buckets.graniteTrim, 1.15, 7.35, 1.65, side * 9.0, 1.85 + 3.675, cZ - 0.65);
+    bulbs.addLine(side * 9.55, 2.0, cZ + 0.22, side * 9.55, 9.15, cZ + 0.22, 0.42, 0.96);
+    // Side return arch on projecting pavilion
+    buildArchedBay(buckets, bulbs, {
+      cx: side * 9.1, baseY: 1.85, zFront: 2.4,
+      bayW: 5.2, bayH: 7.35,
+      archW: 3.1, springH: 3.8, archH: 1.9,
+      depth: 1.1, cusps: 5, rotY: side * Math.PI * 0.5,
+      bulbSpacing: 0.40, bulbScale: 0.90,
+    });
+  }
+  // Recessed glowing ceremonial grand hall back wall & ceiling
+  addBox(buckets.interiorGlow, 17.0, 6.8, 0.5, 0, 5.25, cZ - 4.4);
+  addBox(buckets.graniteDark, 17.6, 0.4, 5.2, 0, 8.9, cZ - 2.4);
+
+  // Story 1 Deep Cornice & Projecting Chhajja Eave (Y = 9.2)
+  addBox(buckets.graniteTrim, 19.6, 0.55, 6.8, 0, 9.42, cZ - 2.6);
+  addBox(buckets.graniteTrim, 20.6, 0.28, 7.8, 0, 9.18, cZ - 2.6);
+  bulbs.addLine(-10.1, 9.26, cZ + 0.95, 10.1, 9.26, cZ + 0.95, 0.38, 1.06);
+  bulbs.addLine(-9.8, 9.68, cZ + 0.45, 9.8, 9.68, cZ + 0.45, 0.40, 0.96);
+
+  // --- Story 2: Grand Royal Durbar Balcony / Loggia (Y = 9.7 -> 17.2) ---
+  buildArchedBay(buckets, bulbs, {
+    cx: 0, baseY: 9.7, zFront: cZ - 0.15,
+    bayW: 8.6, bayH: 7.5,
+    archW: 6.0, springH: 4.1, archH: 2.45,
+    depth: 1.25, cusps: 9, twinColumns: true,
+    hasBalustrade: true, balustradeH: 1.15,
+    bulbSpacing: 0.34, bulbScale: 1.05,
+  });
+  for (const side of [-1, 1]) {
+    buildArchedBay(buckets, bulbs, {
+      cx: side * 6.5, baseY: 9.7, zFront: cZ - 0.15,
+      bayW: 4.4, bayH: 7.5,
+      archW: 2.6, springH: 4.0, archH: 1.8,
+      depth: 1.25, cusps: 5, twinColumns: true,
+      hasBalustrade: true, balustradeH: 1.15,
+      bulbSpacing: 0.36, bulbScale: 0.96,
+    });
+    addBox(buckets.graniteTrim, 1.08, 7.5, 1.45, side * 8.95, 9.7 + 3.75, cZ - 0.75);
+    bulbs.addLine(side * 9.48, 9.85, cZ + 0.08, side * 9.48, 17.1, cZ + 0.08, 0.42, 0.95);
+  }
+  // Warm glowing Royal Durbar Hall interior behind 2nd story arches
+  addBox(buckets.interiorGlow, 17.0, 6.9, 0.5, 0, 13.15, cZ - 4.6);
+
+  // Graceful Curved Golden Bangla Canopy over the Central Royal Balcony!
+  buildBanglaCanopy(buckets, bulbs, 0, 17.15, cZ + 0.75, 9.2, 2.2, 1.35);
+
+  // Story 2 Cornice & Chhajja Eave (Y = 17.2)
+  addBox(buckets.graniteTrim, 19.6, 0.62, 16.5, 0, 17.45, -2.8);
+  addBox(buckets.graniteTrim, 20.6, 0.30, 17.5, 0, 17.18, -2.8);
+  bulbs.addLine(-10.1, 17.26, cZ + 0.78, 10.1, 17.26, cZ + 0.78, 0.38, 1.06);
+
+  // --- Story 3: Clerestory Arcade Tower Stage (Y = 17.75 -> 23.6) ---
+  const t3Z = 4.1;
+  // Core square tower mass
+  addBox(buckets.graniteWall, 16.4, 5.85, 16.4, 0, 17.75 + 2.925, -4.1);
+  // 5 refined arched clerestory bays across front face
+  const cBayW = 3.28;
+  for (let i = -2; i <= 2; i++) {
+    buildArchedBay(buckets, bulbs, {
+      cx: i * cBayW, baseY: 17.75, zFront: t3Z,
+      bayW: cBayW, bayH: 5.85,
+      archW: 2.05, springH: 3.1, archH: 1.45,
+      depth: 0.75, cusps: 5, twinColumns: false,
+      hasBalustrade: true, balustradeH: 0.82,
+      isDarkRecess: true,
+      bulbSpacing: 0.34, bulbScale: 0.96,
+    });
+  }
+  // Side clerestory bays (left & right of central tower)
+  for (const side of [-1, 1]) {
+    for (let j = -1; j <= 1; j++) {
+      buildArchedBay(buckets, bulbs, {
+        cx: side * 8.2, baseY: 17.75, zFront: -4.1 + j * 4.4,
+        bayW: 4.4, bayH: 5.85,
+        archW: 2.4, springH: 3.1, archH: 1.45,
+        depth: 0.7, cusps: 5, rotY: side * Math.PI * 0.5,
+        isDarkRecess: true,
+        bulbSpacing: 0.42, bulbScale: 0.88,
+      });
+    }
+    bulbs.addLine(side * 8.35, 17.9, t3Z + 0.22, side * 8.35, 23.6, t3Z + 0.22, 0.40, 0.96);
+  }
+
+  // Story 3 Deep Cornice + Chhajja + Merlon Parapet (Y = 23.6)
+  addBox(buckets.graniteTrim, 17.8, 0.60, 17.8, 0, 23.85, -4.1);
+  addBox(buckets.graniteTrim, 18.8, 0.28, 18.8, 0, 23.58, -4.1);
+  bulbs.addRectOutline(0, 23.68, -4.1, 19.0, 19.0, 0.38, 1.08, 'frontSides');
+  buildParapetMerlons(buckets, bulbs, -8.4, 8.4, 24.12, 4.7, 1.05, 0, 0.92);
+
+  // --- Four Iconic Corner Mini-Chhatris Framing the Central Dome ---
+  const chhatriOffsets = [
+    [-7.4, 3.2],
+    [7.4, 3.2],
+    [-7.4, -11.4],
+    [7.4, -11.4],
+  ];
+  for (const [ox, oz] of chhatriOffsets) {
+    buildMiniChhatri(buckets, bulbs, ox, 24.1, oz, 1.06);
+  }
+
+  // --- Story 4 & 5: Monumental Drum + ICONIC CENTRAL GILDED DOME (X = 0, Z = -4.1) ---
+  // Stepped square-to-octagonal transition pedestal
+  addBox(buckets.graniteWall, 13.4, 1.3, 13.4, 0, 24.75, -4.1);
+  bulbs.addRectOutline(0, 25.42, -4.1, 13.8, 13.8, 0.44, 0.96, 'frontSides');
+
+  // Grand 16-sided arched drum + 24-ribbed Gilded Central Dome + Kalasha Spire!
+  buildGildedDome(buckets, bulbs, {
+    cx: 0,
+    baseY: 25.35,
+    cz: -4.1,
+    radius: 6.15,
+    height: 11.4,
+    ribs: 24,
+    goldBucket: buckets.gildedGold,
+    finialH: 5.4,
+    bulbSpacing: 0.42,
+    bulbScale: 0.92,
+    ringCount: 3,
+    drumH: 5.6,
+    drumSides: 16,
+    drumArches: true,
+  });
+
+  // --------------------------------------------------------------------------
+  // C. INNER SYMMETRICAL ARCHED COLONNADE WINGS (5 Bays per Side: X = ±9.5..±28.5)
+  // --------------------------------------------------------------------------
+  const innerBayCount = 5;
+  const innerBayW = 3.8;
+  const innerStartX = 9.5;
+  const wingZ = 0.4;
+
+  for (const side of [-1, 1]) {
+    const wingCenterX = side * (innerStartX + (innerBayCount * innerBayW) * 0.5);
+    const wingLen = innerBayCount * innerBayW;
+
+    // Solid interior palace body behind the recessed open colonnade galleries
+    addBox(buckets.graniteWall, wingLen + 0.4, 18.2, 16.0, wingCenterX, 1.85 + 9.1, -11.4);
+    // Warm-lit Durbar colonnade corridor walls & ceilings
+    addBox(buckets.interiorGlow, wingLen, 6.2, 0.4, wingCenterX, 5.1, -3.2);
+    addBox(buckets.interiorGlow, wingLen, 6.6, 0.4, wingCenterX, 12.1, -3.2);
+    // Floor slabs between colonnade levels
+    addBox(buckets.graniteDark, wingLen + 0.4, 0.45, 4.4, wingCenterX, 8.55, -1.4);
+    addBox(buckets.graniteDark, wingLen + 0.4, 0.45, 4.4, wingCenterX, 15.85, -1.4);
+
+    for (let b = 0; b < innerBayCount; b++) {
+      const bx = side * (innerStartX + (b + 0.5) * innerBayW);
+
+      // Ground Floor Arcade (Y = 1.85 -> 8.55)
+      buildArchedBay(buckets, bulbs, {
+        cx: bx, baseY: 1.85, zFront: wingZ,
+        bayW: innerBayW, bayH: 6.7,
+        archW: 2.55, springH: 3.7, archH: 1.75,
+        depth: 0.95, cusps: 5, twinColumns: false,
+        bulbSpacing: 0.38, bulbScale: 0.92,
+      });
+
+      // First Floor Grand Open Colonnade (Y = 8.75 -> 15.85)
+      buildArchedBay(buckets, bulbs, {
+        cx: bx, baseY: 8.75, zFront: wingZ,
+        bayW: innerBayW, bayH: 7.1,
+        archW: 2.65, springH: 3.9, archH: 1.95,
+        depth: 0.85, cusps: 7, twinColumns: true,
+        hasBalustrade: true, balustradeH: 1.05,
+        bulbSpacing: 0.36, bulbScale: 0.96,
+      });
+
+      // Upper Attic Loggia — Twin Delicate Arches per Bay! (Y = 16.15 -> 19.75)
+      for (const sub of [-0.5, 0.5]) {
+        buildArchedBay(buckets, bulbs, {
+          cx: bx + sub * (innerBayW * 0.5), baseY: 16.15, zFront: wingZ - 0.15,
+          bayW: innerBayW * 0.5, bayH: 3.6,
+          archW: 1.25, springH: 1.85, archH: 0.95,
+          depth: 0.65, cusps: 3, twinColumns: false,
+          isDarkRecess: true, outlineColumns: false,
+          bulbSpacing: 0.34, bulbScale: 0.84,
+        });
+      }
+
+      // Pier ornamental pinnacle (guldasta) at bay divisions
+      if (b < innerBayCount - 1) {
+        const px = side * (innerStartX + (b + 1) * innerBayW);
+        buildGuldasta(buckets, bulbs, px, 20.3, wingZ + 0.15, 0.52);
+      }
+    }
+
+    // Continuous Horizontal Moulded Cornices, Chhajja Eaves & Glowing Bulb Strings
+    const xA = side * innerStartX;
+    const xB = side * (innerStartX + wingLen);
+    const minX = Math.min(xA, xB), maxX = Math.max(xA, xB);
+
+    // Level 1 Cornice (Y = 8.65)
+    addBox(buckets.graniteTrim, wingLen + 0.4, 0.42, 1.8, wingCenterX, 8.65, wingZ + 0.15);
+    bulbs.addLine(minX, 8.72, wingZ + 1.08, maxX, 8.72, wingZ + 1.08, 0.40, 0.98);
+
+    // Level 2 Projecting Chhajja Eave (Y = 15.95)
+    addBox(buckets.graniteTrim, wingLen + 0.4, 0.46, 2.2, wingCenterX, 16.0, wingZ + 0.25);
+    bulbs.addLine(minX, 15.98, wingZ + 1.38, maxX, 15.98, wingZ + 1.38, 0.38, 1.02);
+
+    // Roofline Cornice + Merlon Parapet (Y = 19.8)
+    addBox(buckets.graniteTrim, wingLen + 0.6, 0.52, 2.2, wingCenterX, 19.95, wingZ + 0.15);
+    buildParapetMerlons(buckets, bulbs, minX, maxX, 20.2, wingZ + 0.45, 1.05, 0, 0.86);
+  }
+
+  // --------------------------------------------------------------------------
+  // D. MID-WING PROJECTING DOMED PAVILION TOWERS (X = ±31.8)
+  // --------------------------------------------------------------------------
+  const midTowerX = 31.8;
+  const midTowerW = 6.6;
+  const midTowerZ = 3.2;
+
+  for (const side of [-1, 1]) {
+    const tx = side * midTowerX;
+
+    // Tower structural mass
+    addBox(buckets.graniteWall, midTowerW - 0.2, 20.6, 10.4, tx, 1.85 + 10.3, -2.0);
+    // Warm interior glow behind front bays
+    addBox(buckets.interiorGlow, midTowerW - 1.6, 14.2, 0.4, tx, 9.2, 0.4);
+
+    // Story 1 Front Arch
+    buildArchedBay(buckets, bulbs, {
+      cx: tx, baseY: 1.85, zFront: midTowerZ,
+      bayW: midTowerW, bayH: 6.8,
+      archW: 3.8, springH: 3.7, archH: 2.0,
+      depth: 1.1, cusps: 7, twinColumns: true,
+      bulbSpacing: 0.36, bulbScale: 0.96,
+    });
+    // Story 2 Royal Balcony Arch
+    buildArchedBay(buckets, bulbs, {
+      cx: tx, baseY: 8.85, zFront: midTowerZ,
+      bayW: midTowerW, bayH: 7.2,
+      archW: 3.8, springH: 3.9, archH: 2.1,
+      depth: 1.0, cusps: 7, twinColumns: true,
+      hasBalustrade: true, balustradeH: 1.1,
+      bulbSpacing: 0.36, bulbScale: 0.98,
+    });
+    // Story 3 Twin Arched Clerestory
+    for (const sub of [-0.5, 0.5]) {
+      buildArchedBay(buckets, bulbs, {
+        cx: tx + sub * (midTowerW * 0.46), baseY: 16.3, zFront: midTowerZ - 0.1,
+        bayW: midTowerW * 0.48, bayH: 5.5,
+        archW: 1.85, springH: 2.9, archH: 1.35,
+        depth: 0.75, cusps: 5, twinColumns: false,
+        hasBalustrade: true, balustradeH: 0.78,
+        isDarkRecess: true,
+        bulbSpacing: 0.34, bulbScale: 0.92,
+      });
+    }
+
+    // Vertical tower corner bulb lines
+    for (const cSide of [-1, 1]) {
+      bulbs.addLine(tx + cSide * (midTowerW * 0.5 + 0.08), 2.0, midTowerZ + 0.18,
+                    tx + cSide * (midTowerW * 0.5 + 0.08), 22.0, midTowerZ + 0.18, 0.42, 0.94);
+    }
+
+    // Story cornices + curved bangla eave
+    addBox(buckets.graniteTrim, midTowerW + 0.8, 0.44, 7.6, tx, 8.75, -0.2);
+    bulbs.addLine(tx - midTowerW * 0.55, 8.82, midTowerZ + 0.52, tx + midTowerW * 0.55, 8.82, midTowerZ + 0.52, 0.38, 0.98);
+    addBox(buckets.graniteTrim, midTowerW + 0.9, 0.48, 7.8, tx, 16.15, -0.2);
+    bulbs.addLine(tx - midTowerW * 0.56, 16.2, midTowerZ + 0.56, tx + midTowerW * 0.56, 16.2, midTowerZ + 0.56, 0.38, 1.0);
+
+    // Crown cornice + Bangla canopy + 4 corner pinnacles
+    addBox(buckets.graniteTrim, midTowerW + 1.0, 0.58, 8.4, tx, 22.05, -0.4);
+    bulbs.addRectOutline(tx, 22.15, -0.4, midTowerW + 1.2, 8.6, 0.38, 1.02, 'frontSides');
+    buildBanglaCanopy(buckets, bulbs, tx, 21.85, midTowerZ + 0.45, midTowerW + 0.6, 1.5, 0.95);
+
+    for (const px of [-1, 1]) {
+      for (const pz of [-1, 1]) {
+        buildGuldasta(buckets, bulbs, tx + px * (midTowerW * 0.46), 22.35, -0.4 + pz * 3.5, 0.72);
+      }
+    }
+
+    // Mid-Tower Drum & 16-Ribbed Gilded Onion Dome!
+    buildGildedDome(buckets, bulbs, {
+      cx: tx,
+      baseY: 22.35,
+      cz: -0.4,
+      radius: 2.95,
+      height: 5.7,
+      ribs: 16,
+      goldBucket: buckets.antiqueGold,
+      finialH: 2.85,
+      bulbSpacing: 0.34,
+      bulbScale: 0.98,
+      ringCount: 3,
+      drumH: 2.85,
+      drumSides: 12,
+      drumArches: true,
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // E. OUTER SYMMETRICAL ARCHED COLONNADE WINGS (3 Bays per Side: X = ±35.1..±45.9)
+  // --------------------------------------------------------------------------
+  const outerBayCount = 3;
+  const outerBayW = 3.6;
+  const outerStartX = 35.1;
+
+  for (const side of [-1, 1]) {
+    const wingLen = outerBayCount * outerBayW;
+    const wingCenterX = side * (outerStartX + wingLen * 0.5);
+
+    addBox(buckets.graniteWall, wingLen + 0.4, 18.2, 15.0, wingCenterX, 1.85 + 9.1, -10.8);
+    addBox(buckets.interiorGlow, wingLen, 6.2, 0.4, wingCenterX, 5.1, -3.0);
+    addBox(buckets.interiorGlow, wingLen, 6.6, 0.4, wingCenterX, 12.1, -3.0);
+    addBox(buckets.graniteDark, wingLen + 0.4, 0.45, 4.2, wingCenterX, 8.55, -1.2);
+    addBox(buckets.graniteDark, wingLen + 0.4, 0.45, 4.2, wingCenterX, 15.85, -1.2);
+
+    for (let b = 0; b < outerBayCount; b++) {
+      const bx = side * (outerStartX + (b + 0.5) * outerBayW);
+
+      buildArchedBay(buckets, bulbs, {
+        cx: bx, baseY: 1.85, zFront: wingZ,
+        bayW: outerBayW, bayH: 6.7,
+        archW: 2.4, springH: 3.7, archH: 1.7,
+        depth: 0.9, cusps: 5, twinColumns: false,
+        bulbSpacing: 0.38, bulbScale: 0.90,
+      });
+
+      buildArchedBay(buckets, bulbs, {
+        cx: bx, baseY: 8.75, zFront: wingZ,
+        bayW: outerBayW, bayH: 7.1,
+        archW: 2.5, springH: 3.9, archH: 1.9,
+        depth: 0.85, cusps: 7, twinColumns: true,
+        hasBalustrade: true, balustradeH: 1.05,
+        bulbSpacing: 0.36, bulbScale: 0.94,
+      });
+
+      for (const sub of [-0.5, 0.5]) {
+        buildArchedBay(buckets, bulbs, {
+          cx: bx + sub * (outerBayW * 0.5), baseY: 16.15, zFront: wingZ - 0.15,
+          bayW: outerBayW * 0.5, bayH: 3.6,
+          archW: 1.18, springH: 1.85, archH: 0.92,
+          depth: 0.65, cusps: 3, twinColumns: false,
+          isDarkRecess: true, outlineColumns: false,
+          bulbSpacing: 0.36, bulbScale: 0.82,
+        });
+      }
+    }
+
+    const xA = side * outerStartX;
+    const xB = side * (outerStartX + wingLen);
+    const minX = Math.min(xA, xB), maxX = Math.max(xA, xB);
+
+    addBox(buckets.graniteTrim, wingLen + 0.4, 0.42, 1.8, wingCenterX, 8.65, wingZ + 0.15);
+    bulbs.addLine(minX, 8.72, wingZ + 1.08, maxX, 8.72, wingZ + 1.08, 0.40, 0.96);
+
+    addBox(buckets.graniteTrim, wingLen + 0.4, 0.46, 2.2, wingCenterX, 16.0, wingZ + 0.25);
+    bulbs.addLine(minX, 15.98, wingZ + 1.38, maxX, 15.98, wingZ + 1.38, 0.38, 1.0);
+
+    addBox(buckets.graniteTrim, wingLen + 0.6, 0.52, 2.2, wingCenterX, 19.95, wingZ + 0.15);
+    buildParapetMerlons(buckets, bulbs, minX, maxX, 20.2, wingZ + 0.45, 1.05, 0, 0.85);
+  }
+
+  // --------------------------------------------------------------------------
+  // F. GRAND CORNER PAVILION TOWERS (X = ±49.8, Bold Architectural Anchors!)
+  // --------------------------------------------------------------------------
+  const cornerX = 49.8;
+  const cornerW = 7.8;
+  const cornerZ = 3.8;
+
+  for (const side of [-1, 1]) {
+    const tx = side * cornerX;
+
+    // Massive corner tower core
+    addBox(buckets.graniteWall, cornerW - 0.3, 21.4, 10.6, tx, 1.85 + 10.7, -1.5);
+    addBox(buckets.interiorGlow, cornerW - 1.8, 14.5, 0.4, tx, 9.2, 0.8);
+
+    // Front Facade — 3 Tiers of Indo-Saracenic Arches
+    buildArchedBay(buckets, bulbs, {
+      cx: tx, baseY: 1.85, zFront: cornerZ,
+      bayW: cornerW, bayH: 6.9,
+      archW: 4.4, springH: 3.8, archH: 2.1,
+      depth: 1.2, cusps: 7, twinColumns: true,
+      bulbSpacing: 0.36, bulbScale: 0.96,
+    });
+    buildArchedBay(buckets, bulbs, {
+      cx: tx, baseY: 8.95, zFront: cornerZ,
+      bayW: cornerW, bayH: 7.3,
+      archW: 4.5, springH: 4.0, archH: 2.2,
+      depth: 1.1, cusps: 7, twinColumns: true,
+      hasBalustrade: true, balustradeH: 1.12,
+      bulbSpacing: 0.36, bulbScale: 0.98,
+    });
+    for (const sub of [-0.5, 0.5]) {
+      buildArchedBay(buckets, bulbs, {
+        cx: tx + sub * (cornerW * 0.46), baseY: 16.5, zFront: cornerZ - 0.12,
+        bayW: cornerW * 0.48, bayH: 6.0,
+        archW: 2.1, springH: 3.1, archH: 1.45,
+        depth: 0.8, cusps: 5, twinColumns: false,
+        hasBalustrade: true, balustradeH: 0.82,
+        isDarkRecess: true,
+        bulbSpacing: 0.36, bulbScale: 0.92,
+      });
+    }
+
+    // Outer side wraparound arches for 3D silhouette depth
+    buildArchedBay(buckets, bulbs, {
+      cx: tx + side * (cornerW * 0.5), baseY: 1.85, zFront: -1.2,
+      bayW: 7.4, bayH: 6.9,
+      archW: 4.0, springH: 3.8, archH: 2.0,
+      depth: 1.0, cusps: 7, rotY: side * Math.PI * 0.5,
+      bulbSpacing: 0.44, bulbScale: 0.88,
+    });
+    buildArchedBay(buckets, bulbs, {
+      cx: tx + side * (cornerW * 0.5), baseY: 8.95, zFront: -1.2,
+      bayW: 7.4, bayH: 7.3,
+      archW: 4.0, springH: 4.0, archH: 2.1,
+      depth: 1.0, cusps: 7, rotY: side * Math.PI * 0.5,
+      hasBalustrade: true, balustradeH: 1.1,
+      bulbSpacing: 0.44, bulbScale: 0.90,
+    });
+
+    // Vertical tower edge bulb lines
+    for (const cSide of [-1, 1]) {
+      bulbs.addLine(tx + cSide * (cornerW * 0.5 + 0.1), 2.0, cornerZ + 0.2,
+                    tx + cSide * (cornerW * 0.5 + 0.1), 22.8, cornerZ + 0.2, 0.42, 0.95);
+    }
+
+    // Deep cornices & eaves
+    addBox(buckets.graniteTrim, cornerW + 0.9, 0.46, 11.4, tx, 8.85, -1.5);
+    bulbs.addRectOutline(tx, 8.92, -1.5, cornerW + 1.1, 11.6, 0.42, 0.96, 'frontSides');
+    addBox(buckets.graniteTrim, cornerW + 1.0, 0.50, 11.6, tx, 16.35, -1.5);
+    bulbs.addRectOutline(tx, 16.42, -1.5, cornerW + 1.2, 11.8, 0.40, 1.0, 'frontSides');
+
+    // Upper Crown Cornice + 4 Mini Corner Cupolas
+    addBox(buckets.graniteTrim, cornerW + 1.2, 0.62, 11.6, tx, 22.75, -1.5);
+    bulbs.addRectOutline(tx, 22.85, -1.5, cornerW + 1.4, 11.8, 0.38, 1.04, 'frontSides');
+    buildParapetMerlons(buckets, bulbs, tx - cornerW * 0.48, tx + cornerW * 0.48, 23.05, cornerZ + 0.35, 1.0, 0, 0.88);
+
+    for (const px of [-1, 1]) {
+      for (const pz of [-1, 1]) {
+        buildMiniChhatri(buckets, bulbs, tx + px * 3.25, 23.0, -1.5 + pz * 3.8, 0.56);
+      }
+    }
+
+    // Corner Tower Grand Drum + 16-Ribbed Gilded Dome!
+    buildGildedDome(buckets, bulbs, {
+      cx: tx,
+      baseY: 23.05,
+      cz: -1.5,
+      radius: 3.65,
+      height: 7.2,
+      ribs: 16,
+      goldBucket: buckets.gildedGold,
+      finialH: 3.4,
+      bulbSpacing: 0.36,
+      bulbScale: 1.02,
+      ringCount: 3,
+      drumH: 3.6,
+      drumSides: 12,
+      drumArches: true,
+    });
+
+    // Side return palace wing extending backward (-Z) for true 3D architectural depth
+    addBox(buckets.graniteWall, 6.5, 18.2, 18.0, tx - side * 0.4, 1.85 + 9.1, -16.0);
+    addBox(buckets.graniteTrim, 7.2, 0.48, 18.5, tx - side * 0.4, 19.95, -16.0);
+    bulbs.addLine(tx + side * 3.3, 20.0, -7.2, tx + side * 3.3, 20.0, -24.5, 0.58, 0.84);
+  }
+
+  // --------------------------------------------------------------------------
+  // G. SECONDARY REAR COURTYARD DOMES (Skyline Depth & Parallax!)
+  // --------------------------------------------------------------------------
+  for (const side of [-1, 1]) {
+    addBox(buckets.graniteWall, 8.2, 5.2, 8.2, side * 19.0, 20.0 + 2.6, -15.5);
+    buildGildedDome(buckets, bulbs, {
+      cx: side * 19.0,
+      baseY: 25.1,
+      cz: -15.5,
+      radius: 2.65,
+      height: 5.0,
+      ribs: 12,
+      goldBucket: buckets.antiqueGold,
+      finialH: 2.3,
+      bulbSpacing: 0.42,
+      bulbScale: 0.90,
+      ringCount: 2,
+      drumH: 2.2,
+      drumSides: 12,
+      drumArches: false,
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // H. FORECOURT COPING WALLS, GARDEN SILHOUETTES & DISTANT COMPOUND WALLS
+  // --------------------------------------------------------------------------
+  // Low carved granite coping borders framing the wide reflecting pool (X = ±58, Z = 12.6..126)
+  addBox(buckets.graniteTrim, 118.0, 0.42, 0.95, 0, 0.21, 12.6);
+  for (const side of [-1, 1]) {
+    addBox(buckets.graniteTrim, 1.05, 0.44, 116.0, side * 58.6, 0.22, 70.0);
+    // Warm subtle corner lantern bollards along the reflecting pool rim
+    for (let zPos = 13.0; zPos <= 105.0; zPos += 14.0) {
+      addBox(buckets.graniteTrim, 0.72, 0.95, 0.72, side * 58.6, 0.475, zPos);
+      bulbs.addPoint(side * 58.6, 1.08, zPos, 0.95, 0.25);
+    }
+    // Distant palace garden perimeter wall + subtle Dasara perimeter bulbs
+    addBox(buckets.graniteDark, 1.2, 3.2, 130.0, side * 76.0, 1.6, 56.0);
+    bulbs.addLine(side * 75.3, 3.32, 4.0, side * 75.3, 3.32, 110.0, 1.85, 0.78);
+
+    // Distant compound corner chhatri gate posts framing far edges
+    buildMiniChhatri(buckets, bulbs, side * 66.0, 0.0, 28.0, 0.82);
+  }
+
+  // Stylized dark Mysore Palace garden cypress & royal palm silhouettes far on outer edges
+  const rand = mulberry32(4242);
+  for (const side of [-1, 1]) {
+    // Neat row of ornamental cypress / ashoka trees flanking outer palace lawn
+    for (let i = 0; i < 9; i++) {
+      const tx = side * (62.5 + (i % 2) * 3.8 + (rand() - 0.5) * 1.4);
+      const tz = 10.0 + i * 11.2 + (rand() - 0.5) * 2.0;
+      const th = 7.5 + rand() * 4.5;
+      const trunk = new THREE.CylinderGeometry(0.18, 0.26, th * 0.28, 6);
+      pushGeo(buckets.graniteDark, trunk, makeMatrix(tx, th * 0.14, tz));
+      trunk.dispose();
+
+      // Layered narrow ashoka / cypress crown
+      for (let k = 0; k < 4; k++) {
+        const kr = (1.65 - k * 0.28) * (0.85 + rand() * 0.25);
+        const kh = th * 0.32;
+        const cone = new THREE.ConeGeometry(kr, kh, 7);
+        pushGeo(buckets.foliage, cone, makeMatrix(tx, th * 0.26 + k * th * 0.18, tz, 0, rand() * Math.PI, 0));
+        cone.dispose();
+      }
+    }
+
+    // Lush dark backdrop tree canopy far behind palace flanks
+    for (let i = 0; i < 8; i++) {
+      const tx = side * (56.0 + i * 7.2 + (rand() - 0.5) * 3.0);
+      const tz = -14.0 - rand() * 18.0;
+      const rad = 4.5 + rand() * 4.2;
+      const sp = new THREE.IcosahedronGeometry(rad, 1);
+      pushGeo(buckets.foliage, sp, makeMatrix(tx, rad * 0.75, tz, 0, rand() * 3, 0, 1.15, 0.85, 1.05));
+      sp.dispose();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // I. MERGE ALL BUCKETS INTO OPTIMIZED DRAW CALLS
+  // --------------------------------------------------------------------------
+  const palaceGroup = new THREE.Group();
+  const addMerged = (arr, mat, castShadow = false, receiveShadow = false) => {
+    if (arr.length === 0) return null;
+    const merged = mergeGeometries(arr, false);
+    for (const g of arr) g.dispose();
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = castShadow;
+    mesh.receiveShadow = receiveShadow;
+    palaceGroup.add(mesh);
+    return mesh;
+  };
+
+  addMerged(buckets.graniteWall, materials.graniteWall, true, true);
+  addMerged(buckets.graniteTrim, materials.graniteTrim, true, true);
+  addMerged(buckets.graniteDark, materials.graniteDark, false, true);
+  addMerged(buckets.gildedGold, materials.gildedGold, true, true);
+  addMerged(buckets.antiqueGold, materials.antiqueGold, true, true);
+  addMerged(buckets.interiorGlow, materials.interiorGlow, false, false);
+  addMerged(buckets.windowGlow, materials.windowGlow, false, false);
+  addMerged(buckets.foliage, materials.foliage, false, false);
+
+  // Build Instanced Glowing Bulbs Mesh
+  const bulbSystem = bulbs.buildInstancedMesh(2026);
+  palaceGroup.add(bulbSystem.mesh);
+
+  return { palaceGroup, bulbSystem };
+}
+
+// ============================================================================
+// 6. FORECOURT GROUND & TRUE REAL-TIME HDR PLANAR REFLECTING SURFACE
+// ============================================================================
+function createForecourtAndReflection(pavingTex, envMap) {
+  const group = new THREE.Group();
+
+  // Ceremonial Granite Forecourt Apron & Flanking Promenades (Y = 0.02, surrounding the reflecting pool)
+  const pavingMat = new THREE.MeshStandardMaterial({
+    map: pavingTex.map,
+    roughnessMap: pavingTex.roughnessMap,
+    color: new THREE.Color('#757982'),
+    roughness: 0.42,
+    metalness: 0.14,
+    envMap,
+    envMapIntensity: 0.75,
+  });
+
+  // Front ceremonial granite apron between stairs and reflecting pool (Z = 3.5 -> 12.6)
+  const apronGeo = new THREE.PlaneGeometry(164, 14);
+  apronGeo.rotateX(-Math.PI * 0.5);
+  const apronMesh = new THREE.Mesh(apronGeo, pavingMat);
+  apronMesh.position.set(0, 0.03, 6.2);
+  apronMesh.receiveShadow = true;
+  group.add(apronMesh);
+
+  // Wide outer left/right promenades flanking the reflecting pool
+  for (const side of [-1, 1]) {
+    const promGeo = new THREE.PlaneGeometry(46, 130);
+    promGeo.rotateX(-Math.PI * 0.5);
+    const prom = new THREE.Mesh(promGeo, pavingMat);
+    prom.position.set(side * 81.6, 0.04, 70);
+    group.add(prom);
+  }
+
+  // Far dark earth/horizon plane beyond the forecourt so nothing ever reveals void
+  const horizonGroundGeo = new THREE.PlaneGeometry(600, 600);
+  horizonGroundGeo.rotateX(-Math.PI * 0.5);
+  const horizonGroundMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#090b10'),
+    roughness: 0.92,
+    metalness: 0.04,
+  });
+  const horizonGround = new THREE.Mesh(horizonGroundGeo, horizonGroundMat);
+  horizonGround.position.set(0, -0.06, 40);
+  group.add(horizonGround);
+
+  // Monumental Still Reflecting Surface (HDR Planar Reflection Shader)
+  const reflectGeo = new THREE.PlaneGeometry(116.4, 118.0, 1, 1);
+  reflectGeo.rotateX(-Math.PI * 0.5);
+
+  const reflectUniforms = {
+    tReflect: { value: null },
+    uRefViewProj: { value: new THREE.Matrix4() },
+    uTime: { value: 0 },
+    uFogColor: { value: new THREE.Color('#050712') },
+    uFogDensity: { value: 0.0036 },
+  };
+
+  const reflectMat = new THREE.ShaderMaterial({
+    uniforms: reflectUniforms,
+    vertexShader: /* glsl */ `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tReflect;
+      uniform mat4 uRefViewProj;
+      uniform float uTime;
+      uniform vec3 uFogColor;
+      uniform float uFogDensity;
+
+      varying vec3 vWorldPos;
+
+      // Smooth 2D value noise for whisper-soft still-water capillary shimmer
+      float hash21(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float vnoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+      }
+
+      vec2 waterMicroNormal(vec2 xz, float t) {
+        // Ultra-still ceremonial water: very gentle long-wavelength drift + tiny capillary ripple
+        vec2 p1 = xz * 0.16 + vec2(t * 0.055, -t * 0.032);
+        vec2 p2 = xz * 0.42 + vec2(-t * 0.048, t * 0.062);
+        vec2 p3 = xz * 1.05 + vec2(t * 0.09, t * 0.04);
+
+        float e = 0.08;
+        float h0 = vnoise(p1) * 0.55 + vnoise(p2) * 0.30 + vnoise(p3) * 0.15;
+        float hx = vnoise(p1 + vec2(e, 0.0)) * 0.55 + vnoise(p2 + vec2(e, 0.0)) * 0.30 + vnoise(p3 + vec2(e, 0.0)) * 0.15;
+        float hz = vnoise(p1 + vec2(0.0, e)) * 0.55 + vnoise(p2 + vec2(0.0, e)) * 0.30 + vnoise(p3 + vec2(0.0, e)) * 0.15;
+
+        return vec2(hx - h0, hz - h0) / e;
+      }
+
+      void main() {
+        vec3 toCam = cameraPosition - vWorldPos;
+        float dist = length(toCam);
+        vec3 viewDir = toCam / max(dist, 0.001);
+
+        // Exact planar reflection UV from mirrored virtual camera
+        vec4 refClip = uRefViewProj * vec4(vWorldPos, 1.0);
+        vec2 baseUV = (refClip.xy / refClip.w) * 0.5 + 0.5;
+
+        // Whisper-gentle ripple perturbation (keeps dome & arches mirror-clear while giving bulbs liquid shimmer)
+        vec2 grad = waterMicroNormal(vWorldPos.xz, uTime);
+        float rippleScale = 0.0022 * smoothstep(4.0, 38.0, dist);
+        // Slightly stronger vertical elongation like real calm water reflections of bright lights
+        vec2 uvOffset = vec2(grad.x * 0.55, grad.y * 1.45) * rippleScale;
+        vec2 uv = clamp(baseUV + uvOffset, vec2(0.002), vec2(0.998));
+
+        // 3-tap soft vertical sheen sample for velvety reflected bulb glow
+        vec3 refCenter = texture2D(tReflect, uv).rgb;
+        vec3 refUp = texture2D(tReflect, clamp(uv + vec2(0.0, 0.0024), vec2(0.002), vec2(0.998))).rgb;
+        vec3 refDn = texture2D(tReflect, clamp(uv - vec2(0.0, 0.0024), vec2(0.002), vec2(0.998))).rgb;
+        vec3 reflCol = refCenter * 0.62 + (refUp + refDn) * 0.19;
+
+        // Schlick Fresnel calibrated for a dark mirror-still ceremonial pool
+        vec3 N = normalize(vec3(grad.x * 0.015, 1.0, grad.y * 0.015));
+        float ndotv = clamp(dot(N, viewDir), 0.0, 1.0);
+        float fresnel = 0.26 + 0.58 * pow(1.0 - ndotv, 2.5);
+
+        // Subtle dark reflective basin water tint underneath
+        vec3 deepWater = vec3(0.007, 0.011, 0.022);
+
+        // Subtle warm golden subsurface scatter right in front of the glowing palace
+        float palaceProx = exp(-pow(vWorldPos.x / 52.0, 2.0)) * exp(-max(0.0, vWorldPos.z - 12.0) / 36.0);
+        deepWater += vec3(0.026, 0.013, 0.004) * palaceProx;
+
+        // Subtle dark ambient occlusion along the stone pool coping walls
+        float edgeFront = smoothstep(12.6, 14.4, vWorldPos.z);
+        float edgeSides = smoothstep(58.2, 56.0, abs(vWorldPos.x));
+        float edgeAO = 0.65 + 0.35 * edgeFront * edgeSides;
+
+        vec3 col = mix(deepWater, reflCol * vec3(0.76, 0.74, 0.72), fresnel) * edgeAO;
+
+        // Match exponential scene fog seamlessly
+        float fogFactor = 1.0 - exp(-pow(dist * uFogDensity, 2.0));
+        col = mix(col, uFogColor, clamp(fogFactor, 0.0, 0.85));
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+    toneMapped: true,
+  });
+
+  const waterMesh = new THREE.Mesh(reflectGeo, reflectMat);
+  waterMesh.position.set(0, 0.0, 71.6);
+  group.add(waterMesh);
+
+  return { forecourtGroup: group, waterMesh, reflectUniforms };
+}
+
+// ============================================================================
+// 7. PROCEDURAL NIGHT SKY DOME, DRIFTING HAZE & NIGHT AIR MOTES
+// ============================================================================
+function createNightSky() {
+  const skyGeo = new THREE.SphereGeometry(420, 48, 32);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      uTime: { value: 0 },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vWorldDir;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldDir = normalize(position);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      varying vec3 vWorldDir;
+
+      float hash31(vec3 p) {
+        p = fract(p * vec3(443.897, 441.423, 437.195));
+        p += dot(p, p.yzx + 19.19);
+        return fract((p.x + p.y) * p.z);
+      }
+
+      float hash21(vec2 p) {
+        p = fract(p * vec2(234.34, 435.345));
+        p += dot(p, p + 34.23);
+        return fract(p.x * p.y);
+      }
+
+      float noise2(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
+          mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+
+      float fbm(vec2 p) {
+        float v = 0.0, a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += a * noise2(p);
+          p = p * 2.05 + vec2(13.7, 7.3);
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        vec3 d = normalize(vWorldDir);
+        float y = clamp(d.y, -0.1, 1.0);
+
+        // Deep velvety Mysuru Dasara night sky gradient
+        vec3 zenithCol = vec3(0.004, 0.008, 0.026);
+        vec3 midSkyCol = vec3(0.011, 0.019, 0.052);
+        vec3 horizonCool = vec3(0.026, 0.030, 0.064);
+        vec3 horizonWarm = vec3(0.14, 0.072, 0.028);
+
+        vec3 sky = mix(horizonCool, midSkyCol, smoothstep(0.0, 0.28, max(y, 0.0)));
+        sky = mix(sky, zenithCol, smoothstep(0.22, 0.78, max(y, 0.0)));
+
+        // Warm Dasara city & palace atmospheric light glow rising softly behind the palace (-Z)
+        float palaceDir = pow(max(0.0, dot(normalize(vec2(d.x, d.z)), vec2(0.0, -1.0))), 1.8);
+        float horizonGlow = exp(-max(y, 0.0) * 7.2) * (0.35 + 0.65 * palaceDir);
+        float palaceHalo = exp(-max(y, 0.0) * 4.2) * pow(max(0.0, dot(d, normalize(vec3(0.0, 0.09, -1.0)))), 5.5);
+        sky += horizonWarm * horizonGlow * 0.72;
+        sky += vec3(0.20, 0.10, 0.032) * palaceHalo * 0.55;
+
+        // Subtle high drifting nocturnal cloud wisps
+        if (y > 0.02) {
+          vec2 cloudUV = d.xz / (y + 0.24) * 0.75 + vec2(uTime * 0.0045, uTime * 0.0018);
+          float c1 = fbm(cloudUV);
+          float c2 = fbm(cloudUV * 2.1 - vec2(uTime * 0.003, 0.0));
+          float wisps = smoothstep(0.52, 0.84, c1 * 0.7 + c2 * 0.3) * smoothstep(0.02, 0.18, y) * (1.0 - smoothstep(0.45, 0.88, y));
+          vec3 cloudTint = mix(vec3(0.06, 0.08, 0.15), vec3(0.18, 0.10, 0.045), horizonGlow * 0.9);
+          sky += cloudTint * wisps * 0.36;
+        }
+
+        // Crisp subtle upper-sky stars
+        if (y > 0.08) {
+          vec3 starCell = floor(d * 290.0);
+          float rnd = hash31(starCell);
+          if (rnd > 0.992) {
+            vec3 cellCenter = normalize(starCell + 0.5);
+            float angDist = length(d - cellCenter) * 290.0;
+            float starSpot = smoothstep(0.32, 0.0, angDist);
+            float tw = 0.65 + 0.35 * sin(uTime * (1.2 + fract(rnd * 71.3) * 2.5) + rnd * 120.0);
+            float starFade = smoothstep(0.08, 0.34, y);
+            vec3 starCol = mix(vec3(0.75, 0.85, 1.0), vec3(1.0, 0.92, 0.78), fract(rnd * 33.7));
+            sky += starCol * starSpot * tw * starFade * 0.68;
+          }
+        }
+
+        gl_FragColor = vec4(sky, 1.0);
+      }
+    `,
+  });
+
+  const skyMesh = new THREE.Mesh(skyGeo, skyMat);
+  return { skyMesh, skyMat };
+}
+
+function createDriftingHaze() {
+  const hazeGroup = new THREE.Group();
+  const hazeUniforms = {
+    uTime: { value: 0 },
+  };
+
+  const hazeMat = new THREE.ShaderMaterial({
+    uniforms: hazeUniforms,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vWorldPos;
+      void main() {
+        vUv = uv;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      varying vec2 vUv;
+      varying vec3 vWorldPos;
+
+      float hash21(vec2 p) {
+        p = fract(p * vec2(127.1, 311.7));
+        p += dot(p, p + 34.5);
+        return fract(p.x * p.y);
+      }
+
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
+          mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+
+      float fbm(vec2 p) {
+        float v = 0.0, a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += a * noise(p);
+          p = p * 2.02 + vec2(9.2, 5.4);
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        if (vWorldPos.y < 0.05) discard;
+
+        // Smooth elliptical feathering so plane edges are 100% invisible
+        vec2 c = vUv * 2.0 - 1.0;
+        float radMask = 1.0 - smoothstep(0.12, 1.0, length(c * vec2(1.0, 1.18)));
+        float lowFade = smoothstep(0.0, 0.25, vUv.y);
+
+        // Delicate wispy drifting night mist
+        float layerSeed = fract(vWorldPos.z * 0.037);
+        vec2 uv1 = vUv * vec2(3.6, 2.0) + vec2(uTime * (0.018 + layerSeed * 0.011), -uTime * 0.004 + layerSeed * 10.0);
+        vec2 uv2 = vUv * vec2(6.0, 3.0) + vec2(-uTime * 0.012 + layerSeed * 6.0, uTime * 0.006);
+        float mist = fbm(uv1) * 0.65 + fbm(uv2) * 0.35;
+        mist = smoothstep(0.42, 0.88, mist);
+
+        // Fade gently when camera passes close to a haze sheet
+        float camDist = length(cameraPosition - vWorldPos);
+        float nearFade = smoothstep(10.0, 28.0, camDist);
+
+        // Warm golden Dasara scattering near the palace, cooler smoky indigo farther out
+        float palaceWarmth = exp(-pow(vWorldPos.x / 52.0, 2.0)) * exp(-pow((vWorldPos.z + 2.0) / 40.0, 2.0));
+        vec3 coolMist = vec3(0.08, 0.11, 0.20);
+        vec3 warmMist = vec3(0.65, 0.34, 0.10);
+        vec3 col = mix(coolMist, warmMist, clamp(palaceWarmth * 1.1, 0.0, 1.0));
+
+        float alpha = mist * radMask * lowFade * nearFade * (0.018 + 0.022 * palaceWarmth);
+        gl_FragColor = vec4(col * alpha, alpha);
+      }
+    `,
+  });
+
+  // Layered faint drifting haze curtains across the forecourt & behind the domes
+  const layers = [
+    { x: 0, y: 8, z: 54, w: 125, h: 16 },
+    { x: -16, y: 7, z: 32, w: 112, h: 15 },
+    { x: 18, y: 9, z: 18, w: 118, h: 18 },
+    { x: 0, y: 26, z: -18, w: 155, h: 40 },
+    { x: -24, y: 12, z: 42, w: 96, h: 16 },
+    { x: 26, y: 11, z: 24, w: 96, h: 16 },
+  ];
+
+  for (const l of layers) {
+    const geo = new THREE.PlaneGeometry(l.w, l.h);
+    const m = new THREE.Mesh(geo, hazeMat);
+    m.position.set(l.x, l.y, l.z);
+    hazeGroup.add(m);
+  }
+
+  // Subtle drifting warm night air motes (incense / festival dust catching golden glow)
+  const moteCount = 340;
+  const rand = mulberry32(8888);
+  const posArr = new Float32Array(moteCount * 3);
+  const rndArr = new Float32Array(moteCount * 3);
+
+  for (let i = 0; i < moteCount; i++) {
+    posArr[i * 3 + 0] = (rand() - 0.5) * 110;
+    posArr[i * 3 + 1] = 1.5 + rand() * 34;
+    posArr[i * 3 + 2] = -6 + rand() * 88;
+    rndArr[i * 3 + 0] = rand() * Math.PI * 2;
+    rndArr[i * 3 + 1] = 0.4 + rand() * 1.1;
+    rndArr[i * 3 + 2] = 0.5 + rand() * 1.0;
+  }
+
+  const moteGeo = new THREE.BufferGeometry();
+  moteGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  moteGeo.setAttribute('aRnd', new THREE.BufferAttribute(rndArr, 3));
+
+  const moteMat = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 } },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexShader: /* glsl */ `
+      attribute vec3 aRnd;
+      uniform float uTime;
+      varying float vAlpha;
+
+      void main() {
+        vec3 p = position;
+        p.x += sin(uTime * 0.14 * aRnd.y + aRnd.x) * 2.2 + mod(uTime * 0.28 * aRnd.y + aRnd.x * 10.0, 110.0) - 55.0;
+        p.x = mod(p.x + 55.0, 110.0) - 55.0;
+        p.y += sin(uTime * 0.22 * aRnd.y + aRnd.x * 2.0) * 0.9;
+
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        float dist = length(mv.xyz);
+        gl_PointSize = clamp((16.0 * aRnd.z) / max(dist, 4.0), 1.0, 3.6);
+        vAlpha = (0.10 + 0.10 * sin(uTime * 0.9 * aRnd.y + aRnd.x)) * smoothstep(4.0, 18.0, dist) * (1.0 - smoothstep(70.0, 115.0, dist));
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying float vAlpha;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5;
+        float r = length(c) * 2.0;
+        float soft = pow(max(0.0, 1.0 - r), 2.2);
+        vec3 col = vec3(1.0, 0.68, 0.28);
+        gl_FragColor = vec4(col * soft * vAlpha, soft * vAlpha);
+      }
+    `,
+  });
+
+  const motes = new THREE.Points(moteGeo, moteMat);
+  hazeGroup.add(motes);
+
+  return { hazeGroup, hazeUniforms, moteMat };
+}
+
+// ============================================================================
+// 8. CALIBRATED LIGHTING RIG (DASARA GOLDEN BOUNCE + COOL MOONLIGHT)
+// ============================================================================
+function createLightingRig(scene) {
+  // Deep midnight-indigo sky ambient vs warm golden ground bounce
+  const hemi = new THREE.HemisphereLight('#243866', '#3d2008', 0.40);
+  scene.add(hemi);
+
+  // Subtle cool silvery moonlight grazing from high rear-left to sculpt granite cornices
+  const moonLight = new THREE.DirectionalLight('#648ce0', 0.72);
+  moonLight.position.set(-48, 72, -32);
+  scene.add(moonLight);
+
+  // Soft warm frontal Dasara fill representing the collective bounce of ~18,000 bulbs on the grey granite
+  const facadeFill = new THREE.DirectionalLight('#ffa642', 0.46);
+  facadeFill.position.set(12, 18, 64);
+  scene.add(facadeFill);
+
+  const warmLights = [];
+  const addPoint = (x, y, z, color, intensity, distance, decay = 1.65) => {
+    const l = new THREE.PointLight(color, intensity, distance, decay);
+    l.position.set(x, y, z);
+    scene.add(l);
+    warmLights.push({ light: l, base: intensity, phase: (x * 0.37 + y * 0.53 + z * 0.21) });
+    return l;
+  };
+
+  // Central Gilded Dome & Mini-Chhatris Golden Uplights
+  addPoint(0, 35.5, 4.8, '#ffb240', 110, 42, 1.55);
+  addPoint(-8.5, 31.0, 2.5, '#ff9228', 62, 32, 1.65);
+  addPoint(8.5, 31.0, 2.5, '#ff9228', 62, 32, 1.65);
+  addPoint(0, 42.5, 1.8, '#ffc864', 52, 26, 1.6);
+
+  // Central Portico & Royal Durbar Hall Warm Interior Spill
+  addPoint(0, 6.2, 3.8, '#ff8d20', 64, 28, 1.65);
+  addPoint(0, 13.5, 3.6, '#ff982b', 72, 30, 1.65);
+  addPoint(0, 21.0, 6.0, '#ff942c', 56, 26, 1.65);
+
+  // Symmetrical Colonnade Wing Warm Grazing & Interior Lights
+  for (const side of [-1, 1]) {
+    // Inner colonnade facade & gallery warm glow
+    addPoint(side * 18.5, 12.2, 3.8, '#ff8f26', 54, 32, 1.65);
+    addPoint(side * 18.5, 5.2, 1.8, '#ff841a', 36, 24, 1.7);
+    // Mid-wing domed tower uplight
+    addPoint(side * 31.8, 26.5, 4.5, '#ffa638', 68, 32, 1.55);
+    addPoint(side * 31.8, 12.5, 6.0, '#ff9026', 44, 28, 1.65);
+    // Outer colonnade & corner grand pavilion tower
+    addPoint(side * 41.0, 12.0, 3.6, '#ff8e24', 42, 26, 1.65);
+    addPoint(side * 49.8, 28.5, 5.2, '#ffa83c', 82, 36, 1.55);
+    addPoint(side * 49.8, 12.8, 7.2, '#ff9026', 48, 30, 1.65);
+  }
+
+  return warmLights;
+}
+
+// ============================================================================
+// 9. MAIN SCENE INITIALIZATION, RENDER LOOP & DAMPED CINEMATIC CAMERA
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.94;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#03050d');
+scene.fog = new THREE.FogExp2('#050712', 0.0036);
+
+// Generate calibrated procedural PBR textures & night environment
+const envMap = createNightEnvMap(renderer);
+scene.environment = envMap;
+
+const graniteAshlar = createGraniteTextures('ashlar');
+const graniteDressed = createGraniteTextures('dressed');
+const gildedGoldTex = createGildedGoldTextures();
+const pavingTex = createPavingTextures();
+const interiorCorridorTex = createInteriorCorridorTexture();
+
+const materials = {
+  graniteWall: new THREE.MeshStandardMaterial({
+    map: graniteAshlar.map,
+    roughnessMap: graniteAshlar.roughnessMap,
+    bumpMap: graniteAshlar.bumpMap,
+    bumpScale: 0.14,
+    color: new THREE.Color('#747b87'),
+    roughness: 0.84,
+    metalness: 0.04,
+    envMap,
+    envMapIntensity: 0.42,
+  }),
+  graniteTrim: new THREE.MeshStandardMaterial({
+    map: graniteDressed.map,
+    roughnessMap: graniteDressed.roughnessMap,
+    bumpMap: graniteDressed.bumpMap,
+    bumpScale: 0.10,
+    color: new THREE.Color('#8c93a0'),
+    roughness: 0.74,
+    metalness: 0.06,
+    envMap,
+    envMapIntensity: 0.50,
+  }),
+  graniteDark: new THREE.MeshStandardMaterial({
+    map: graniteAshlar.map,
+    roughnessMap: graniteAshlar.roughnessMap,
+    bumpMap: graniteAshlar.bumpMap,
+    bumpScale: 0.11,
+    color: new THREE.Color('#4c525c'),
+    roughness: 0.86,
+    metalness: 0.05,
+    envMap,
+    envMapIntensity: 0.34,
+  }),
+  gildedGold: new THREE.MeshStandardMaterial({
+    map: gildedGoldTex.map,
+    roughnessMap: gildedGoldTex.roughnessMap,
+    bumpMap: gildedGoldTex.bumpMap,
+    bumpScale: 0.09,
+    color: new THREE.Color('#e0a432'),
+    roughness: 0.22,
+    metalness: 0.95,
+    envMap,
+    envMapIntensity: 1.75,
+  }),
+  antiqueGold: new THREE.MeshStandardMaterial({
+    map: gildedGoldTex.map,
+    roughnessMap: gildedGoldTex.roughnessMap,
+    bumpMap: gildedGoldTex.bumpMap,
+    bumpScale: 0.09,
+    color: new THREE.Color('#cc8e2c'),
+    roughness: 0.26,
+    metalness: 0.92,
+    envMap,
+    envMapIntensity: 1.52,
+  }),
+  interiorGlow: new THREE.MeshStandardMaterial({
+    map: interiorCorridorTex,
+    emissiveMap: interiorCorridorTex,
+    color: new THREE.Color('#402412'),
+    emissive: new THREE.Color('#ff9a38'),
+    emissiveIntensity: 0.55,
+    roughness: 0.92,
+    metalness: 0.0,
+  }),
+  windowGlow: new THREE.MeshStandardMaterial({
+    map: interiorCorridorTex,
+    emissiveMap: interiorCorridorTex,
+    color: new THREE.Color('#24140a'),
+    emissive: new THREE.Color('#ff9d3a'),
+    emissiveIntensity: 0.36,
+    roughness: 0.55,
+    metalness: 0.1,
+  }),
+  foliage: new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#09100e'),
+    roughness: 0.94,
+    metalness: 0.0,
+    envMapIntensity: 0.16,
+  }),
+};
+
+// Assemble Scene Elements
+const { skyMesh, skyMat } = createNightSky();
+scene.add(skyMesh);
+
+const { palaceGroup, bulbSystem } = buildMysorePalace(materials);
+scene.add(palaceGroup);
+
+const { forecourtGroup, waterMesh, reflectUniforms } = createForecourtAndReflection(pavingTex, envMap);
+scene.add(forecourtGroup);
+
+const { hazeGroup, hazeUniforms, moteMat } = createDriftingHaze();
+scene.add(hazeGroup);
+
+const warmLights = createLightingRig(scene);
+
+// Main Camera & Mirrored Reflection Camera
+const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.5, 650);
+const reflectCam = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.5, 650);
+
+// HalfFloat HDR Reflection Render Target (preserves bulb luminance in reflections!)
+const REFLECT_SCALE = 0.68;
+let reflectRT = new THREE.WebGLRenderTarget(
+  Math.max(256, Math.floor(window.innerWidth * REFLECT_SCALE)),
+  Math.max(256, Math.floor(window.innerHeight * REFLECT_SCALE)),
+  {
+    type: THREE.HalfFloatType,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: true,
+  }
+);
+reflectUniforms.tReflect.value = reflectRT.texture;
+const reflectClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.02);
+
+// Post-Processing: Multisampled HalfFloat EffectComposer + Soft Cinematic Bloom + OutputPass
+const composerTarget = new THREE.WebGLRenderTarget(
+  window.innerWidth,
+  window.innerHeight,
+  {
+    type: THREE.HalfFloatType,
+    samples: 4,
+  }
+);
+const composer = new EffectComposer(renderer, composerTarget);
+const renderPass = new RenderPass(scene, camera);
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.44, // soft velvety golden Dasara halation (zero washout)
+  0.54, // warm glowing bloom radius around every bulb & dome rib
+  0.86  // threshold preserves crisp grey granite while blooming warm bulbs & gold glints
+);
+const outputPass = new OutputPass();
+composer.addPass(renderPass);
+composer.addPass(bloomPass);
+composer.addPass(outputPass);
+
+// ============================================================================
+// 10. SLOW DAMPED CINEMATIC CAMERA CHOREOGRAPHY
+// ============================================================================
+// Starts wide across the still reflecting forecourt, slowly glides forward & rises
+// toward the monumental Central Gilded Dome, breathes gracefully around the climax,
+// then gently returns in a seamless cinematic loop.
+
+const posCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(10.5, 5.8, 108.0),  // 0.00: Grand wide establishing shot + full reflection
+  new THREE.Vector3(6.5, 7.2, 82.0),    // 0.25: Sweeping smoothly over still reflecting forecourt
+  new THREE.Vector3(1.8, 10.8, 56.0),   // 0.50: Entering colonnade symmetry
+  new THREE.Vector3(-2.2, 16.8, 38.5),  // 0.75: Rising toward central tower & mini-chhatris
+  new THREE.Vector3(-0.6, 23.0, 27.5),  // 1.00: Hero close-up on the Central Gilded Dome!
+], false, 'centripetal', 0.5);
+
+const targetCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(0.0, 13.8, -2.0),   // 0.00: Balanced horizon showcasing palace + full water mirror
+  new THREE.Vector3(0.0, 16.5, -2.5),   // 0.25
+  new THREE.Vector3(0.0, 20.8, -3.2),   // 0.50
+  new THREE.Vector3(0.0, 27.0, -3.8),   // 0.75
+  new THREE.Vector3(0.0, 32.2, -4.1),   // 1.00: Heart of the Central Gilded Dome & ribs
+], false, 'centripetal', 0.5);
+
+// Subtle passive pointer parallax (zero UI, completely unobtrusive)
+const pointer = { x: 0, y: 0, sx: 0, sy: 0 };
+window.addEventListener('pointermove', (e) => {
+  pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = (e.clientY / window.innerHeight) * 2 - 1;
+}, { passive: true });
+
+const desiredPos = new THREE.Vector3();
+const desiredTarget = new THREE.Vector3();
+const currentPos = posCurve.getPointAt(0).clone();
+const currentTarget = targetCurve.getPointAt(0).clone();
+const refViewProj = new THREE.Matrix4();
+
+camera.position.copy(currentPos);
+camera.lookAt(currentTarget);
+
+function evaluateCinemaSchedule(elapsed) {
+  // Total seamless cycle = 112 seconds:
+  //   0..52s   : Slow majestic push-in from wide establishing shot -> central gilded dome
+  //   52..68s  : Gentle hovering admiration & subtle arc around the central dome
+  //   68..106s : Graceful slow pull-back to wide establishing view
+  //   106..112s: Calm wide establishing breath
+  const cycle = 112.0;
+  const ct = elapsed % cycle;
+
+  let progress = 0;
+  let arcX = 0;
+  let arcY = 0;
+
+  if (ct < 52.0) {
+    const u = ct / 52.0;
+    // Quintic smooth ease-in-out for cinema dolly feel
+    progress = u * u * u * (u * (u * 6.0 - 15.0) + 10.0);
+  } else if (ct < 68.0) {
+    progress = 1.0;
+    const h = (ct - 52.0) / 16.0;
+    arcX = Math.sin(h * Math.PI) * 5.2;
+    arcY = Math.sin(h * Math.PI * 2.0) * 0.85;
+  } else if (ct < 106.0) {
+    const u = 1.0 - (ct - 68.0) / 38.0;
+    progress = u * u * u * (u * (u * 6.0 - 15.0) + 10.0);
+  } else {
+    progress = 0.0;
+  }
+
+  posCurve.getPointAt(clamp(progress, 0, 1), desiredPos);
+  targetCurve.getPointAt(clamp(progress, 0, 1), desiredTarget);
+
+  // Subtle organic crane drift + damped climax arc
+  desiredPos.x += arcX + Math.sin(elapsed * 0.11) * 0.9;
+  desiredPos.y += arcY + Math.sin(elapsed * 0.17) * 0.25;
+  desiredTarget.x += Math.sin(elapsed * 0.09) * 0.35;
+}
+
+// Responsive resize handling
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  reflectCam.aspect = w / h;
+  reflectCam.updateProjectionMatrix();
+
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  bloomPass.setSize(w, h);
+
+  reflectRT.setSize(
+    Math.max(256, Math.floor(w * REFLECT_SCALE)),
+    Math.max(256, Math.floor(h * REFLECT_SCALE))
+  );
+});
+
+// Animation Loop
+let lastTime = performance.now();
+let elapsed = 0;
+
+function animate(now) {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min((now - lastTime) * 0.001, 0.05);
+  lastTime = now;
+  elapsed += dt;
+
+  // 1. Update slow damped cinematic camera
+  evaluateCinemaSchedule(elapsed);
+
+  // Damped passive pointer parallax
+  const pDamp = 1.0 - Math.exp(-2.2 * dt);
+  pointer.sx += (pointer.x - pointer.sx) * pDamp;
+  pointer.sy += (pointer.y - pointer.sy) * pDamp;
+
+  desiredPos.x += pointer.sx * 1.65;
+  desiredPos.y += -pointer.sy * 0.75;
+
+  // Critically damped camera tracking
+  const camDamp = 1.0 - Math.exp(-1.55 * dt);
+  const tgtDamp = 1.0 - Math.exp(-1.85 * dt);
+  currentPos.lerp(desiredPos, camDamp);
+  currentTarget.lerp(desiredTarget, tgtDamp);
+
+  camera.position.copy(currentPos);
+  camera.lookAt(currentTarget);
+  camera.updateMatrixWorld();
+
+  // Keep sky dome centered on camera XZ
+  skyMesh.position.set(camera.position.x, 0, camera.position.z);
+
+  // 2. Update shaders (gentle bulb twinkle, drifting haze, water micro-ripples, night sky)
+  bulbSystem.material.uniforms.uTime.value = elapsed;
+  reflectUniforms.uTime.value = elapsed;
+  hazeUniforms.uTime.value = elapsed;
+  moteMat.uniforms.uTime.value = elapsed;
+  skyMat.uniforms.uTime.value = elapsed;
+
+  // Very subtle warm ambient light shimmer matching the collective twinkling bulbs
+  for (let i = 0; i < warmLights.length; i++) {
+    const wl = warmLights[i];
+    wl.light.intensity = wl.base * (1.0 + 0.035 * Math.sin(elapsed * 2.1 + wl.phase));
+  }
+
+  // 3. Pass 1: Render HDR Planar Reflection into reflectRT
+  reflectCam.position.set(currentPos.x, -currentPos.y, currentPos.z);
+  reflectCam.up.set(0, 1, 0);
+  reflectCam.lookAt(currentTarget.x, -currentTarget.y, currentTarget.z);
+  reflectCam.updateMatrixWorld();
+  reflectCam.updateProjectionMatrix();
+
+  refViewProj.multiplyMatrices(reflectCam.projectionMatrix, reflectCam.matrixWorldInverse);
+  reflectUniforms.uRefViewProj.value.copy(refViewProj);
+
+  waterMesh.visible = false;
+  hazeGroup.visible = false; // Keep reflections crisp and free of double-blended haze
+  renderer.clippingPlanes = [reflectClipPlane];
+  renderer.setRenderTarget(reflectRT);
+  renderer.clear();
+  renderer.render(scene, reflectCam);
+  renderer.setRenderTarget(null);
+  renderer.clippingPlanes = [];
+  waterMesh.visible = true;
+  hazeGroup.visible = true;
+
+  // 4. Pass 2: Main HDR Scene + Soft Bloom Post-Processing
+  composer.render();
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

@@ -1,0 +1,2689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Snowy Log Cabin Diorama</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #f3f6fa;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // =========================================================================
+    // 1. DETERMINISTIC SEEDED PRNG & NOISE UTILITIES
+    // =========================================================================
+    class PRNG {
+      constructor(seed = 1337) {
+        this.s = seed % 2147483647;
+        if (this.s <= 0) this.s += 2147483646;
+      }
+      next() {
+        this.s = (this.s * 16807) % 2147483647;
+        return (this.s - 1) / 2147483646;
+      }
+      range(min, max) {
+        return min + (max - min) * this.next();
+      }
+    }
+
+    const rng = new PRNG(42079);
+
+    function hash2(x, y) {
+      const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+      return h - Math.floor(h);
+    }
+
+    function noise2D(x, y) {
+      const ix = Math.floor(x);
+      const iy = Math.floor(y);
+      const fx = x - ix;
+      const fy = y - iy;
+      const ux = fx * fx * (3.0 - 2.0 * fx);
+      const uy = fy * fy * (3.0 - 2.0 * fy);
+      const a = hash2(ix, iy);
+      const b = hash2(ix + 1, iy);
+      const c = hash2(ix, iy + 1);
+      const d = hash2(ix + 1, iy + 1);
+      return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+    }
+
+    function fbm2(x, y, octaves = 4) {
+      let val = 0.0;
+      let amp = 0.5;
+      let freq = 1.0;
+      for (let i = 0; i < octaves; i++) {
+        val += amp * (noise2D(x * freq, y * freq) * 2.0 - 1.0);
+        freq *= 2.03;
+        amp *= 0.5;
+      }
+      return val;
+    }
+
+    function smoothstep(edge0, edge1, x) {
+      const t = Math.max(0.0, Math.min(1.0, (x - edge0) / (edge1 - edge0)));
+      return t * t * (3.0 - 2.0 * t);
+    }
+
+    // =========================================================================
+    // 2. PARAMETRIC LOFTING ENGINE WITH ANALYTIC NORMALS
+    // =========================================================================
+    /**
+     * Evaluates a 2D parametric surface S(u, v) for u in [0, 1], v in [0, 1],
+     * computing analytic partial derivatives dS/du and dS/dv via exact surface
+     * differentials, plus optional closed caps at u=0 and u=1.
+     */
+    function buildParametricLoft({
+      uSegments = 32,
+      vSegments = 24,
+      closedV = true,
+      capStart = false,
+      capEnd = false,
+      evalPos,     // (u, v, targetVec3) => void
+      evalColor,   // optional (u, v, pos, normal, targetColor) => void
+      uvScaleU = 1.0,
+      uvScaleV = 1.0,
+      flipNormal = false
+    }) {
+      const ringCount = uSegments + 1;
+      const stride = vSegments + 1;
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const colors = [];
+      const indices = [];
+
+      const p = new THREE.Vector3();
+      const pu1 = new THREE.Vector3();
+      const pu2 = new THREE.Vector3();
+      const pv1 = new THREE.Vector3();
+      const pv2 = new THREE.Vector3();
+      const dU = new THREE.Vector3();
+      const dV = new THREE.Vector3();
+      const norm = new THREE.Vector3();
+      const col = new THREE.Color(1, 1, 1);
+
+      const epsU = 1e-4;
+      const epsV = 1e-4;
+
+      const rawNormals = [];
+      const ringCenters = [];
+
+      for (let iu = 0; iu <= uSegments; iu++) {
+        const u = iu / uSegments;
+        const uMinus = Math.max(0.0, u - epsU);
+        const uPlus = Math.min(1.0, u + epsU);
+        const rCenter = new THREE.Vector3();
+
+        for (let iv = 0; iv <= vSegments; iv++) {
+          const v = iv / vSegments;
+          const vActual = (closedV && iv === vSegments) ? 0.0 : v;
+
+          evalPos(u, vActual, p);
+          rCenter.add(p);
+
+          evalPos(uPlus, vActual, pu2);
+          evalPos(uMinus, vActual, pu1);
+          dU.subVectors(pu2, pu1);
+
+          let vMinus = vActual - epsV;
+          let vPlus = vActual + epsV;
+          if (closedV) {
+            if (vMinus < 0.0) vMinus += 1.0;
+            if (vPlus >= 1.0) vPlus -= 1.0;
+          } else {
+            vMinus = Math.max(0.0, vMinus);
+            vPlus = Math.min(1.0, vPlus);
+          }
+
+          evalPos(u, vPlus, pv2);
+          evalPos(u, vMinus, pv1);
+          dV.subVectors(pv2, pv1);
+
+          // dU x dV matches counter-clockwise triangle winding (a, b, d)
+          norm.crossVectors(dU, dV);
+
+          positions.push(p.x, p.y, p.z);
+          rawNormals.push(norm.x, norm.y, norm.z);
+          uvs.push(u * uvScaleU, v * uvScaleV);
+        }
+
+        rCenter.multiplyScalar(1.0 / stride);
+        ringCenters.push(rCenter);
+      }
+
+      // Determine outward orientation sign:
+      // 1) For radial disks/skirts expanding from center (snow rise, pine boughs, snow caps),
+      //    ensure upper surface normals point upward (+Y).
+      // 2) For tubular/axial lofts and closed 3D cobbles, use Green's / Divergence theorem
+      //    around the cross-section rings.
+      const globalCenter = new THREE.Vector3();
+      for (let i = 0; i < ringCenters.length; i++) globalCenter.add(ringCenters[i]);
+      globalCenter.multiplyScalar(1.0 / ringCenters.length);
+
+      const getRingRadius = (iu) => {
+        const c = ringCenters[iu];
+        let rSum = 0.0;
+        for (let iv = 0; iv < vSegments; iv++) {
+          const idx = (iu * stride + iv) * 3;
+          rSum += Math.hypot(positions[idx] - c.x, positions[idx + 1] - c.y, positions[idx + 2] - c.z);
+        }
+        return rSum / vSegments;
+      };
+
+      const rStart = getRingRadius(0);
+      const rMid = getRingRadius(Math.max(1, Math.floor(uSegments * 0.75)));
+      const isRadialConeOrDisk = closedV && !capStart && (rStart < rMid * 0.35);
+
+      let orientVote = 0.0;
+      if (isRadialConeOrDisk) {
+        const upperLimit = Math.max(1, Math.floor(uSegments * 0.78));
+        for (let iu = 0; iu <= upperLimit; iu++) {
+          for (let iv = 0; iv < vSegments; iv++) {
+            const idx = (iu * stride + iv) * 3;
+            orientVote += rawNormals[idx + 1]; // Y component on upper dome/cone
+          }
+        }
+      } else {
+        let spineSpanSq = 0.0;
+        for (let i = 0; i < ringCenters.length; i++) {
+          spineSpanSq = Math.max(spineSpanSq, ringCenters[i].distanceToSquared(globalCenter));
+        }
+        for (let iu = 0; iu <= uSegments; iu++) {
+          const refCenter = spineSpanSq > 0.04 ? ringCenters[iu] : globalCenter;
+          for (let iv = 0; iv < vSegments; iv++) {
+            const idx = (iu * stride + iv) * 3;
+            const rx = positions[idx] - refCenter.x;
+            const ry = positions[idx + 1] - refCenter.y;
+            const rz = positions[idx + 2] - refCenter.z;
+            orientVote += rx * rawNormals[idx] + ry * rawNormals[idx + 1] + rz * rawNormals[idx + 2];
+          }
+        }
+      }
+
+      let sign = (closedV && orientVote < 0.0) ? -1.0 : 1.0;
+      if (flipNormal) sign *= -1.0;
+
+      for (let i = 0; i < rawNormals.length; i += 3) {
+        norm.set(rawNormals[i] * sign, rawNormals[i + 1] * sign, rawNormals[i + 2] * sign);
+        if (norm.lengthSq() < 1e-12) {
+          norm.set(0, 1, 0);
+        } else {
+          norm.normalize();
+        }
+        normals.push(norm.x, norm.y, norm.z);
+
+        if (evalColor) {
+          const vertIdx = i / 3;
+          const iu = Math.floor(vertIdx / stride);
+          const iv = vertIdx % stride;
+          const u = iu / uSegments;
+          const vActual = (closedV && iv === vSegments) ? 0.0 : (iv / vSegments);
+          p.set(positions[i], positions[i + 1], positions[i + 2]);
+          evalColor(u, vActual, p, norm, col);
+          colors.push(col.r, col.g, col.b);
+        } else {
+          colors.push(1, 1, 1);
+        }
+      }
+
+      for (let iu = 0; iu < uSegments; iu++) {
+        for (let iv = 0; iv < vSegments; iv++) {
+          const a = iu * stride + iv;
+          const b = (iu + 1) * stride + iv;
+          const c = (iu + 1) * stride + (iv + 1);
+          const d = iu * stride + (iv + 1);
+          if (sign > 0.0) {
+            indices.push(a, b, d);
+            indices.push(b, c, d);
+          } else {
+            indices.push(a, d, b);
+            indices.push(b, d, c);
+          }
+        }
+      }
+
+      // Helper for smooth analytic end caps
+      const addCap = (uVal, isEnd) => {
+        const ringStartIdx = isEnd ? uSegments * stride : 0;
+        const center = new THREE.Vector3();
+        for (let iv = 0; iv < vSegments; iv++) {
+          const idx = (ringStartIdx + iv) * 3;
+          center.x += positions[idx];
+          center.y += positions[idx + 1];
+          center.z += positions[idx + 2];
+        }
+        center.multiplyScalar(1.0 / vSegments);
+
+        // Compute outward cap normal from two perpendicular chords on the cap ring
+        const p0 = new THREE.Vector3(
+          positions[ringStartIdx * 3],
+          positions[ringStartIdx * 3 + 1],
+          positions[ringStartIdx * 3 + 2]
+        );
+        const qIdx = ringStartIdx + Math.max(1, Math.floor(vSegments / 4));
+        const pQuarter = new THREE.Vector3(
+          positions[qIdx * 3],
+          positions[qIdx * 3 + 1],
+          positions[qIdx * 3 + 2]
+        );
+        const c1 = new THREE.Vector3().subVectors(p0, center);
+        const c2 = new THREE.Vector3().subVectors(pQuarter, center);
+        const capNormal = new THREE.Vector3().crossVectors(c1, c2).normalize();
+        const adjCenter = isEnd ? ringCenters[Math.max(0, uSegments - 1)] : ringCenters[Math.min(uSegments, 1)];
+        const outDir = new THREE.Vector3().subVectors(center, adjCenter);
+        if (outDir.lengthSq() > 1e-6) {
+          if (capNormal.dot(outDir) < 0.0) capNormal.negate();
+        } else if (!isEnd) {
+          capNormal.negate();
+        }
+        if (flipNormal) capNormal.negate();
+
+        const baseVertex = positions.length / 3;
+        // Center vertex
+        positions.push(center.x, center.y, center.z);
+        normals.push(capNormal.x, capNormal.y, capNormal.z);
+        uvs.push(0.5, 0.5);
+        if (evalColor) {
+          evalColor(uVal, 0.5, center, capNormal, col);
+          colors.push(col.r, col.g, col.b);
+        } else {
+          colors.push(1, 1, 1);
+        }
+
+        // Rim vertices with slightly blended chamfer normals
+        for (let iv = 0; iv <= vSegments; iv++) {
+          const srcIdx = (ringStartIdx + iv) * 3;
+          const vx = positions[srcIdx];
+          const vy = positions[srcIdx + 1];
+          const vz = positions[srcIdx + 2];
+          const snx = normals[srcIdx];
+          const sny = normals[srcIdx + 1];
+          const snz = normals[srcIdx + 2];
+
+          const blendedN = new THREE.Vector3(
+            capNormal.x * 0.82 + snx * 0.18,
+            capNormal.y * 0.82 + sny * 0.18,
+            capNormal.z * 0.82 + snz * 0.18
+          ).normalize();
+
+          positions.push(vx, vy, vz);
+          normals.push(blendedN.x, blendedN.y, blendedN.z);
+          const ang = (iv / vSegments) * Math.PI * 2.0;
+          uvs.push(0.5 + 0.5 * Math.cos(ang), 0.5 + 0.5 * Math.sin(ang));
+          if (evalColor) {
+            evalColor(uVal, iv / vSegments, new THREE.Vector3(vx, vy, vz), blendedN, col);
+            colors.push(col.r, col.g, col.b);
+          } else {
+            colors.push(1, 1, 1);
+          }
+        }
+
+        const windCheck = c1.cross(c2).dot(capNormal);
+        for (let iv = 0; iv < vSegments; iv++) {
+          const r1 = baseVertex + 1 + iv;
+          const r2 = baseVertex + 1 + iv + 1;
+          if (windCheck >= 0.0) {
+            indices.push(baseVertex, r1, r2);
+          } else {
+            indices.push(baseVertex, r2, r1);
+          }
+        }
+      };
+
+      if (capStart) addCap(0.0, false);
+      if (capEnd) addCap(1.0, true);
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      geom.setIndex(indices);
+      return geom;
+    }
+
+    // =========================================================================
+    // 3. PROCEDURAL PBR TEXTURE GENERATORS
+    // =========================================================================
+    function createTimberTextures() {
+      const size = 512;
+      const diffCanvas = document.createElement('canvas');
+      const roughCanvas = document.createElement('canvas');
+      const normCanvas = document.createElement('canvas');
+      diffCanvas.width = roughCanvas.width = normCanvas.width = size;
+      diffCanvas.height = roughCanvas.height = normCanvas.height = size;
+
+      const dCtx = diffCanvas.getContext('2d');
+      const rCtx = roughCanvas.getContext('2d');
+      const nCtx = normCanvas.getContext('2d');
+
+      const dImg = dCtx.createImageData(size, size);
+      const rImg = rCtx.createImageData(size, size);
+      const nImg = nCtx.createImageData(size, size);
+
+      const heightField = new Float32Array(size * size);
+
+      for (let y = 0; y < size; y++) {
+        const v = y / size;
+        for (let x = 0; x < size; x++) {
+          const u = x / size;
+          // Periodic wrap approximations for wood grain along U (log axis) and V (circumference)
+          const grain1 = Math.sin(v * Math.PI * 28.0 + fbm2(u * 6.0, v * 14.0, 3) * 3.2);
+          const grain2 = fbm2(u * 18.0, v * 52.0, 4);
+          const adzeMarks = Math.sin(u * Math.PI * 16.0 + Math.cos(v * Math.PI * 6.0) * 1.4) * 0.25;
+          const checks = Math.pow(Math.max(0.0, Math.sin(v * Math.PI * 10.0 + grain2 * 2.2)), 8.0);
+
+          const h = grain1 * 0.35 + grain2 * 0.45 + adzeMarks * 0.2 - checks * 0.55;
+          heightField[y * size + x] = h;
+
+          const idx = (y * size + x) * 4;
+          const tone = 0.84 + 0.16 * (grain1 * 0.5 + grain2 * 0.5) - checks * 0.28;
+          dImg.data[idx] = Math.min(255, Math.max(0, Math.floor(235 * tone)));
+          dImg.data[idx + 1] = Math.min(255, Math.max(0, Math.floor(220 * tone)));
+          dImg.data[idx + 2] = Math.min(255, Math.max(0, Math.floor(205 * tone)));
+          dImg.data[idx + 3] = 255;
+
+          const roughVal = Math.min(255, Math.max(120, Math.floor((0.76 - adzeMarks * 0.12 + checks * 0.22 - grain1 * 0.06) * 255)));
+          rImg.data[idx] = roughVal;
+          rImg.data[idx + 1] = roughVal;
+          rImg.data[idx + 2] = roughVal;
+          rImg.data[idx + 3] = 255;
+        }
+      }
+
+      for (let y = 0; y < size; y++) {
+        const yPrev = (y - 1 + size) % size;
+        const yNext = (y + 1) % size;
+        for (let x = 0; x < size; x++) {
+          const xPrev = (x - 1 + size) % size;
+          const xNext = (x + 1) % size;
+          const dx = (heightField[y * size + xNext] - heightField[y * size + xPrev]) * 2.2;
+          const dy = (heightField[yNext * size + x] - heightField[yPrev * size + x]) * 3.0;
+          const nz = 1.0;
+          const len = Math.hypot(dx, dy, nz);
+          const idx = (y * size + x) * 4;
+          nImg.data[idx] = Math.floor(((-dx / len) * 0.5 + 0.5) * 255);
+          nImg.data[idx + 1] = Math.floor(((-dy / len) * 0.5 + 0.5) * 255);
+          nImg.data[idx + 2] = Math.floor(((nz / len) * 0.5 + 0.5) * 255);
+          nImg.data[idx + 3] = 255;
+        }
+      }
+
+      dCtx.putImageData(dImg, 0, 0);
+      rCtx.putImageData(rImg, 0, 0);
+      nCtx.putImageData(nImg, 0, 0);
+
+      const wrap = (tex) => {
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.needsUpdate = true;
+        return tex;
+      };
+
+      const diffTex = wrap(new THREE.CanvasTexture(diffCanvas));
+      diffTex.colorSpace = THREE.SRGBColorSpace;
+      const roughTex = wrap(new THREE.CanvasTexture(roughCanvas));
+      const normTex = wrap(new THREE.CanvasTexture(normCanvas));
+
+      return { diffTex, roughTex, normTex };
+    }
+
+    function createSnowSparkleTextures() {
+      const size = 512;
+      const normCanvas = document.createElement('canvas');
+      const roughCanvas = document.createElement('canvas');
+      normCanvas.width = roughCanvas.width = size;
+      normCanvas.height = roughCanvas.height = size;
+
+      const nCtx = normCanvas.getContext('2d');
+      const rCtx = roughCanvas.getContext('2d');
+      const nImg = nCtx.createImageData(size, size);
+      const rImg = rCtx.createImageData(size, size);
+
+      const heightField = new Float32Array(size * size);
+      const sparkleRng = new PRNG(98765);
+
+      for (let y = 0; y < size; y++) {
+        const v = y / size;
+        for (let x = 0; x < size; x++) {
+          const u = x / size;
+          // Soft wind ripples + fine crystalline grains
+          const ripple = Math.sin(u * Math.PI * 10.0 + fbm2(u * 8.0, v * 8.0, 3) * 2.5) * 0.25;
+          const fine = fbm2(u * 32.0, v * 32.0, 3) * 0.35;
+          heightField[y * size + x] = ripple + fine;
+        }
+      }
+
+      for (let y = 0; y < size; y++) {
+        const yPrev = (y - 1 + size) % size;
+        const yNext = (y + 1) % size;
+        for (let x = 0; x < size; x++) {
+          const xPrev = (x - 1 + size) % size;
+          const xNext = (x + 1) % size;
+          let dx = (heightField[y * size + xNext] - heightField[y * size + xPrev]) * 1.4;
+          let dy = (heightField[yNext * size + x] - heightField[yPrev * size + x]) * 1.4;
+
+          // Sparse high-angle ice crystal micro-facets for snow sparkle
+          const glint = sparkleRng.next();
+          let rough = 0.62 + 0.12 * fbm2((x / size) * 20.0, (y / size) * 20.0, 2);
+          if (glint > 0.968) {
+            const ang = sparkleRng.next() * Math.PI * 2.0;
+            const tilt = 1.65;
+            dx += Math.cos(ang) * tilt;
+            dy += Math.sin(ang) * tilt;
+            rough = 0.08;
+          } else if (glint > 0.92) {
+            rough = 0.25;
+          }
+
+          const nz = 1.0;
+          const len = Math.hypot(dx, dy, nz);
+          const idx = (y * size + x) * 4;
+          nImg.data[idx] = Math.floor(((-dx / len) * 0.5 + 0.5) * 255);
+          nImg.data[idx + 1] = Math.floor(((-dy / len) * 0.5 + 0.5) * 255);
+          nImg.data[idx + 2] = Math.floor(((nz / len) * 0.5 + 0.5) * 255);
+          nImg.data[idx + 3] = 255;
+
+          const rByte = Math.min(255, Math.max(15, Math.floor(rough * 255)));
+          rImg.data[idx] = rByte;
+          rImg.data[idx + 1] = rByte;
+          rImg.data[idx + 2] = rByte;
+          rImg.data[idx + 3] = 255;
+        }
+      }
+
+      nCtx.putImageData(nImg, 0, 0);
+      rCtx.putImageData(rImg, 0, 0);
+
+      const normTex = new THREE.CanvasTexture(normCanvas);
+      const roughTex = new THREE.CanvasTexture(roughCanvas);
+      normTex.wrapS = normTex.wrapT = THREE.RepeatWrapping;
+      roughTex.wrapS = roughTex.wrapT = THREE.RepeatWrapping;
+      normTex.repeat.set(6, 6);
+      roughTex.repeat.set(6, 6);
+      return { normTex, roughTex };
+    }
+
+    function createFrostedWindowTexture() {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      const roughCanvas = document.createElement('canvas');
+      canvas.width = roughCanvas.width = size;
+      canvas.height = roughCanvas.height = size;
+      const ctx = canvas.getContext('2d');
+      const rCtx = roughCanvas.getContext('2d');
+
+      const img = ctx.createImageData(size, size);
+      const rImg = rCtx.createImageData(size, size);
+
+      // 3 columns x 2 rows of panes in UV space
+      for (let y = 0; y < size; y++) {
+        const v = y / size;
+        const paneV = (v * 2.0) % 1.0;
+        const distV = Math.min(paneV, 1.0 - paneV) * 2.0;
+
+        for (let x = 0; x < size; x++) {
+          const u = x / size;
+          const paneU = (u * 3.0) % 1.0;
+          const distU = Math.min(paneU, 1.0 - paneU) * 2.0;
+
+          // Edge proximity inside each muntin pane creates crystalline frost border
+          const edgeFactor = 1.0 - Math.min(1.0, Math.pow(distU * distV, 0.42) * 1.45);
+          const crystal = fbm2(u * 28.0, v * 28.0, 4) * 0.5 + 0.5;
+          const fern = Math.abs(Math.sin((u * 40.0 + crystal * 3.0) * Math.PI) * Math.cos((v * 40.0 - crystal * 3.0) * Math.PI));
+          const frostMask = smoothstep(0.18, 0.72, edgeFactor + crystal * 0.32 + fern * 0.18);
+
+          // Warm amber-gold center transitioning to frosted pale amber-white around pane edges
+          const warmVertical = 0.85 + 0.15 * (1.0 - v);
+          const r = Math.min(255, Math.floor((255 * (1.0 - frostMask * 0.08)) * warmVertical));
+          const g = Math.min(255, Math.floor((182 + frostMask * 52) * warmVertical));
+          const b = Math.min(255, Math.floor((78 + frostMask * 145) * warmVertical));
+
+          const idx = (y * size + x) * 4;
+          img.data[idx] = r;
+          img.data[idx + 1] = g;
+          img.data[idx + 2] = b;
+          img.data[idx + 3] = 255;
+
+          const roughByte = Math.min(255, Math.floor((0.18 + frostMask * 0.72) * 255));
+          rImg.data[idx] = roughByte;
+          rImg.data[idx + 1] = roughByte;
+          rImg.data[idx + 2] = roughByte;
+          rImg.data[idx + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(img, 0, 0);
+      rCtx.putImageData(rImg, 0, 0);
+
+      const map = new THREE.CanvasTexture(canvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      const roughMap = new THREE.CanvasTexture(roughCanvas);
+      return { map, roughMap };
+    }
+
+    // =========================================================================
+    // 4. SCENE, CAMERA, RENDERER & HIGH-KEY STUDIO SETUP
+    // =========================================================================
+    const scene = new THREE.Scene();
+    const studioBgColor = new THREE.Color(0xf3f6fa);
+    scene.background = studioBgColor;
+    scene.fog = new THREE.FogExp2(0xf3f6fa, 0.014);
+
+    const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 140);
+    // Ideal 3/4 view showing front stacked logs, notched corners, lit window & warm snow pool,
+    // hanging icicles, left stone chimney with smoke, and surrounding snow-laden pine cluster
+    camera.position.set(-5.6, 4.85, 15.8);
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance'
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.06;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.045;
+    controls.target.set(-0.15, 2.55, -0.2);
+    controls.minDistance = 5.0;
+    controls.maxDistance = 32.0;
+    controls.maxPolarAngle = Math.PI * 0.485;
+    controls.update();
+
+    // =========================================================================
+    // 5. CALIBRATED PBR MATERIALS
+    // =========================================================================
+    const timberTex = createTimberTextures();
+    const snowTex = createSnowSparkleTextures();
+    const windowTex = createFrostedWindowTexture();
+
+    // Rough-hewn timber logs
+    const timberMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      map: timberTex.diffTex,
+      roughnessMap: timberTex.roughTex,
+      normalMap: timberTex.normTex,
+      normalScale: new THREE.Vector2(0.65, 0.65),
+      roughness: 0.84,
+      metalness: 0.02
+    });
+
+    // Chinking / mortar strips between logs
+    const chinkingMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd8cfc2,
+      roughness: 0.94,
+      metalness: 0.0,
+      normalMap: snowTex.normTex,
+      normalScale: new THREE.Vector2(0.35, 0.35)
+    });
+
+    // Snow-dusted split cedar shingles
+    const shingleMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      map: timberTex.diffTex,
+      roughnessMap: timberTex.roughTex,
+      normalMap: timberTex.normTex,
+      normalScale: new THREE.Vector2(0.8, 0.8),
+      roughness: 0.88,
+      metalness: 0.02
+    });
+
+    // Thick snow layer with soft sparkle & subsurface scatter feel
+    const snowMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.58,
+      roughnessMap: snowTex.roughTex,
+      normalMap: snowTex.normTex,
+      normalScale: new THREE.Vector2(0.38, 0.38),
+      metalness: 0.0,
+      sheen: 0.55,
+      sheenRoughness: 0.45,
+      sheenColor: new THREE.Color(0xe6f2ff),
+      clearcoat: 0.22,
+      clearcoatRoughness: 0.28,
+      reflectivity: 0.55
+    });
+
+    // River / field stone chimney & foundation masonry
+    const stoneMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.86,
+      metalness: 0.04,
+      normalMap: snowTex.normTex,
+      normalScale: new THREE.Vector2(0.55, 0.55)
+    });
+
+    // Frosted window glass with warm interior glow
+    const frostedWindowMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xffdfa8,
+      map: windowTex.map,
+      emissive: new THREE.Color(0xff9d2e),
+      emissiveMap: windowTex.map,
+      emissiveIntensity: 2.35,
+      roughness: 0.55,
+      roughnessMap: windowTex.roughMap,
+      transmission: 0.22,
+      thickness: 0.15,
+      clearcoat: 0.35,
+      clearcoatRoughness: 0.4
+    });
+
+    // Translucent refractive ice for hanging icicles
+    const icicleMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.11,
+      metalness: 0.0,
+      transmission: 0.76,
+      ior: 1.31,
+      thickness: 0.28,
+      attenuationColor: new THREE.Color(0xdcf0ff),
+      attenuationDistance: 0.9,
+      clearcoat: 0.9,
+      clearcoatRoughness: 0.08,
+      specularIntensity: 1.0
+    });
+
+    // Pine needles material (deep evergreen with frost-dusted vertex variation)
+    const pineNeedleMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.82,
+      metalness: 0.02,
+      normalMap: timberTex.normTex,
+      normalScale: new THREE.Vector2(0.7, 0.7)
+    });
+
+    // Dark forged wrought iron for door hardware
+    const ironMaterial = new THREE.MeshStandardMaterial({
+      color: 0x26292e,
+      roughness: 0.48,
+      metalness: 0.82
+    });
+
+    // Soft volumetric-style smoke ribbon material
+    const smokeMaterial = new THREE.MeshStandardMaterial({
+      color: 0xcbd4df,
+      emissive: new THREE.Color(0x9aa6b5),
+      emissiveIntensity: 0.28,
+      roughness: 0.95,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    // =========================================================================
+    // 6. STUDIO LIGHTING & WARM WINDOW LIGHT RIG
+    // =========================================================================
+    // High-key studio hemisphere light
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xd8e4f2, 1.35);
+    hemiLight.position.set(0, 25, 0);
+    scene.add(hemiLight);
+
+    // Main studio key directional light from back-left so the front snow slope
+    // under the cabin window sits in soft cool shade, making the warm window pool pop!
+    const keyLight = new THREE.DirectionalLight(0xfffcf5, 1.85);
+    keyLight.position.set(-9.5, 15.5, -7.5);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    keyLight.shadow.camera.near = 2.0;
+    keyLight.shadow.camera.far = 38.0;
+    const dCam = 9.5;
+    keyLight.shadow.camera.left = -dCam;
+    keyLight.shadow.camera.right = dCam;
+    keyLight.shadow.camera.top = dCam;
+    keyLight.shadow.camera.bottom = -dCam;
+    keyLight.shadow.bias = -0.0004;
+    keyLight.shadow.normalBias = 0.025;
+    scene.add(keyLight);
+
+    // Soft cool-white front-right studio fill light
+    const fillLight = new THREE.DirectionalLight(0xdceaff, 0.62);
+    fillLight.position.set(11.0, 8.5, 9.0);
+    scene.add(fillLight);
+
+    // Subtle studio rim light for snow crests & icicle glints
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.55);
+    rimLight.position.set(2.0, 12.0, -14.0);
+    scene.add(rimLight);
+
+    // Root diorama group
+    const dioramaGroup = new THREE.Group();
+    scene.add(dioramaGroup);
+
+    // Cabin placement constants (used by snow rise & warm light calculation)
+    const CABIN_POS = new THREE.Vector3(-0.15, 0.80, 0.12);
+    const CABIN_ROT_Y = 0.065; // ~3.7 deg natural placement
+    // World position of the single lit front-left window
+    const WINDOW_LOCAL = new THREE.Vector3(-0.84, 1.08, 1.82);
+    const WINDOW_WORLD = WINDOW_LOCAL.clone()
+      .applyAxisAngle(new THREE.Vector3(0, 1, 0), CABIN_ROT_Y)
+      .add(CABIN_POS);
+
+    // Warm interior SpotLight casting golden light cone out the single window onto the snow below
+    const windowSpotLight = new THREE.SpotLight(0xff8e26, 16.5, 8.5, Math.PI * 0.36, 0.68, 1.45);
+    windowSpotLight.position.copy(WINDOW_WORLD).add(new THREE.Vector3(0.0, 0.08, -0.15));
+    const windowSpotTarget = new THREE.Object3D();
+    windowSpotTarget.position.copy(WINDOW_WORLD).add(new THREE.Vector3(-0.18, -1.25, 2.05));
+    scene.add(windowSpotTarget);
+    windowSpotLight.target = windowSpotTarget;
+    windowSpotLight.castShadow = true;
+    windowSpotLight.shadow.mapSize.width = 1024;
+    windowSpotLight.shadow.mapSize.height = 1024;
+    windowSpotLight.shadow.bias = -0.0006;
+    scene.add(windowSpotLight);
+
+    // Warm local PointLight right outside the frosted glass for immediate sill & icicle glow
+    const windowBounceLight = new THREE.PointLight(0xff9c38, 4.2, 4.8, 1.7);
+    windowBounceLight.position.copy(WINDOW_WORLD).add(new THREE.Vector3(0.0, -0.05, 0.42));
+    scene.add(windowBounceLight);
+
+    // =========================================================================
+    // 7. SNOW-COVERED RISE (LOFTED RADIAL DIORAMA MOUND)
+    // =========================================================================
+    // Analytic height & radius function so trees, stones, and drifts sit seamlessly on the rise
+    function getSnowRiseOuterRadius(theta) {
+      return 6.15
+        + 0.32 * Math.sin(theta * 2.0 + 0.4)
+        + 0.22 * Math.cos(theta * 3.0 - 0.8)
+        + 0.12 * Math.sin(theta * 5.0 + 1.1);
+    }
+
+    function getSnowRiseHeightAt(x, z) {
+      const r = Math.hypot(x, z);
+      const theta = Math.atan2(z, x);
+      const rMax = getSnowRiseOuterRadius(theta);
+      const s = Math.min(1.0, r / rMax);
+
+      // Pillowy dome profile: flat-ish crown under cabin, thick rounded snow rim at edge
+      const dome = Math.pow(Math.max(0.0, 1.0 - Math.pow(s, 2.35)), 0.58);
+
+      // Higher drift toward back-left pine cluster, gentle path depression front-right
+      const backDrift = smoothstep(-0.5, -4.5, z) * 0.34 * (1.0 - s * 0.5);
+      const sideDrift = smoothstep(0.5, -4.0, x) * 0.14 * (1.0 - s * 0.4);
+      const ripples = fbm2(x * 0.42 + 3.1, z * 0.42 + 1.7, 3) * 0.08 * (1.0 - s * 0.3);
+
+      // Snow banked up around cabin perimeter
+      const dx = x - CABIN_POS.x;
+      const dz = z - CABIN_POS.z;
+      const cabinDist = Math.max(Math.abs(dx) - 2.25, Math.abs(dz) - 1.75);
+      const cabinBank = Math.exp(-Math.pow(Math.max(0.0, cabinDist) * 1.35, 2.0)) * 0.12 * (1.0 - smoothstep(0.0, 0.8, -cabinDist));
+
+      // Gentle front-right entry footpath depression
+      const pathDist = Math.hypot(x - 1.15, Math.max(0.0, z - 1.8) * 0.65);
+      const pathDip = Math.exp(-pathDist * pathDist * 0.9) * 0.09 * smoothstep(1.6, 2.6, z);
+
+      return Math.max(0.0, (0.84 * dome + backDrift + sideDrift + ripples + cabinBank - pathDip) * dome);
+    }
+
+    // Compute warm window light intensity on snow for subsurface amber-gold scattering
+    function getWindowSnowWarmth(x, y, z) {
+      const lx = x - WINDOW_WORLD.x;
+      const lz = z - WINDOW_WORLD.z;
+      if (lz < -0.15) return 0.0;
+      const forwardDist = lz;
+      const spreadWidth = 0.58 + forwardDist * 0.48;
+      const lateral = Math.exp(-(lx * lx) / (spreadWidth * spreadWidth));
+      const axial = smoothstep(-0.1, 0.35, forwardDist) * Math.exp(-forwardDist * 0.52);
+      // Subtle 3-pane mullion shadow bars in the warm light pool
+      const paneAngle = lx / (0.45 + forwardDist * 0.38);
+      const mullionBar = 0.88 + 0.12 * Math.cos(paneAngle * Math.PI * 3.0);
+      return Math.max(0.0, lateral * axial * mullionBar);
+    }
+
+    function buildSnowRiseMesh() {
+      const geom = buildParametricLoft({
+        uSegments: 64,
+        vSegments: 96,
+        closedV: true,
+        capStart: false,
+        capEnd: false,
+        uvScaleU: 4.0,
+        uvScaleV: 8.0,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const rMax = getSnowRiseOuterRadius(theta);
+          // Smooth pillowy profile from u=0 at center to rounded vertical tangent at u=1 on the floor
+          const rNorm = Math.sin(u * Math.PI * 0.515);
+          const r = rNorm * rMax;
+          const x = r * Math.cos(theta);
+          const z = r * Math.sin(theta);
+          const y = u < 0.985 ? getSnowRiseHeightAt(x, z) : 0.0;
+          out.set(x, y, z);
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          // Base cool-white snow with soft blue-lavenders in hollows and warm golden subsurface glow under window
+          const shade = smoothstep(-0.2, 0.9, pos.y);
+          const coolShadow = new THREE.Color(0xd7e5f7);
+          const brightSnow = new THREE.Color(0xf8fbff);
+          col.lerpColors(coolShadow, brightSnow, 0.38 + 0.62 * shade);
+
+          // Subtle ambient occlusion directly under cabin footprint
+          const dx = pos.x - CABIN_POS.x;
+          const dz = pos.z - CABIN_POS.z;
+          const underCabin = smoothstep(2.65, 1.95, Math.abs(dx)) * smoothstep(2.15, 1.55, Math.abs(dz));
+          col.lerp(new THREE.Color(0x9ab0ca), underCabin * 0.45);
+
+          // Subsurface warm amber glow cast onto the snow below the single lit window
+          const warmth = getWindowSnowWarmth(pos.x, pos.y, pos.z);
+          if (warmth > 0.001) {
+            const warmGold = new THREE.Color(0xffb85c);
+            col.lerp(warmGold, Math.min(0.78, warmth * 0.85));
+          }
+        }
+      });
+
+      const mesh = new THREE.Mesh(geom, snowMaterial);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    dioramaGroup.add(buildSnowRiseMesh());
+
+    // =========================================================================
+    // 8. CABIN ASSEMBLY: FOUNDATION, STACKED NOTCHED LOGS, WINDOW, DOOR, ROOF
+    // =========================================================================
+    const cabinGroup = new THREE.Group();
+    cabinGroup.position.copy(CABIN_POS);
+    cabinGroup.rotation.y = CABIN_ROT_Y;
+    dioramaGroup.add(cabinGroup);
+
+    // Helper: Lofted rounded river/field stone cobble
+    function createLoftedStone({
+      radiusX = 0.24,
+      radiusY = 0.16,
+      radiusZ = 0.22,
+      seed = 1.0,
+      snowTop = 0.0
+    }) {
+      const p1 = seed * 17.3;
+      const p2 = seed * 31.7;
+      return buildParametricLoft({
+        uSegments: 12,
+        vSegments: 16,
+        closedV: true,
+        capStart: false,
+        capEnd: false,
+        evalPos: (u, v, out) => {
+          const phi = Math.max(0.002, Math.min(Math.PI - 0.002, u * Math.PI));
+          const theta = v * Math.PI * 2.0;
+          const sinPhi = Math.sin(phi);
+          const cosPhi = Math.cos(phi);
+          const nx = sinPhi * Math.cos(theta);
+          const ny = cosPhi;
+          const nz = sinPhi * Math.sin(theta);
+
+          // Faceted cobble modulation
+          const facet = 1.0
+            + 0.12 * Math.sin(theta * 3.0 + p1) * sinPhi
+            + 0.08 * Math.cos(phi * 3.0 + p2)
+            + 0.06 * Math.sin(theta * 5.0 - phi * 2.0 + p1);
+
+          // Slightly flattened bottom and top bedding planes
+          const flatY = Math.sign(ny) * Math.pow(Math.abs(ny), 0.78);
+          out.set(
+            nx * radiusX * facet,
+            flatY * radiusY * facet,
+            nz * radiusZ * facet
+          );
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          const baseHue = 0.07 + 0.04 * Math.sin(seed * 9.1);
+          const baseSat = 0.08 + 0.08 * Math.cos(seed * 5.3);
+          const baseLit = 0.34 + 0.12 * Math.sin(seed * 13.7 + u * 2.5);
+          col.setHSL(baseHue, baseSat, baseLit);
+          if (snowTop > 0.0 && norm.y > 0.45) {
+            const snowBlend = smoothstep(0.45, 0.82, norm.y) * snowTop;
+            col.lerp(new THREE.Color(0xf4f8ff), snowBlend);
+          }
+        }
+      });
+    }
+
+    // 8A. Foundation Stones along Cabin Perimeter
+    function buildCabinFoundation() {
+      const foundGroup = new THREE.Group();
+      const W = 4.60;
+      const D = 3.60;
+      const stonePositions = [];
+
+      for (let i = -5; i <= 5; i++) {
+        stonePositions.push({ x: (i / 5) * (W * 0.5), z: D * 0.5, rot: 0.0 });
+        stonePositions.push({ x: (i / 5) * (W * 0.5), z: -D * 0.5, rot: Math.PI });
+      }
+      for (let i = -3; i <= 3; i++) {
+        stonePositions.push({ x: -W * 0.5, z: (i / 4) * (D * 0.5), rot: -Math.PI * 0.5 });
+        stonePositions.push({ x: W * 0.5, z: (i / 4) * (D * 0.5), rot: Math.PI * 0.5 });
+      }
+
+      stonePositions.forEach((sp, idx) => {
+        // Leave gap under front door steps
+        if (sp.z > 1.0 && Math.abs(sp.x - 1.05) < 0.52) return;
+        const g = createLoftedStone({
+          radiusX: 0.24 + (idx % 3) * 0.04,
+          radiusY: 0.13 + (idx % 2) * 0.02,
+          radiusZ: 0.21 + ((idx + 1) % 3) * 0.03,
+          seed: idx + 10.5,
+          snowTop: 0.55
+        });
+        const m = new THREE.Mesh(g, stoneMaterial);
+        m.position.set(sp.x, 0.04, sp.z);
+        m.rotation.y = sp.rot + (rng.next() - 0.5) * 0.25;
+        m.castShadow = true;
+        m.receiveShadow = true;
+        foundGroup.add(m);
+      });
+
+      return foundGroup;
+    }
+    cabinGroup.add(buildCabinFoundation());
+
+    // 8B. Lofted Timber Log Generator with Saddle-Notched Corners & Beveled Gable Ends
+    /**
+     * Builds a single rough-hewn horizontal timber log from lofted cross-sections:
+     * - Axis along X or Z from startCoord to endCoord
+     * - Analytic saddle notches pinched at perpendicular wall intersections (notchPositions)
+     * - Optional roof-pitch bevel at ends (for triangular gable wall logs)
+     * - Organic bow, bark fluting, adze facets, and golden heartwood cut end caps
+     */
+    function createHewnLog({
+      axis = 'x',            // 'x' or 'z'
+      startCoord = -2.75,
+      endCoord = 2.75,
+      fixedX = 0.0,
+      fixedY = 0.5,
+      fixedZ = 0.0,
+      radius = 0.145,
+      notchCoords = [],      // e.g. [-2.30, 2.30] or [-1.80, 1.80]
+      bevelEnds = false,     // true for gable courses trimmed to roof slope
+      bevelSlope = 0.90,
+      seed = 1.0,
+      snowCrest = 0.0
+    }) {
+      const length = Math.abs(endCoord - startCoord);
+      const uSegs = Math.max(20, Math.min(64, Math.round(length * 11)));
+      const vSegs = 22;
+
+      const hueShift = (hash2(seed, 1.7) - 0.5) * 0.022;
+      const litShift = (hash2(seed, 4.3) - 0.5) * 0.055;
+      const camberAmp = (hash2(seed, 8.9) - 0.5) * 0.016;
+      const phase = seed * 19.7;
+
+      const geom = buildParametricLoft({
+        uSegments: uSegs,
+        vSegments: vSegs,
+        closedV: true,
+        capStart: true,
+        capEnd: true,
+        uvScaleU: length * 0.65,
+        uvScaleV: 1.0,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const cosT = Math.cos(theta);
+          const sinT = Math.sin(theta);
+
+          // Chamfered end-cap round-off at u near 0 and 1
+          const endDist = Math.min(u, 1.0 - u) * length;
+          const endTapering = 0.88 + 0.12 * smoothstep(0.0, 0.045, endDist);
+
+          // Longitudinal coordinate along the log
+          let coord = startCoord + (endCoord - startCoord) * u;
+
+          // If gable log, bevel the top of each log end inward along the roof pitch
+          if (bevelEnds && sinT > -0.2) {
+            const hOffset = (sinT + 0.2) * radius;
+            const trim = hOffset / bevelSlope;
+            if (u < 0.25) {
+              coord += trim * smoothstep(0.25, 0.0, u);
+            } else if (u > 0.75) {
+              coord -= trim * smoothstep(0.75, 1.0, u);
+            }
+          }
+
+          // Check distance to any saddle-notch intersection
+          let notchPinch = 1.0;
+          for (let i = 0; i < notchCoords.length; i++) {
+            const dNotch = Math.abs(coord - notchCoords[i]);
+            if (dNotch < radius * 1.35) {
+              const axialMask = Math.exp(-Math.pow(dNotch / (radius * 0.68), 2.2));
+              // Saddle notch carves primarily into top & bottom (|sin(theta)| near 1) and slightly into sides
+              const vertProfile = 0.28 + 0.72 * Math.pow(Math.abs(sinT), 1.4);
+              notchPinch = Math.min(notchPinch, 1.0 - 0.36 * axialMask * vertProfile);
+            }
+          }
+
+          // Organic hewn timber cross-section: slight flat adze facets + bark ridges
+          const hewnProfile = 1.0
+            + 0.032 * Math.cos(theta * 4.0 + phase)
+            + 0.018 * Math.sin(theta * 7.0 - phase + u * 6.0)
+            + 0.015 * Math.sin(u * Math.PI * 3.0 + phase);
+
+          const r = radius * endTapering * notchPinch * hewnProfile;
+          const bow = Math.sin(u * Math.PI) * camberAmp;
+
+          if (axis === 'x') {
+            out.set(
+              coord,
+              fixedY + r * sinT + bow * 0.4,
+              fixedZ + r * cosT + bow
+            );
+          } else {
+            out.set(
+              fixedX + r * cosT + bow,
+              fixedY + r * sinT + bow * 0.4,
+              coord
+            );
+          }
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          const coord = startCoord + (endCoord - startCoord) * u;
+          const isCutEnd = (u < 0.008 || u > 0.992) && Math.abs(axis === 'x' ? norm.x : norm.z) > 0.55;
+
+          if (isCutEnd) {
+            // Golden-tan exposed heartwood & sapwood rings on axe-cut log ends
+            const radial = Math.hypot(
+              (axis === 'x' ? pos.z - fixedZ : pos.x - fixedX),
+              pos.y - fixedY
+            ) / radius;
+            const rings = 0.5 + 0.5 * Math.sin(radial * 24.0);
+            col.setHSL(0.082 + hueShift, 0.52, 0.54 + rings * 0.08 - radial * 0.12);
+            return;
+          }
+
+          // Rich warm weathered cedar/pine timber color
+          let notchAO = 1.0;
+          for (let i = 0; i < notchCoords.length; i++) {
+            const dNotch = Math.abs(coord - notchCoords[i]);
+            if (dNotch < radius * 1.5) {
+              notchAO -= 0.32 * Math.exp(-Math.pow(dNotch / (radius * 0.8), 2.0));
+            }
+          }
+
+          // Darker underside AO, warmer underside reflection near lit window
+          const undersideShade = 0.72 + 0.28 * smoothstep(-0.85, 0.65, norm.y);
+          const grainVar = 0.92 + 0.08 * Math.sin(u * 18.0 + v * 12.0 + seed);
+          col.setHSL(
+            0.068 + hueShift,
+            0.54,
+            Math.max(0.14, (0.31 + litShift) * notchAO * undersideShade * grainVar)
+          );
+
+          // Snow dusting on exposed protruding log tails
+          if (snowCrest > 0.0 && norm.y > 0.48) {
+            const tailDist = Math.max(0.0, Math.abs(coord) - (axis === 'x' ? 2.28 : 1.78));
+            const tailMask = smoothstep(0.0, 0.18, tailDist);
+            const snowFactor = smoothstep(0.48, 0.85, norm.y) * tailMask * snowCrest;
+            col.lerp(new THREE.Color(0xf2f7ff), snowFactor);
+          }
+        }
+      });
+
+      const mesh = new THREE.Mesh(geom, timberMaterial);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    // Helper: Lofted chinking strip between horizontal log courses
+    function createChinkingStrip({ axis = 'x', startCoord, endCoord, fixedX = 0, fixedY = 0, fixedZ = 0 }) {
+      const geom = buildParametricLoft({
+        uSegments: 16,
+        vSegments: 12,
+        closedV: true,
+        capStart: true,
+        capEnd: true,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const coord = startCoord + (endCoord - startCoord) * u;
+          const rx = 0.095;
+          const ry = 0.042;
+          if (axis === 'x') {
+            out.set(coord, fixedY + ry * Math.sin(theta), fixedZ + rx * Math.cos(theta));
+          } else {
+            out.set(fixedX + rx * Math.cos(theta), fixedY + ry * Math.sin(theta), coord);
+          }
+        }
+      });
+      const mesh = new THREE.Mesh(geom, chinkingMaterial);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    // 8C. Assemble All 4 Stacked-Log Walls + Gable Ends + Roof Purlins
+    function buildCabinLogWalls() {
+      const wallsGroup = new THREE.Group();
+      const halfW = 2.30; // X distance to side wall centerlines
+      const halfD = 1.80; // Z distance to front/back wall centerlines
+      const tailX = 0.44; // Protruding notched log tail length along X
+      const tailZ = 0.42; // Protruding notched log tail length along Z
+      const rLog = 0.146;
+      const dy = 0.24;    // Vertical course step
+      const baseY = 0.18;
+
+      // Opening bounds in Front Wall (z = +halfD)
+      // Single Lit Window: x in [-1.38, -0.30], courses k = 2, 3, 4
+      const winLeft = -1.38;
+      const winRight = -0.30;
+      // Cabin Door: x in [0.56, 1.54], courses k = 0..5
+      const doorLeft = 0.56;
+      const doorRight = 1.54;
+
+      // 1. Front (+Z) and Back (-Z) Walls: 7 courses (k = 0..6)
+      for (let k = 0; k <= 6; k++) {
+        const y = baseY + k * dy;
+        const snowOnTail = k === 0 || k === 6 ? 0.65 : 0.35;
+
+        // Back wall (-Z): continuous full-width logs with saddle notches at [-halfW, +halfW]
+        wallsGroup.add(createHewnLog({
+          axis: 'x',
+          startCoord: -halfW - tailX,
+          endCoord: halfW + tailX,
+          fixedY: y,
+          fixedZ: -halfD,
+          radius: rLog,
+          notchCoords: [-halfW, halfW],
+          seed: 100 + k * 3.1,
+          snowCrest: snowOnTail
+        }));
+        if (k < 6) {
+          wallsGroup.add(createChinkingStrip({
+            axis: 'x',
+            startCoord: -halfW + 0.08,
+            endCoord: halfW - 0.08,
+            fixedY: y + dy * 0.5,
+            fixedZ: -halfD
+          }));
+        }
+
+        // Front wall (+Z): split cleanly around Window (k=2..4) and Door (k=0..5)
+        const hasWindow = (k >= 2 && k <= 4);
+        const hasDoor = (k >= 0 && k <= 5);
+
+        if (!hasWindow && !hasDoor) {
+          // Top wall plate log (k = 6): continuous header log spanning entire front wall!
+          wallsGroup.add(createHewnLog({
+            axis: 'x',
+            startCoord: -halfW - tailX,
+            endCoord: halfW + tailX,
+            fixedY: y,
+            fixedZ: halfD,
+            radius: rLog,
+            notchCoords: [-halfW, halfW],
+            seed: 200 + k * 4.7,
+            snowCrest: 0.45
+          }));
+        } else if (!hasWindow && hasDoor) {
+          // Courses k = 0, 1, 5: continuous on left of door, stub on right of door
+          wallsGroup.add(createHewnLog({
+            axis: 'x',
+            startCoord: -halfW - tailX,
+            endCoord: doorLeft,
+            fixedY: y,
+            fixedZ: halfD,
+            radius: rLog,
+            notchCoords: [-halfW],
+            seed: 210 + k * 5.3,
+            snowCrest: snowOnTail
+          }));
+          wallsGroup.add(createHewnLog({
+            axis: 'x',
+            startCoord: doorRight,
+            endCoord: halfW + tailX,
+            fixedY: y,
+            fixedZ: halfD,
+            radius: rLog,
+            notchCoords: [halfW],
+            seed: 230 + k * 7.1,
+            snowCrest: snowOnTail
+          }));
+        } else {
+          // Courses k = 2, 3, 4: left of window, pier between window & door, right of door
+          wallsGroup.add(createHewnLog({
+            axis: 'x',
+            startCoord: -halfW - tailX,
+            endCoord: winLeft,
+            fixedY: y,
+            fixedZ: halfD,
+            radius: rLog,
+            notchCoords: [-halfW],
+            seed: 250 + k * 6.1,
+            snowCrest: snowOnTail
+          }));
+          wallsGroup.add(createHewnLog({
+            axis: 'x',
+            startCoord: winRight,
+            endCoord: doorLeft,
+            fixedY: y,
+            fixedZ: halfD,
+            radius: rLog,
+            notchCoords: [],
+            seed: 270 + k * 8.3,
+            snowCrest: 0.0
+          }));
+          wallsGroup.add(createHewnLog({
+            axis: 'x',
+            startCoord: doorRight,
+            endCoord: halfW + tailX,
+            fixedY: y,
+            fixedZ: halfD,
+            radius: rLog,
+            notchCoords: [halfW],
+            seed: 290 + k * 9.7,
+            snowCrest: snowOnTail
+          }));
+        }
+      }
+
+      // 2. Left (-X) and Right (+X) Side Walls (Half-course offset! k = 0..6)
+      for (let k = 0; k <= 6; k++) {
+        const y = baseY + (k + 0.5) * dy;
+        const snowOnTail = k === 0 || k === 6 ? 0.65 : 0.35;
+
+        // Left wall (-X)
+        wallsGroup.add(createHewnLog({
+          axis: 'z',
+          startCoord: -halfD - tailZ,
+          endCoord: halfD + tailZ,
+          fixedX: -halfW,
+          fixedY: y,
+          radius: rLog,
+          notchCoords: [-halfD, halfD],
+          seed: 310 + k * 5.9,
+          snowCrest: snowOnTail
+        }));
+        // Right wall (+X)
+        wallsGroup.add(createHewnLog({
+          axis: 'z',
+          startCoord: -halfD - tailZ,
+          endCoord: halfD + tailZ,
+          fixedX: halfW,
+          fixedY: y,
+          radius: rLog,
+          notchCoords: [-halfD, halfD],
+          seed: 350 + k * 6.7,
+          snowCrest: snowOnTail
+        }));
+
+        if (k < 6) {
+          wallsGroup.add(createChinkingStrip({
+            axis: 'z',
+            startCoord: -halfD + 0.08,
+            endCoord: halfD - 0.08,
+            fixedX: -halfW,
+            fixedY: y + dy * 0.5
+          }));
+          wallsGroup.add(createChinkingStrip({
+            axis: 'z',
+            startCoord: -halfD + 0.08,
+            endCoord: halfD - 0.08,
+            fixedX: halfW,
+            fixedY: y + dy * 0.5
+          }));
+        }
+      }
+
+      // 3. Gable Triangle Log Courses on Left (-X) and Right (+X) Walls + Protruding Roof Purlins
+      // Roof geometry parameters:
+      // At z = 0 (ridge), y_roof = 3.74; at z = +-1.80 (wall line), y_roof = 1.98 -> slope = (3.74 - 1.98)/1.80 = 0.978 (~44.4 deg)
+      const ridgeY = 3.74;
+      const eaveWallY = 1.98;
+      const roofSlope = (ridgeY - eaveWallY) / halfD;
+
+      for (let k = 7; k <= 13; k++) {
+        const y = baseY + (k + 0.5) * dy;
+        if (y >= ridgeY - 0.06) break;
+        const halfSpanZ = Math.max(0.22, (ridgeY - y) / roofSlope);
+
+        // Left Gable Log (-X)
+        wallsGroup.add(createHewnLog({
+          axis: 'z',
+          startCoord: -halfSpanZ,
+          endCoord: halfSpanZ,
+          fixedX: -halfW,
+          fixedY: y,
+          radius: rLog * 0.94,
+          notchCoords: [],
+          bevelEnds: true,
+          bevelSlope: roofSlope,
+          seed: 410 + k * 4.3,
+          snowCrest: 0.2
+        }));
+
+        // Right Gable Log (+X)
+        wallsGroup.add(createHewnLog({
+          axis: 'z',
+          startCoord: -halfSpanZ,
+          endCoord: halfSpanZ,
+          fixedX: halfW,
+          fixedY: y,
+          radius: rLog * 0.94,
+          notchCoords: [],
+          bevelEnds: true,
+          bevelSlope: roofSlope,
+          seed: 460 + k * 5.1,
+          snowCrest: 0.2
+        }));
+
+        // Horizontal Roof Purlins running along X (spanning 5.96 m!) notched through the gable walls
+        if (k % 2 === 1 && halfSpanZ > 0.35) {
+          const zPurlin = halfSpanZ - 0.08;
+          // Front slope purlin (+Z) and Back slope purlin (-Z)
+          [-zPurlin, zPurlin].forEach((zp, sIdx) => {
+            wallsGroup.add(createHewnLog({
+              axis: 'x',
+              startCoord: -halfW - 0.62,
+              endCoord: halfW + 0.62,
+              fixedY: y + 0.06,
+              fixedZ: zp,
+              radius: rLog * 0.82,
+              notchCoords: [-halfW, halfW],
+              seed: 520 + k * 7.3 + sIdx * 19.0,
+              snowCrest: 0.5
+            }));
+          });
+        }
+      }
+
+      // Ridge Pole Log running full 6.0 m width at apex of roof
+      wallsGroup.add(createHewnLog({
+        axis: 'x',
+        startCoord: -halfW - 0.68,
+        endCoord: halfW + 0.68,
+        fixedY: ridgeY - 0.04,
+        fixedZ: 0.0,
+        radius: rLog * 0.9,
+        notchCoords: [-halfW, halfW],
+        seed: 599,
+        snowCrest: 0.4
+      }));
+
+      return wallsGroup;
+    }
+    cabinGroup.add(buildCabinLogWalls());
+
+    // 8D. Single Lit Frosted-Glass Window Assembly + Warm Interior Alcove
+    function buildLitWindowAssembly() {
+      const winGroup = new THREE.Group();
+      const cx = -0.84;
+      const cy = 1.08;
+      const cz = 1.80;
+      const w = 1.08;
+      const h = 0.76;
+
+      // Helper for lofted chamfered timber beam (casing, sill, muntins)
+      const createTimberBar = (len, thickY, thickZ, axis = 'x', seed = 1.0) => {
+        return buildParametricLoft({
+          uSegments: 14,
+          vSegments: 16,
+          closedV: true,
+          capStart: true,
+          capEnd: true,
+          evalPos: (u, v, out) => {
+            const theta = v * Math.PI * 2.0;
+            // Superellipse rounded-rectangle cross-section
+            const c = Math.cos(theta);
+            const s = Math.sin(theta);
+            const rx = Math.sign(c) * Math.pow(Math.abs(c), 0.45) * (thickZ * 0.5);
+            const ry = Math.sign(s) * Math.pow(Math.abs(s), 0.45) * (thickY * 0.5);
+            const posAlong = (u - 0.5) * len;
+            if (axis === 'x') {
+              out.set(posAlong, ry, rx);
+            } else if (axis === 'y') {
+              out.set(ry, posAlong, rx);
+            } else {
+              out.set(rx, ry, posAlong);
+            }
+          },
+          evalColor: (u, v, pos, norm, col) => {
+            col.setHSL(0.068, 0.52, 0.24 + 0.06 * norm.y);
+          }
+        });
+      };
+
+      // Outer heavy timber window casing (top lintel, bottom sill, left & right jambs)
+      const lintel = new THREE.Mesh(createTimberBar(w + 0.22, 0.11, 0.34, 'x', 1), timberMaterial);
+      lintel.position.set(cx, cy + h * 0.5 + 0.04, cz + 0.02);
+      lintel.castShadow = true;
+      winGroup.add(lintel);
+
+      const sill = new THREE.Mesh(createTimberBar(w + 0.26, 0.11, 0.40, 'x', 2), timberMaterial);
+      sill.position.set(cx, cy - h * 0.5 - 0.04, cz + 0.05);
+      sill.castShadow = true;
+      sill.receiveShadow = true;
+      winGroup.add(sill);
+
+      [-1, 1].forEach((side, idx) => {
+        const jamb = new THREE.Mesh(createTimberBar(h + 0.06, 0.11, 0.32, 'y', 3 + idx), timberMaterial);
+        jamb.position.set(cx + side * (w * 0.5 + 0.04), cy, cz + 0.02);
+        jamb.castShadow = true;
+        winGroup.add(jamb);
+      });
+
+      // Frosted glass pane (lofted slightly curved crown-glass sheet)
+      const glassGeom = buildParametricLoft({
+        uSegments: 18,
+        vSegments: 12,
+        closedV: false,
+        capStart: false,
+        capEnd: false,
+        evalPos: (u, v, out) => {
+          const x = cx + (u - 0.5) * w;
+          const y = cy + (v - 0.5) * h;
+          const crown = Math.sin(u * Math.PI) * Math.sin(v * Math.PI) * 0.012;
+          out.set(x, y, cz + 0.06 + crown);
+        }
+      });
+      const glassMesh = new THREE.Mesh(glassGeom, frostedWindowMaterial);
+      winGroup.add(glassMesh);
+
+      // Warm glowing interior hearth/lantern core recessed behind the frosted window
+      const interiorGlowMat = new THREE.MeshBasicMaterial({
+        color: 0xffb84d
+      });
+      const interiorCoreGeom = buildParametricLoft({
+        uSegments: 12,
+        vSegments: 12,
+        closedV: true,
+        capStart: true,
+        capEnd: true,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const x = cx + (u - 0.5) * (w * 0.92);
+          const y = cy + Math.sin(theta) * (h * 0.46);
+          const z = cz - 0.18 + Math.cos(theta) * 0.14;
+          out.set(x, y, z);
+        }
+      });
+      const interiorCore = new THREE.Mesh(interiorCoreGeom, interiorGlowMat);
+      winGroup.add(interiorCore);
+
+      // Mullion / muntin bars (2 vertical bars + 1 horizontal crossbar = 6 panes)
+      [-w / 6, w / 6].forEach((mx, idx) => {
+        const vBar = new THREE.Mesh(createTimberBar(h, 0.038, 0.055, 'y', 10 + idx), timberMaterial);
+        vBar.position.set(cx + mx, cy, cz + 0.075);
+        vBar.castShadow = true;
+        winGroup.add(vBar);
+      });
+      const hBar = new THREE.Mesh(createTimberBar(w, 0.038, 0.055, 'x', 12), timberMaterial);
+      hBar.position.set(cx, cy, cz + 0.075);
+      hBar.castShadow = true;
+      winGroup.add(hBar);
+
+      // Pillowy snow cushion resting on the projecting windowsill, glowing warmly on its inner edge
+      const sillSnowGeom = buildParametricLoft({
+        uSegments: 24,
+        vSegments: 16,
+        closedV: true,
+        capStart: true,
+        capEnd: true,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const x = cx + (u - 0.5) * (w + 0.22);
+          const taper = Math.sin(u * Math.PI);
+          const ry = (0.045 + 0.025 * Math.sin(u * Math.PI * 3.0)) * (0.4 + 0.6 * taper);
+          const rz = 0.085 * (0.5 + 0.5 * taper);
+          const yOff = Math.sin(theta) > 0 ? Math.sin(theta) * ry * 1.35 : Math.sin(theta) * ry * 0.4;
+          out.set(x, cy - h * 0.5 + 0.025 + yOff, cz + 0.16 + Math.cos(theta) * rz);
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          col.setHex(0xffe1a8);
+        }
+      });
+      const sillSnow = new THREE.Mesh(sillSnowGeom, snowMaterial);
+      sillSnow.receiveShadow = true;
+      winGroup.add(sillSnow);
+
+      return winGroup;
+    }
+    cabinGroup.add(buildLitWindowAssembly());
+
+    // 8E. Heavy Timber Plank Door & Snow-Dusted Entry Stoop
+    function buildDoorAssembly() {
+      const doorGroup = new THREE.Group();
+      const dx = 1.05;
+      const dy = 0.85;
+      const dz = 1.80;
+      const dw = 0.96;
+      const dh = 1.44;
+
+      // Helper for lofted timber planks & frame posts
+      const createLoftedPlank = (len, widthX, thickZ, axis = 'y', seed = 1.0, lightness = 0.25) => {
+        return buildParametricLoft({
+          uSegments: 16,
+          vSegments: 16,
+          closedV: true,
+          capStart: true,
+          capEnd: true,
+          evalPos: (u, v, out) => {
+            const theta = v * Math.PI * 2.0;
+            const c = Math.cos(theta);
+            const s = Math.sin(theta);
+            const rx = Math.sign(c) * Math.pow(Math.abs(c), 0.38) * (widthX * 0.5);
+            const rz = Math.sign(s) * Math.pow(Math.abs(s), 0.38) * (thickZ * 0.5);
+            const posAlong = (u - 0.5) * len;
+            if (axis === 'y') {
+              out.set(rx, posAlong, rz);
+            } else {
+              out.set(posAlong, rx, rz);
+            }
+          },
+          evalColor: (u, v, pos, norm, col) => {
+            col.setHSL(0.066 + (seed % 3) * 0.004, 0.54, lightness + 0.04 * norm.y);
+          }
+        });
+      };
+
+      // Door jambs & lintel
+      [-1, 1].forEach((side, i) => {
+        const post = new THREE.Mesh(createLoftedPlank(dh + 0.08, 0.12, 0.34, 'y', i, 0.22), timberMaterial);
+        post.position.set(dx + side * (dw * 0.5 + 0.02), dy, dz + 0.02);
+        post.castShadow = true;
+        doorGroup.add(post);
+      });
+      const lintel = new THREE.Mesh(createLoftedPlank(dw + 0.22, 0.13, 0.36, 'x', 5, 0.22), timberMaterial);
+      lintel.position.set(dx, dy + dh * 0.5 + 0.04, dz + 0.03);
+      lintel.castShadow = true;
+      doorGroup.add(lintel);
+
+      // 5 vertical heavy oak/cedar door planks
+      const numPlanks = 5;
+      const plankW = (dw - 0.08) / numPlanks;
+      for (let i = 0; i < numPlanks; i++) {
+        const px = dx - (dw - 0.08) * 0.5 + (i + 0.5) * plankW;
+        const plank = new THREE.Mesh(
+          createLoftedPlank(dh - 0.04, plankW * 0.94, 0.08, 'y', 10 + i, 0.27 + (i % 2) * 0.025),
+          timberMaterial
+        );
+        plank.position.set(px, dy, dz - 0.02);
+        plank.castShadow = true;
+        plank.receiveShadow = true;
+        doorGroup.add(plank);
+      }
+
+      // Horizontal timber Z-battens across the door
+      [dy - 0.38, dy + 0.36].forEach((by, i) => {
+        const batten = new THREE.Mesh(createLoftedPlank(dw - 0.14, 0.11, 0.05, 'x', 20 + i, 0.21), timberMaterial);
+        batten.position.set(dx, by, dz + 0.025);
+        batten.castShadow = true;
+        doorGroup.add(batten);
+
+        // Forged iron strap hinge
+        const hingeGeom = createLoftedPlank(0.42, 0.045, 0.022, 'x', 30 + i, 0.15);
+        const hinge = new THREE.Mesh(hingeGeom, ironMaterial);
+        hinge.position.set(dx + (dw * 0.5 - 0.22), by, dz + 0.052);
+        doorGroup.add(hinge);
+      });
+
+      // Forged iron ring latch on left side of door
+      const ringGeom = buildParametricLoft({
+        uSegments: 18,
+        vSegments: 10,
+        closedV: true,
+        capStart: false,
+        capEnd: false,
+        evalPos: (u, v, out) => {
+          const a = u * Math.PI * 2.0;
+          const b = v * Math.PI * 2.0;
+          const R = 0.055;
+          const r = 0.012;
+          out.set(
+            (R + r * Math.cos(b)) * Math.cos(a),
+            (R + r * Math.cos(b)) * Math.sin(a),
+            r * Math.sin(b)
+          );
+        }
+      });
+      const latchRing = new THREE.Mesh(ringGeom, ironMaterial);
+      latchRing.position.set(dx - dw * 0.32, dy - 0.04, dz + 0.055);
+      doorGroup.add(latchRing);
+
+      // Two split-log entry steps leading down to the snow rise
+      for (let s = 0; s < 2; s++) {
+        const stepW = 1.18 + s * 0.12;
+        const stepZ = dz + 0.28 + s * 0.30;
+        const stepY = 0.14 - s * 0.10;
+        const stepLog = createHewnLog({
+          axis: 'x',
+          startCoord: dx - stepW * 0.5,
+          endCoord: dx + stepW * 0.5,
+          fixedY: stepY,
+          fixedZ: stepZ,
+          radius: 0.125,
+          notchCoords: [],
+          seed: 700 + s * 11,
+          snowCrest: 0.75
+        });
+        doorGroup.add(stepLog);
+      }
+
+      // Stacked split firewood billets tucked under front-right eave (x in [1.65, 2.25])
+      const woodPileGroup = new THREE.Group();
+      for (let row = 0; row < 4; row++) {
+        const count = 4 - (row % 2);
+        for (let c = 0; c < count; c++) {
+          const billetX = 1.68 + c * 0.13 + (row % 2) * 0.06;
+          const billetY = 0.14 + row * 0.095;
+          const billetGeom = buildParametricLoft({
+            uSegments: 10,
+            vSegments: 14,
+            closedV: true,
+            capStart: true,
+            capEnd: true,
+            evalPos: (u, v, out) => {
+              const theta = v * Math.PI * 2.0;
+              const r = 0.055;
+              // Split D-shaped billet cross-section
+              const sy = Math.sin(theta) > -0.25 ? Math.sin(theta) : -0.25;
+              out.set(
+                billetX + Math.cos(theta) * r,
+                billetY + sy * r,
+                dz + 0.18 + (u - 0.5) * 0.36
+              );
+            },
+            evalColor: (u, v, pos, norm, col) => {
+              if (norm.y < -0.3 || u < 0.05 || u > 0.95) {
+                col.setHSL(0.085, 0.58, 0.56); // golden split heartwood
+              } else {
+                col.setHSL(0.065, 0.45, 0.24); // bark back
+              }
+            }
+          });
+          const billet = new THREE.Mesh(billetGeom, timberMaterial);
+          billet.castShadow = true;
+          billet.receiveShadow = true;
+          woodPileGroup.add(billet);
+        }
+      }
+      doorGroup.add(woodPileGroup);
+
+      return doorGroup;
+    }
+    cabinGroup.add(buildDoorAssembly());
+
+    // =========================================================================
+    // 9. ROOF ASSEMBLY: EXPOSED RAFTER TAILS, LOFTED CEDAR SHINGLES,
+    //    THICK SCULPTED ROOF SNOW MANTLE, AND HANGING ICICLES
+    // =========================================================================
+    function buildRoofAndIcicles() {
+      const roofGroup = new THREE.Group();
+      const halfSpanX = 2.98;  // Total roof width = 5.96 m (~6 m wide!)
+      const eaveZ = 2.48;      // Eave overhang past front/back walls (z = +-1.80)
+      const ridgeY = 3.80;
+      const wallY = 2.02;
+      const roofSlope = (ridgeY - wallY) / 1.80; // ~0.9889
+
+      const getRoofDeckY = (absZ) => ridgeY - absZ * roofSlope;
+
+      // 9A. Exposed Timber Rafter Pairs under Eaves
+      const numRafters = 11;
+      for (let i = 0; i < numRafters; i++) {
+        const rx = -halfSpanX + 0.18 + (i / (numRafters - 1)) * (halfSpanX * 2.0 - 0.36);
+        [-1, 1].forEach((sideZ, sIdx) => {
+          const rafterGeom = buildParametricLoft({
+            uSegments: 16,
+            vSegments: 14,
+            closedV: true,
+            capStart: true,
+            capEnd: true,
+            evalPos: (u, v, out) => {
+              const theta = v * Math.PI * 2.0;
+              const zPos = sideZ * (u * (eaveZ + 0.06));
+              const yPos = getRoofDeckY(Math.abs(zPos)) - 0.07;
+              const r = 0.062 * (1.0 - 0.15 * smoothstep(0.85, 1.0, u));
+              out.set(
+                rx + Math.cos(theta) * r * 0.85,
+                yPos + Math.sin(theta) * r,
+                zPos
+              );
+            },
+            evalColor: (u, v, pos, norm, col) => {
+              col.setHSL(0.068, 0.5, 0.25 + 0.06 * norm.y);
+            }
+          });
+          const rafter = new THREE.Mesh(rafterGeom, timberMaterial);
+          rafter.castShadow = true;
+          roofGroup.add(rafter);
+        });
+      }
+
+      // 9B. Lofted Split-Cedar Shingle Roof Deck (Both Front +Z and Back -Z Slopes)
+      [-1, 1].forEach((sideZ) => {
+        const shingleGeom = buildParametricLoft({
+          uSegments: 64,
+          vSegments: 36,
+          closedV: true,
+          capStart: true,
+          capEnd: true,
+          uvScaleU: 6.0,
+          uvScaleV: 4.0,
+          evalPos: (u, v, out) => {
+            const theta = v * Math.PI * 2.0;
+            const x = (u - 0.5) * (halfSpanX * 2.0);
+            // Cross-section runs down the slope from ridge (s=0) to eave (s=1)
+            const s = 0.5 - 0.5 * Math.cos(theta);
+            const isTop = Math.sin(theta) >= 0.0;
+            const absZ = 0.02 + s * (eaveZ - 0.02);
+            let yBase = getRoofDeckY(absZ);
+
+            // Overlapping shingle courses (11 courses down slope)
+            const course = s * 11.0;
+            const courseIdx = Math.floor(course);
+            const courseFrac = course - courseIdx;
+            const shingleIdx = Math.floor((u * 38.0) + (courseIdx % 2) * 0.5);
+            const shingleVar = hash2(shingleIdx, courseIdx * 7.1);
+
+            const stepThickness = (0.022 + 0.016 * courseFrac) + (shingleVar - 0.5) * 0.012;
+            const splitGrain = Math.sin(u * 260.0 + courseIdx * 3.0) * 0.004;
+
+            const thickOffset = isTop ? (0.045 + stepThickness + splitGrain) : -0.025;
+            // Offset along roof normal
+            const invLen = 1.0 / Math.hypot(1.0, roofSlope);
+            const ny = invLen;
+            const nz = sideZ * roofSlope * invLen;
+
+            out.set(
+              x,
+              yBase + ny * thickOffset,
+              sideZ * absZ + nz * thickOffset
+            );
+          },
+          evalColor: (u, v, pos, norm, col) => {
+            const s = Math.abs(pos.z) / eaveZ;
+            const courseIdx = Math.floor(s * 11.0);
+            const shingleIdx = Math.floor((u * 38.0) + (courseIdx % 2) * 0.5);
+            const sv = hash2(shingleIdx, courseIdx * 11.3);
+            col.setHSL(0.065 + (sv - 0.5) * 0.016, 0.42, 0.19 + sv * 0.09);
+
+            // Frost & snow dusting caught in shingle overlaps near the eaves
+            const courseFrac = (s * 11.0) % 1.0;
+            if (norm.y > 0.25 && courseFrac > 0.78) {
+              col.lerp(new THREE.Color(0xe6effa), smoothstep(0.78, 0.98, courseFrac) * 0.65);
+            }
+          }
+        });
+
+        const shingleMesh = new THREE.Mesh(shingleGeom, shingleMaterial);
+        shingleMesh.castShadow = true;
+        shingleMesh.receiveShadow = true;
+        roofGroup.add(shingleMesh);
+      });
+
+      // 9C. Thick Sculpted Roof Snow Mantle (Continuous Pillowy Blanket over Ridge & Slopes)
+      const roofSnowGeom = buildParametricLoft({
+        uSegments: 72,
+        vSegments: 56,
+        closedV: true,
+        capStart: true,
+        capEnd: true,
+        uvScaleU: 5.0,
+        uvScaleV: 5.0,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          // s in [-1, +1] spans from Back Eave (-Z) across the Ridge (0) to Front Eave (+Z)
+          const s = Math.cos(theta);
+          const isTopSurface = Math.sin(theta) >= 0.0;
+
+          const x = (u - 0.5) * (halfSpanX * 2.0 + 0.08);
+          const absS = Math.abs(s);
+
+          // Wavy scalloped snow drift boundary exposing lower 2-3 courses of split cedar shingles
+          const eaveWave = 0.14 * Math.sin(x * 2.1 + 0.5) + 0.09 * Math.cos(x * 3.7 - 0.8);
+          const maxZ = eaveZ - 0.26 + eaveWave;
+          const z = s * maxZ;
+          const absZ = Math.abs(z);
+
+          // Base roof surface height with rounded soft rollover across the apex (absZ < 0.28)
+          const roundedApexZ = Math.sqrt(absZ * absZ + 0.045) - Math.sqrt(0.045);
+          const deckY = getRoofDeckY(roundedApexZ) + 0.068;
+
+          // Melt collar depression around warm stone chimney at x ~ -2.45, z ~ -0.15
+          const chimDist = Math.hypot(x - (-2.42), z - (-0.15));
+          const chimneyMelt = smoothstep(0.32, 1.15, chimDist);
+
+          // Pillowy snow thickness profile: thick across middle/ridge, scalloped drift lip above eaves
+          const edgeTaperX = smoothstep(0.0, 0.09, Math.min(u, 1.0 - u));
+          const slopeProfile = Math.pow(Math.max(0.0, 1.0 - Math.pow(absS, 2.8)), 0.52);
+          const windDrifts = 0.055 * fbm2(x * 0.7 + 2.3, z * 0.7 + 4.1, 3);
+          const snowThickness = (0.23 * slopeProfile + 0.035 + windDrifts) * (0.25 + 0.75 * edgeTaperX) * chimneyMelt;
+
+          // Drift lip curl downward at the snow edge
+          const corniceCurl = smoothstep(0.82, 1.0, absS) * 0.055;
+
+          if (isTopSurface) {
+            const domeProfile = Math.pow(Math.sin(theta), 0.55);
+            out.set(
+              x,
+              deckY + snowThickness * domeProfile - corniceCurl,
+              z
+            );
+          } else {
+            // Underside hugs the shingle roof deck and curls neatly at the eave
+            const underProfile = Math.pow(-Math.sin(theta), 0.75);
+            out.set(
+              x,
+              deckY - 0.015 * underProfile - corniceCurl * (1.0 - underProfile * 0.5),
+              z * (1.0 - 0.018 * underProfile)
+            );
+          }
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          const coolShade = new THREE.Color(0xdbe8f8);
+          const pureSnow = new THREE.Color(0xfafcff);
+          const t = smoothstep(-0.2, 0.85, norm.y);
+          col.lerpColors(coolShade, pureSnow, 0.35 + 0.65 * t);
+        }
+      });
+
+      const roofSnowMesh = new THREE.Mesh(roofSnowGeom, snowMaterial);
+      roofSnowMesh.castShadow = true;
+      roofSnowMesh.receiveShadow = true;
+      roofGroup.add(roofSnowMesh);
+
+      // 9D. Hanging Icicles along Front & Back Eaves and Gable Rakes
+      const createLoftedIcicle = (length, baseRadius, seed, warmTint = 0.0) => {
+        return buildParametricLoft({
+          uSegments: 16,
+          vSegments: 14,
+          closedV: true,
+          capStart: true,
+          capEnd: false,
+          evalPos: (u, v, out) => {
+            const theta = v * Math.PI * 2.0;
+            // Taper from flared ice root at u=0 to sharp frozen drip point at u=1
+            const rootFlare = Math.exp(-u * 9.0) * 0.45;
+            const bodyTaper = Math.pow(1.0 - u, 0.78);
+            // Frozen melt-water ring bulges along length + vertical icicle ribs
+            const ringBulge = 1.0 + 0.14 * Math.sin(u * Math.PI * 7.0 + seed * 4.1) * (1.0 - u);
+            const verticalRibs = 1.0 + 0.12 * Math.sin(theta * 6.0 + u * 2.5 + seed) * (1.0 - u * 0.5);
+
+            const r = baseRadius * (bodyTaper + rootFlare) * ringBulge * verticalRibs;
+            const bendX = Math.sin(u * Math.PI) * 0.008 * Math.sin(seed * 3.7);
+            const bendZ = Math.sin(u * Math.PI) * 0.008 * Math.cos(seed * 5.3);
+
+            out.set(
+              Math.cos(theta) * r + bendX,
+              -u * length,
+              Math.sin(theta) * r + bendZ
+            );
+          },
+          evalColor: (u, v, pos, norm, col) => {
+            const iceColor = new THREE.Color(0xe6f5ff);
+            const tipColor = new THREE.Color(0xffffff);
+            col.lerpColors(iceColor, tipColor, u);
+            if (warmTint > 0.0) {
+              col.lerp(new THREE.Color(0xffc978), warmTint * (0.45 + 0.55 * u));
+            }
+          }
+        });
+      };
+
+      // Place 28 icicles along the Front Eave (+Z) and 18 along the Back Eave (-Z)
+      const placeEaveIcicles = (sideZ, count) => {
+        for (let i = 0; i < count; i++) {
+          const frac = (i + 0.35 + (rng.next() - 0.5) * 0.35) / count;
+          const ix = -halfSpanX + 0.15 + frac * (halfSpanX * 2.0 - 0.30);
+          const eaveWave = 0.06 * Math.sin(ix * 2.1 + 0.5) + 0.04 * Math.cos(ix * 3.7 - 0.8);
+          const iz = sideZ * (eaveZ + 0.03 + eaveWave);
+          const iy = getRoofDeckY(eaveZ) + 0.01;
+
+          // Vary icicle length organically: longer clusters near corners and above window
+          const clusterMod = 0.55 + 0.45 * Math.abs(Math.sin(ix * 2.6 + sideZ));
+          const len = (0.20 + rng.range(0.05, 0.46) * clusterMod);
+          const rad = 0.022 + len * 0.042;
+
+          // Icicles on the front eave near x = -0.84 catch warm amber window light!
+          const warmProximity = sideZ > 0 ? Math.exp(-Math.pow((ix - (-0.84)) / 0.95, 2.0)) : 0.0;
+
+          const icicleGeom = createLoftedIcicle(len, rad, i * 13.7 + sideZ * 50.0, warmProximity);
+          const icicleMesh = new THREE.Mesh(icicleGeom, icicleMaterial);
+          icicleMesh.position.set(ix, iy, iz);
+          icicleMesh.castShadow = true;
+          roofGroup.add(icicleMesh);
+        }
+      };
+
+      placeEaveIcicles(1, 28);
+      placeEaveIcicles(-1, 18);
+
+      // Additional icicles hanging from the front Gable Rakes on Left and Right ends
+      [-halfSpanX + 0.05, halfSpanX - 0.05].forEach((gx, gIdx) => {
+        for (let k = 1; k <= 5; k++) {
+          const rz = 0.42 * k;
+          const ry = getRoofDeckY(rz) - 0.02;
+          const len = 0.18 + (k / 5) * 0.24 + rng.range(0.0, 0.1);
+          const icicleGeom = createLoftedIcicle(len, 0.026, 200 + gIdx * 20 + k, 0.0);
+          const icicleMesh = new THREE.Mesh(icicleGeom, icicleMaterial);
+          icicleMesh.position.set(gx, ry, rz);
+          roofGroup.add(icicleMesh);
+        }
+      });
+
+      return roofGroup;
+    }
+    cabinGroup.add(buildRoofAndIcicles());
+
+    // =========================================================================
+    // 10. STONE CHIMNEY & ANIMATED VOLUMETRIC WISP OF SMOKE
+    // =========================================================================
+    const smokeAnimatedNodes = [];
+
+    function buildChimneyAndSmoke() {
+      const chimGroup = new THREE.Group();
+      // Positioned against the Left Gable Wall (-X) so its full stone masonry & smoke wisp are prominent
+      const cx = -2.56;
+      const cz = -0.12;
+      const maxH = 4.48;
+
+      // Helper for chimney taper profile at height y
+      const getChimneyRadii = (y) => {
+        // Wide battered firebox base (y < 1.7), stepping into tapered shaft up to corbeled crown
+        const baseStep = smoothstep(2.1, 1.35, y);
+        const shaftTaper = 1.0 - 0.22 * smoothstep(1.6, 4.1, y);
+        const crownFlare = smoothstep(4.12, 4.35, y) * (1.0 - smoothstep(4.38, 4.48, y)) * 0.06;
+        const rx = 0.34 * shaftTaper + 0.14 * baseStep + crownFlare;
+        const rz = 0.44 * shaftTaper + 0.20 * baseStep + crownFlare;
+        return { rx, rz };
+      };
+
+      // 10A. Lofted Stone-Mortar Core Shaft
+      const coreGeom = buildParametricLoft({
+        uSegments: 40,
+        vSegments: 28,
+        closedV: true,
+        capStart: true,
+        capEnd: true,
+        evalPos: (u, v, out) => {
+          const y = u * maxH;
+          const theta = v * Math.PI * 2.0;
+          const { rx, rz } = getChimneyRadii(y);
+          // Rounded rectangle cross-section with horizontal mortar course indentations
+          const c = Math.cos(theta);
+          const s = Math.sin(theta);
+          const px = Math.sign(c) * Math.pow(Math.abs(c), 0.52) * rx;
+          const pz = Math.sign(s) * Math.pow(Math.abs(s), 0.52) * rz;
+
+          const courseBump = 1.0 + 0.045 * Math.sin(u * Math.PI * 36.0) + 0.03 * fbm2(u * 12.0, v * 8.0, 2);
+          // Shift outer side (-X) slightly outward as firebox base widens
+          const centerX = cx - Math.max(0.0, rx - 0.30) * 0.55;
+          out.set(centerX + px * courseBump, y, cz + pz * courseBump);
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          const n = fbm2(pos.y * 4.0, v * 6.0, 2);
+          col.setHSL(0.075, 0.08, 0.28 + n * 0.06);
+        }
+      });
+      const coreMesh = new THREE.Mesh(coreGeom, stoneMaterial);
+      coreMesh.castShadow = true;
+      coreMesh.receiveShadow = true;
+      chimGroup.add(coreMesh);
+
+      // 10B. Individually Lofted 3D River & Field Cobble Stones Set in Courses
+      const numCourses = 19;
+      let stoneSeed = 1;
+      for (let c = 0; c < numCourses; c++) {
+        const y = 0.14 + (c / (numCourses - 1)) * (maxH - 0.26);
+        const { rx, rz } = getChimneyRadii(y);
+        const centerX = cx - Math.max(0.0, rx - 0.30) * 0.55;
+
+        const ringCount = y < 1.9 ? 10 : 8;
+        for (let j = 0; j < ringCount; j++) {
+          const ang = ((j + (c % 2) * 0.5) / ringCount) * Math.PI * 2.0;
+          // Skip stones buried inside the cabin wall (+X side below roof height)
+          if (Math.cos(ang) > 0.55 && y < 3.45) continue;
+
+          const sx = centerX + Math.cos(ang) * (rx * 0.88);
+          const sz = cz + Math.sin(ang) * (rz * 0.88);
+          const isShoulder = (c === 7 || c === 8 || c === numCourses - 1);
+
+          const stoneGeom = createLoftedStone({
+            radiusX: 0.14 + (stoneSeed % 3) * 0.025,
+            radiusY: 0.115 + (stoneSeed % 2) * 0.015,
+            radiusZ: 0.15 + ((stoneSeed + 1) % 3) * 0.028,
+            seed: stoneSeed * 3.7,
+            snowTop: isShoulder ? 0.85 : 0.25
+          });
+          stoneSeed++;
+
+          const stoneMesh = new THREE.Mesh(stoneGeom, stoneMaterial);
+          stoneMesh.position.set(sx, y, sz);
+          stoneMesh.rotation.y = ang + (rng.next() - 0.5) * 0.3;
+          stoneMesh.castShadow = true;
+          stoneMesh.receiveShadow = true;
+          chimGroup.add(stoneMesh);
+        }
+      }
+
+      // 10C. Lofted Clay/Stone Flue Pot at Chimney Crown
+      const flueGeom = buildParametricLoft({
+        uSegments: 16,
+        vSegments: 20,
+        closedV: true,
+        capStart: false,
+        capEnd: true,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const y = maxH + u * 0.28;
+          const lip = 1.0 + 0.16 * Math.exp(-Math.pow((u - 0.82) / 0.12, 2.0));
+          const r = 0.165 * lip * (1.0 - 0.18 * smoothstep(0.88, 1.0, u));
+          out.set(cx + Math.cos(theta) * r, y, cz + Math.sin(theta) * r);
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          // Soot-darkened terracotta rim
+          const soot = smoothstep(0.5, 1.0, u);
+          col.setHSL(0.05, 0.35 * (1.0 - soot * 0.6), 0.26 * (1.0 - soot * 0.55));
+        }
+      });
+      const flueMesh = new THREE.Mesh(flueGeom, stoneMaterial);
+      flueMesh.castShadow = true;
+      chimGroup.add(flueMesh);
+
+      // 10D. Wisp of Smoke (Braided Helical Lofted Ribbons + Soft Billowing Smoke Puffs)
+      const smokeRoot = new THREE.Group();
+      smokeRoot.position.set(cx, maxH + 0.24, cz);
+      chimGroup.add(smokeRoot);
+
+      // 3 intertwined helical lofted smoke ribbons rising gracefully into the studio air
+      for (let w = 0; w < 3; w++) {
+        const phaseOffset = (w / 3) * Math.PI * 2.0;
+        const wispGeom = buildParametricLoft({
+          uSegments: 44,
+          vSegments: 16,
+          closedV: true,
+          capStart: true,
+          capEnd: true,
+          evalPos: (u, v, out) => {
+            const theta = v * Math.PI * 2.0;
+            const h = u * 3.15;
+            // Gentle wind drift toward (+X, -Z) as smoke rises
+            const driftX = Math.pow(u, 1.45) * 0.92 + Math.sin(u * Math.PI * 2.6 + phaseOffset) * (0.04 + 0.14 * u);
+            const driftZ = -Math.pow(u, 1.35) * 0.48 + Math.cos(u * Math.PI * 2.4 + phaseOffset) * (0.04 + 0.12 * u);
+
+            // Tapering at flue mouth (u=0) and feathery top tip (u=1), billowing in middle
+            const envelope = Math.sin(Math.pow(u, 0.72) * Math.PI);
+            const rBase = (0.045 + 0.19 * envelope) * (0.85 + 0.25 * Math.sin(theta * 3.0 + u * 8.0 + phaseOffset));
+
+            out.set(
+              driftX + Math.cos(theta) * rBase,
+              h + Math.sin(theta) * rBase * 0.45,
+              driftZ + Math.sin(theta) * rBase
+            );
+          }
+        });
+
+        const wispMat = smokeMaterial.clone();
+        wispMat.opacity = 0.26 - w * 0.04;
+        const wispMesh = new THREE.Mesh(wispGeom, wispMat);
+        smokeRoot.add(wispMesh);
+        smokeAnimatedNodes.push({
+          mesh: wispMesh,
+          type: 'ribbon',
+          phase: phaseOffset,
+          baseOpacity: wispMat.opacity
+        });
+      }
+
+      // 8 soft lofted billowy smoke puffs along the rising plumespine
+      for (let p = 0; p < 8; p++) {
+        const u = (p + 0.5) / 8;
+        const puffGeom = buildParametricLoft({
+          uSegments: 14,
+          vSegments: 16,
+          closedV: true,
+          capStart: false,
+          capEnd: false,
+          evalPos: (uP, vP, out) => {
+            const phi = Math.max(0.01, Math.min(Math.PI - 0.01, uP * Math.PI));
+            const theta = vP * Math.PI * 2.0;
+            const lobe = 1.0 + 0.22 * Math.sin(theta * 3.0 + p * 2.1) * Math.sin(phi * 2.0);
+            const r = (0.09 + 0.18 * Math.sin(u * Math.PI)) * lobe;
+            out.set(
+              Math.sin(phi) * Math.cos(theta) * r * 1.15,
+              Math.cos(phi) * r * 0.85,
+              Math.sin(phi) * Math.sin(theta) * r * 1.15
+            );
+          }
+        });
+        const puffMat = smokeMaterial.clone();
+        puffMat.opacity = 0.22 * Math.sin(u * Math.PI);
+        const puffMesh = new THREE.Mesh(puffGeom, puffMat);
+        smokeRoot.add(puffMesh);
+        smokeAnimatedNodes.push({
+          mesh: puffMesh,
+          type: 'puff',
+          uOffset: u,
+          seed: p * 1.7
+        });
+      }
+
+      return chimGroup;
+    }
+    cabinGroup.add(buildChimneyAndSmoke());
+
+    // =========================================================================
+    // 11. SNOW-LADEN PINE TREES (LOFTED STAR-FROND BOUGH WHORLS + SNOW MANTLES)
+    // =========================================================================
+    function createSnowPineTree({
+      x = 0,
+      z = 0,
+      height = 5.0,
+      baseRadius = 1.35,
+      tiers = 9,
+      seed = 1.0
+    }) {
+      const treeGroup = new THREE.Group();
+      const groundY = getSnowRiseHeightAt(x, z);
+      treeGroup.position.set(x, groundY - 0.06, z);
+
+      // Slight natural lean away from center
+      const leanX = (hash2(seed, 2.1) - 0.5) * 0.045;
+      const leanZ = (hash2(seed, 5.7) - 0.5) * 0.045;
+      treeGroup.rotation.set(leanZ, seed * 1.3, leanX);
+
+      // 11A. Lofted Tapered Fluted Pine Trunk
+      const trunkGeom = buildParametricLoft({
+        uSegments: 18,
+        vSegments: 14,
+        closedV: true,
+        capStart: true,
+        capEnd: true,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const rootFlare = Math.exp(-u * 8.5) * 0.65;
+          const taper = (1.0 - u * 0.88) + rootFlare;
+          const barkFlutes = 1.0 + 0.06 * Math.sin(theta * 5.0 + u * 6.0 + seed);
+          const r = baseRadius * 0.135 * taper * barkFlutes;
+          out.set(
+            Math.cos(theta) * r,
+            u * (height * 0.92),
+            Math.sin(theta) * r
+          );
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          col.setHSL(0.065, 0.48, 0.18 + 0.05 * u);
+        }
+      });
+      const trunkMesh = new THREE.Mesh(trunkGeom, timberMaterial);
+      trunkMesh.castShadow = true;
+      trunkMesh.receiveShadow = true;
+      treeGroup.add(trunkMesh);
+
+      // Snow collar banked around trunk base
+      const collarGeom = buildParametricLoft({
+        uSegments: 12,
+        vSegments: 20,
+        closedV: true,
+        capStart: false,
+        capEnd: false,
+        evalPos: (u, v, out) => {
+          const theta = v * Math.PI * 2.0;
+          const r = baseRadius * (0.14 + u * 0.42) * (1.0 + 0.08 * Math.sin(theta * 3.0 + seed));
+          const y = 0.24 * Math.pow(1.0 - u, 1.5);
+          out.set(Math.cos(theta) * r, y, Math.sin(theta) * r);
+        },
+        evalColor: (u, v, pos, norm, col) => {
+          col.setHex(0xdfeaf8);
+        }
+      });
+      const collarMesh = new THREE.Mesh(collarGeom, snowMaterial);
+      collarMesh.receiveShadow = true;
+      treeGroup.add(collarMesh);
+
+      // 11B. Tiered Evergreen Bough Whorls + Pillowy Snow Caps on Each Whorl
+      const foliageStartH = height * 0.14;
+      const foliageSpanH = height * 0.86;
+
+      for (let t = 0; t < tiers; t++) {
+        const tierFrac = t / (tiers - 1);
+        const tierY = foliageStartH + tierFrac * foliageSpanH;
+        // Conical silhouette with organic tier-to-tier variation
+        const tierScale = Math.pow(1.0 - tierFrac * 0.84, 0.82) * (0.94 + 0.12 * hash2(seed, t * 3.1));
+        const maxR = baseRadius * tierScale;
+        const tierH = (foliageSpanH / tiers) * 1.65 * (0.85 + 0.3 * (1.0 - tierFrac));
+        const numLobes = Math.max(5, Math.round(9 - tierFrac * 3));
+        const lobePhase = t * 1.15 + seed * 2.7;
+
+        // Evergreen bough skirt lofted from apex (u=0) out to drooping star-frond tips (u=1)
+        const boughGeom = buildParametricLoft({
+          uSegments: 16,
+          vSegments: 44,
+          closedV: true,
+          capStart: false,
+          capEnd: true,
+          evalPos: (u, v, out) => {
+            const theta = v * Math.PI * 2.0;
+            // Primary branch arms + secondary pine needle frond clusters
+            const mainLobe = 0.74 + 0.26 * Math.cos(theta * numLobes + lobePhase);
+            const subFrond = 0.07 * Math.cos(theta * numLobes * 3.0 - lobePhase * 0.5) * u;
+            const r = u * maxR * (mainLobe + subFrond);
+
+            // Drooping bough curve under heavy snow load with slight upturned needle tips
+            const droop = Math.pow(u, 1.38) * tierH;
+            const tipCurl = Math.pow(Math.max(0.0, u - 0.72) / 0.28, 2.0) * (tierH * 0.16);
+            const lobeDroop = (1.0 - mainLobe) * 0.08 * u;
+
+            const y = tierY + tierH * 0.45 - droop + tipCurl - lobeDroop;
+            out.set(Math.cos(theta) * r, y, Math.sin(theta) * r);
+          },
+          evalColor: (u, v, pos, norm, col) => {
+            // Deep forest spruce/pine green, darker near trunk interior, frosted at tips
+            const needleVar = 0.5 + 0.5 * Math.sin(v * Math.PI * numLobes * 6.0 + u * 8.0);
+            const hue = 0.36 + (hash2(seed, 9.1) - 0.5) * 0.03;
+            const sat = 0.42 - u * 0.08;
+            const lit = 0.10 + u * 0.09 + needleVar * 0.035;
+            col.setHSL(hue, sat, lit);
+            if (u > 0.78 && norm.y > 0.2) {
+              col.lerp(new THREE.Color(0xdce8f5), smoothstep(0.78, 1.0, u) * 0.35);
+            }
+          }
+        });
+        const boughMesh = new THREE.Mesh(boughGeom, pineNeedleMaterial);
+        boughMesh.castShadow = true;
+        boughMesh.receiveShadow = true;
+        treeGroup.add(boughMesh);
+
+        // Thick pillowy snow mantle perched directly on top of this bough whorl!
+        const snowCapGeom = buildParametricLoft({
+          uSegments: 16,
+          vSegments: 40,
+          closedV: true,
+          capStart: false,
+          capEnd: true,
+          evalPos: (u, v, out) => {
+            const theta = v * Math.PI * 2.0;
+            const mainLobe = 0.76 + 0.24 * Math.cos(theta * numLobes + lobePhase);
+            const driftLobe = 0.05 * Math.sin(theta * 3.0 + seed + t);
+
+            // u in [0, 0.82] is the upper pillowy snow dome; u in [0.82, 1.0] tucks under the bough lip
+            let rFrac, thickness;
+            if (u <= 0.82) {
+              rFrac = u / 0.82;
+              const pillow = Math.sin(Math.pow(rFrac, 0.72) * Math.PI);
+              thickness = (0.065 + 0.095 * (1.0 - tierFrac * 0.45)) * pillow * (0.7 + 0.3 * mainLobe);
+            } else {
+              const tuck = (u - 0.82) / 0.18;
+              rFrac = 1.0 - tuck * 0.14;
+              thickness = -0.022 * tuck;
+            }
+
+            const r = rFrac * maxR * 0.91 * (mainLobe + driftLobe);
+            const droop = Math.pow(rFrac, 1.38) * tierH * 0.88;
+            const y = tierY + tierH * 0.47 - droop + thickness;
+            out.set(Math.cos(theta) * r, y, Math.sin(theta) * r);
+          },
+          evalColor: (u, v, pos, norm, col) => {
+            const cool = new THREE.Color(0xd8e6f7);
+            const bright = new THREE.Color(0xfafcff);
+            col.lerpColors(cool, bright, smoothstep(-0.3, 0.8, norm.y));
+          }
+        });
+        const snowCapMesh = new THREE.Mesh(snowCapGeom, snowMaterial);
+        snowCapMesh.castShadow = true;
+        snowCapMesh.receiveShadow = true;
+        treeGroup.add(snowCapMesh);
+      }
+
+      // Top leader snow tuft at tree crown
+      const leaderGeom = buildParametricLoft({
+        uSegments: 12,
+        vSegments: 16,
+        closedV: true,
+        capStart: false,
+        capEnd: false,
+        evalPos: (u, v, out) => {
+          const phi = Math.max(0.01, Math.min(Math.PI - 0.01, u * Math.PI));
+          const theta = v * Math.PI * 2.0;
+          const r = baseRadius * 0.13 * Math.sin(phi) * (1.0 - 0.35 * u);
+          const y = height + Math.cos(phi) * 0.24;
+          out.set(Math.cos(theta) * r, y, Math.sin(theta) * r);
+        }
+      });
+      const leaderMesh = new THREE.Mesh(leaderGeom, snowMaterial);
+      leaderMesh.castShadow = true;
+      treeGroup.add(leaderMesh);
+
+      return treeGroup;
+    }
+
+    // Cluster 9 snow-laden pine trees of varying heights around the cabin on the snow rise
+    const pineSpecs = [
+      { x: -3.85, z: -2.25, height: 6.75, baseRadius: 1.58, tiers: 11, seed: 11.2 },
+      { x: -1.65, z: -3.55, height: 5.85, baseRadius: 1.42, tiers: 10, seed: 23.7 },
+      { x:  1.85, z: -3.25, height: 6.35, baseRadius: 1.52, tiers: 11, seed: 37.4 },
+      { x:  3.85, z: -1.35, height: 5.10, baseRadius: 1.32, tiers: 9,  seed: 49.1 },
+      { x:  4.25, z:  1.15, height: 3.85, baseRadius: 1.08, tiers: 8,  seed: 61.8 },
+      { x: -4.35, z:  0.65, height: 4.30, baseRadius: 1.18, tiers: 9,  seed: 73.5 },
+      { x: -3.35, z:  2.75, height: 2.45, baseRadius: 0.78, tiers: 6,  seed: 85.9 },
+      { x:  3.05, z:  3.10, height: 2.15, baseRadius: 0.72, tiers: 6,  seed: 94.3 },
+      { x:  0.15, z: -4.45, height: 4.75, baseRadius: 1.24, tiers: 9,  seed: 108.6 }
+    ];
+
+    pineSpecs.forEach((spec) => {
+      dioramaGroup.add(createSnowPineTree(spec));
+    });
+
+    // Scatter a few half-buried snow-capped boulders near the trees and footpath
+    const boulderSpecs = [
+      { x: -2.55, z: 3.35, rx: 0.34, ry: 0.22, rz: 0.28, seed: 201 },
+      { x:  2.25, z: 2.95, rx: 0.28, ry: 0.18, rz: 0.25, seed: 202 },
+      { x:  3.55, z: -2.85, rx: 0.42, ry: 0.26, rz: 0.36, seed: 203 },
+      { x: -3.20, z: -3.65, rx: 0.38, ry: 0.24, rz: 0.32, seed: 204 }
+    ];
+    boulderSpecs.forEach((b) => {
+      const by = getSnowRiseHeightAt(b.x, b.z);
+      const bGeom = createLoftedStone({
+        radiusX: b.rx,
+        radiusY: b.ry,
+        radiusZ: b.rz,
+        seed: b.seed,
+        snowTop: 0.9
+      });
+      const bMesh = new THREE.Mesh(bGeom, stoneMaterial);
+      bMesh.position.set(b.x, by + b.ry * 0.25, b.z);
+      bMesh.rotation.y = b.seed * 1.7;
+      bMesh.castShadow = true;
+      bMesh.receiveShadow = true;
+      dioramaGroup.add(bMesh);
+    });
+
+    // =========================================================================
+    // 12. ENDLESS HIGH-KEY STUDIO FLOOR & CONTACT SHADOW RENDERED FROM BELOW
+    // =========================================================================
+    // Endless white studio floor (lofted flat studio receiver)
+    const studioFloorGeom = buildParametricLoft({
+      uSegments: 8,
+      vSegments: 8,
+      closedV: false,
+      capStart: false,
+      capEnd: false,
+      evalPos: (u, v, out) => {
+        out.set((u - 0.5) * 220.0, 0.0, (0.5 - v) * 220.0);
+      }
+    });
+    const studioFloorMat = new THREE.MeshStandardMaterial({
+      color: 0xf4f7fb,
+      roughness: 0.92,
+      metalness: 0.0
+    });
+    const studioFloor = new THREE.Mesh(studioFloorGeom, studioFloorMat);
+    studioFloor.position.y = -0.002;
+    studioFloor.receiveShadow = true;
+    scene.add(studioFloor);
+
+    // Upward-looking Orthographic Contact Shadow System (rendered from below at y = -0.04)
+    const CONTACT_SIZE = 16.5;
+    const RT_RES = 512;
+
+    const rtShadow = new THREE.WebGLRenderTarget(RT_RES, RT_RES, {
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: true,
+      stencilBuffer: false
+    });
+    const rtBlurH = new THREE.WebGLRenderTarget(RT_RES, RT_RES, {
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: false
+    });
+
+    // Orthographic camera positioned below the diorama looking straight UP (+Y)
+    const contactShadowCam = new THREE.OrthographicCamera(
+      -CONTACT_SIZE * 0.5,
+      CONTACT_SIZE * 0.5,
+      CONTACT_SIZE * 0.5,
+      -CONTACT_SIZE * 0.5,
+      0.01,
+      5.5
+    );
+    contactShadowCam.position.set(0.0, -0.04, 0.0);
+    contactShadowCam.up.set(0, 0, 1);
+    contactShadowCam.lookAt(0.0, 5.0, 0.0);
+    contactShadowCam.updateMatrixWorld();
+
+    // Custom depth-falloff shader material for upward contact shadow capture
+    const contactDepthMat = new THREE.ShaderMaterial({
+      vertexShader: /* glsl */`
+        varying float vHeight;
+        varying vec2 vWorldXZ;
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vHeight = worldPos.y;
+          vWorldXZ = worldPos.xz;
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: /* glsl */`
+        varying float vHeight;
+        varying vec2 vWorldXZ;
+        void main() {
+          // Height attenuation: strongest right at y = 0, softly fading upward
+          float hFactor = 1.0 - smoothstep(0.0, 3.8, vHeight);
+          hFactor = pow(max(0.0, hFactor), 1.45);
+          // Smooth radial edge fade near boundary of contact shadow plane
+          float r = length(vWorldXZ) / 7.8;
+          float radialFade = 1.0 - smoothstep(0.72, 1.0, r);
+          float alpha = hFactor * radialFade * 0.58;
+          gl_FragColor = vec4(0.36, 0.42, 0.52, alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: true,
+      side: THREE.DoubleSide
+    });
+
+    // Separable Gaussian Blur Shader for velvety contact shadow softness
+    const createBlurShaderMat = (dirX, dirY) => new THREE.ShaderMaterial({
+      uniforms: {
+        tDiffuse: { value: null },
+        uStep: { value: new THREE.Vector2(dirX / RT_RES, dirY / RT_RES) }
+      },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        uniform sampler2D tDiffuse;
+        uniform vec2 uStep;
+        varying vec2 vUv;
+        void main() {
+          vec4 sum = vec4(0.0);
+          sum += texture2D(tDiffuse, vUv - 4.0 * uStep) * 0.051;
+          sum += texture2D(tDiffuse, vUv - 3.0 * uStep) * 0.0918;
+          sum += texture2D(tDiffuse, vUv - 2.0 * uStep) * 0.12245;
+          sum += texture2D(tDiffuse, vUv - 1.0 * uStep) * 0.1531;
+          sum += texture2D(tDiffuse, vUv) * 0.1633;
+          sum += texture2D(tDiffuse, vUv + 1.0 * uStep) * 0.1531;
+          sum += texture2D(tDiffuse, vUv + 2.0 * uStep) * 0.12245;
+          sum += texture2D(tDiffuse, vUv + 3.0 * uStep) * 0.0918;
+          sum += texture2D(tDiffuse, vUv + 4.0 * uStep) * 0.051;
+          gl_FragColor = sum;
+        }
+      `,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const blurMatH = createBlurShaderMat(2.6, 0.0);
+    const blurMatV = createBlurShaderMat(0.0, 2.6);
+    const blurQuadScene = new THREE.Scene();
+    const blurQuadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const blurQuadGeom = new THREE.BufferGeometry();
+    blurQuadGeom.setAttribute('position', new THREE.Float32BufferAttribute([
+      -1, -1, 0,  1, -1, 0,  1, 1, 0,  -1, 1, 0
+    ], 3));
+    blurQuadGeom.setAttribute('uv', new THREE.Float32BufferAttribute([
+      0, 0,  1, 0,  1, 1,  0, 1
+    ], 2));
+    blurQuadGeom.setIndex([0, 1, 2, 0, 2, 3]);
+    const blurQuad = new THREE.Mesh(blurQuadGeom, blurMatH);
+    blurQuadScene.add(blurQuad);
+
+    const contactShadowPlaneGeom = buildParametricLoft({
+      uSegments: 4,
+      vSegments: 4,
+      closedV: false,
+      capStart: false,
+      capEnd: false,
+      evalPos: (u, v, out) => {
+        out.set((u - 0.5) * CONTACT_SIZE, 0.0, (0.5 - v) * CONTACT_SIZE);
+      }
+    });
+    const contactShadowPlaneMat = new THREE.MeshBasicMaterial({
+      map: rtShadow.texture,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false
+    });
+    const contactShadowPlane = new THREE.Mesh(contactShadowPlaneGeom, contactShadowPlaneMat);
+    contactShadowPlane.position.y = 0.001;
+    scene.add(contactShadowPlane);
+
+    function renderContactShadowFromBelow() {
+      const prevBg = scene.background;
+      const prevFog = scene.fog;
+      const prevOverride = scene.overrideMaterial;
+      const prevClearColor = renderer.getClearColor(new THREE.Color());
+      const prevClearAlpha = renderer.getClearAlpha();
+
+      studioFloor.visible = false;
+      contactShadowPlane.visible = false;
+      scene.background = null;
+      scene.fog = null;
+      scene.overrideMaterial = contactDepthMat;
+
+      renderer.setClearColor(0x000000, 0.0);
+      renderer.setRenderTarget(rtShadow);
+      renderer.clear();
+      renderer.render(scene, contactShadowCam);
+
+      scene.overrideMaterial = null;
+
+      // Two-pass separable Gaussian blur for ultra-soft studio contact shadow
+      for (let pass = 0; pass < 2; pass++) {
+        blurQuad.material = blurMatH;
+        blurMatH.uniforms.tDiffuse.value = rtShadow.texture;
+        renderer.setRenderTarget(rtBlurH);
+        renderer.clear();
+        renderer.render(blurQuadScene, blurQuadCam);
+
+        blurQuad.material = blurMatV;
+        blurMatV.uniforms.tDiffuse.value = rtBlurH.texture;
+        renderer.setRenderTarget(rtShadow);
+        renderer.clear();
+        renderer.render(blurQuadScene, blurQuadCam);
+      }
+
+      renderer.setRenderTarget(null);
+      renderer.setClearColor(prevClearColor, prevClearAlpha);
+      scene.background = prevBg;
+      scene.fog = prevFog;
+      scene.overrideMaterial = prevOverride;
+      studioFloor.visible = true;
+      contactShadowPlane.visible = true;
+    }
+
+    // Render contact shadow once at startup (diorama base is static)
+    renderContactShadowFromBelow();
+
+    // =========================================================================
+    // 13. ANIMATION LOOP (SMOKE WISP, COZY HEARTH FLICKER, SMOOTH ORBIT)
+    // =========================================================================
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+
+      // Subtle curling animation of the chimney smoke wisp
+      for (let i = 0; i < smokeAnimatedNodes.length; i++) {
+        const item = smokeAnimatedNodes[i];
+        if (item.type === 'ribbon') {
+          item.mesh.rotation.y = Math.sin(t * 0.55 + item.phase) * 0.14;
+          item.mesh.position.x = Math.sin(t * 0.8 + item.phase) * 0.035;
+          item.mesh.position.z = Math.cos(t * 0.7 + item.phase) * 0.035;
+          item.mesh.material.opacity = item.baseOpacity + Math.sin(t * 1.2 + item.phase) * 0.03;
+        } else if (item.type === 'puff') {
+          const cycle = (item.uOffset + t * 0.095) % 1.0;
+          const h = cycle * 3.2;
+          const driftX = Math.pow(cycle, 1.45) * 0.92 + Math.sin(cycle * Math.PI * 2.6 + t * 0.9 + item.seed) * (0.04 + 0.14 * cycle);
+          const driftZ = -Math.pow(cycle, 1.35) * 0.48 + Math.cos(cycle * Math.PI * 2.4 + t * 0.8 + item.seed) * (0.04 + 0.12 * cycle);
+          item.mesh.position.set(driftX, h, driftZ);
+          const scale = 0.65 + cycle * 0.85;
+          item.mesh.scale.setScalar(scale);
+          item.mesh.rotation.y = t * 0.35 + item.seed;
+          item.mesh.material.opacity = 0.24 * Math.sin(cycle * Math.PI);
+        }
+      }
+
+      // Gentle cozy hearth/lantern breath in the single lit window
+      const hearthPulse = 1.0 + 0.045 * Math.sin(t * 3.1) + 0.025 * Math.sin(t * 7.3);
+      windowSpotLight.intensity = 16.5 * hearthPulse;
+      windowBounceLight.intensity = 4.2 * hearthPulse;
+      frostedWindowMaterial.emissiveIntensity = 2.35 * hearthPulse;
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // =========================================================================
+    // 14. RESPONSIVE RESIZE HANDLER
+    // =========================================================================
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

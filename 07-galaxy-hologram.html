@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SCI-FI HOLOGRAMS // 07 GALAXY</title>
+  <link rel="icon" href="data:," />
+  <style>
+    :root {
+      --cyan: #00eaff;
+      --aqua: #22ffe8;
+      --ice: #b8f5ff;
+      --hud-bg: rgba(2, 12, 18, 0.72);
+      --hud-border: rgba(0, 234, 255, 0.28);
+      --hud-muted: rgba(168, 238, 255, 0.55);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000000;
+      color: var(--ice);
+      font-family: 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+      cursor: grab;
+    }
+
+    canvas:active {
+      cursor: grabbing;
+    }
+
+    /* Minimalist FUI Overlay matching SCI-FI HOLOGRAMS showcase aesthetic */
+    .fui-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      transition: opacity 0.25s ease;
+    }
+
+    .fui-layer.hidden {
+      opacity: 0;
+    }
+
+    .fui-header-left {
+      position: absolute;
+      top: 24px;
+      left: 28px;
+    }
+
+    .fui-title {
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: 0.34em;
+      color: #ffffff;
+      text-shadow: 0 0 12px rgba(0, 234, 255, 0.45);
+    }
+
+    .fui-subtitle {
+      margin-top: 5px;
+      font-size: 10px;
+      font-weight: 400;
+      letter-spacing: 0.28em;
+      color: var(--hud-muted);
+    }
+
+    .fui-header-right {
+      position: absolute;
+      top: 25px;
+      right: 28px;
+      text-align: right;
+      font-size: 9px;
+      line-height: 1.65;
+      letter-spacing: 0.2em;
+      color: rgba(168, 238, 255, 0.45);
+    }
+
+    .fui-header-right span {
+      color: rgba(0, 234, 255, 0.85);
+    }
+
+    .fui-bottom-label {
+      position: absolute;
+      bottom: 24px;
+      left: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .fui-element-tag {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.24em;
+      color: #ffffff;
+      text-shadow: 0 0 10px rgba(0, 234, 255, 0.5);
+    }
+
+    .fui-hint {
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      color: rgba(168, 238, 255, 0.42);
+    }
+
+    /* Compact Interactive FUI Control Dock */
+    .fui-controls-wrap {
+      position: fixed;
+      bottom: 22px;
+      right: 26px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+      pointer-events: auto;
+      transition: opacity 0.25s ease;
+    }
+
+    .fui-controls-wrap.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .fui-panel {
+      width: 268px;
+      padding: 14px 16px;
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 0 28px rgba(0, 215, 255, 0.12), inset 0 0 18px rgba(0, 215, 255, 0.05);
+      display: none;
+      flex-direction: column;
+      gap: 11px;
+      position: relative;
+    }
+
+    .fui-panel.open {
+      display: flex;
+    }
+
+    .fui-panel::before,
+    .fui-panel::after {
+      content: '';
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-color: var(--cyan);
+      border-style: solid;
+      pointer-events: none;
+    }
+
+    .fui-panel::before {
+      top: -1px;
+      left: -1px;
+      border-width: 1.5px 0 0 1.5px;
+    }
+
+    .fui-panel::after {
+      bottom: -1px;
+      right: -1px;
+      border-width: 0 1.5px 1.5px 0;
+    }
+
+    .control-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .control-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      color: var(--hud-muted);
+    }
+
+    .control-val {
+      color: var(--cyan);
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type='range'] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 3px;
+      background: rgba(0, 234, 255, 0.18);
+      outline: none;
+      cursor: pointer;
+    }
+
+    input[type='range']::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 1.5px solid var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+      cursor: pointer;
+    }
+
+    input[type='range']::-moz-range-thumb {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 1.5px solid var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+      cursor: pointer;
+    }
+
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .fui-pill-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .fui-btn {
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      color: var(--ice);
+      padding: 7px 11px;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      transition: border-color 0.2s, color 0.2s, box-shadow 0.2s, background 0.2s;
+    }
+
+    .fui-btn:hover {
+      border-color: var(--cyan);
+      color: #ffffff;
+      box-shadow: 0 0 14px rgba(0, 234, 255, 0.25);
+    }
+
+    .fui-btn.active {
+      border-color: var(--cyan);
+      background: rgba(0, 234, 255, 0.16);
+      color: #ffffff;
+      box-shadow: 0 0 14px rgba(0, 234, 255, 0.28);
+    }
+
+    @media (max-width: 640px) {
+      .fui-header-right,
+      .fui-hint {
+        display: none;
+      }
+      .fui-header-left {
+        top: 16px;
+        left: 16px;
+      }
+      .fui-bottom-label {
+        bottom: 18px;
+        left: 16px;
+      }
+      .fui-controls-wrap {
+        bottom: 16px;
+        right: 16px;
+      }
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="fui-layer" id="fuiLayer">
+    <div class="fui-header-left">
+      <div class="fui-title">SCI-FI HOLOGRAMS</div>
+      <div class="fui-subtitle">DESIGN ELEMENTS PACK // 3D WEBGL</div>
+    </div>
+
+    <div class="fui-header-right">
+      <div>PARTICLES: <span id="telemetryCount">92,320</span></div>
+      <div>INCLINATION: <span id="telemetryTilt">36.0°</span></div>
+    </div>
+
+    <div class="fui-bottom-label">
+      <div class="fui-element-tag">07 GALAXY</div>
+      <div class="fui-hint">DRAG TO ORBIT · SCROLL TO ZOOM · SPACE PAUSE · R RESET · H HIDE HUD</div>
+    </div>
+  </div>
+
+  <div class="fui-controls-wrap" id="controlsWrap">
+    <div class="fui-panel" id="fuiPanel">
+      <div class="control-row">
+        <div class="control-head">
+          <span>SPIN VELOCITY</span>
+          <span class="control-val" id="valSpin">0.12</span>
+        </div>
+        <input id="ctrlSpin" type="range" min="0" max="0.6" step="0.01" value="0.12" />
+      </div>
+
+      <div class="control-row">
+        <div class="control-head">
+          <span>SPIRAL TWIST</span>
+          <span class="control-val" id="valTwist">4.25</span>
+        </div>
+        <input id="ctrlTwist" type="range" min="1.6" max="6.4" step="0.05" value="4.25" />
+      </div>
+
+      <div class="control-row">
+        <div class="control-head">
+          <span>BLOOM INTENSITY</span>
+          <span class="control-val" id="valBloom">0.56</span>
+        </div>
+        <input id="ctrlBloom" type="range" min="0" max="1.6" step="0.02" value="0.56" />
+      </div>
+
+      <div class="control-row">
+        <div class="control-head">
+          <span>CORE EMISSION</span>
+          <span class="control-val" id="valCore">1.00</span>
+        </div>
+        <input id="ctrlCore" type="range" min="0.2" max="1.8" step="0.02" value="1.00" />
+      </div>
+
+      <div class="control-row">
+        <div class="control-head">
+          <span>STAR DENSITY</span>
+          <span class="control-val" id="valStars">78,000</span>
+        </div>
+        <input id="ctrlStars" type="range" min="25000" max="120000" step="5000" value="78000" />
+      </div>
+
+      <div class="toggle-grid">
+        <button class="fui-btn" id="btnCalibration">FUI GRID: OFF</button>
+        <button class="fui-btn" id="btnColorPreset">PALETTE: CYAN</button>
+      </div>
+    </div>
+
+    <div class="fui-pill-bar">
+      <button class="fui-btn" id="btnPlayPause">PAUSE</button>
+      <button class="fui-btn" id="btnReset">RESET</button>
+      <button class="fui-btn" id="btnTogglePanel">CONTROLS</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+    // =========================================================================
+    // 1. DETERMINISTIC PRNG & MATH HELPERS
+    // =========================================================================
+    class PRNG {
+      constructor(seed = 70707) {
+        this.s = seed % 2147483647;
+        if (this.s <= 0) this.s += 2147483646;
+      }
+      next() {
+        this.s = (this.s * 16807) % 2147483647;
+        return (this.s - 1) / 2147483646;
+      }
+      range(min, max) {
+        return min + (max - min) * this.next();
+      }
+      gaussian() {
+        let u = 0;
+        let v = 0;
+        while (u === 0) u = this.next();
+        while (v === 0) v = this.next();
+        return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+      }
+    }
+
+    // =========================================================================
+    // 2. PALETTES & PARAMETERS
+    // =========================================================================
+    const PALETTES = {
+      cyan: {
+        label: 'CYAN',
+        coreHot: new THREE.Color(1.40, 1.72, 1.95),
+        armInner: new THREE.Color(0.38, 0.94, 1.00),
+        armMid: new THREE.Color(0.00, 0.88, 1.00),
+        armOuter: new THREE.Color(0.05, 0.56, 0.94),
+        aquaAccent: new THREE.Color(0.16, 1.00, 0.90),
+        nebulaInner: new THREE.Color(0.18, 0.88, 1.00),
+        nebulaOuter: new THREE.Color(0.00, 0.58, 0.92),
+        glowInner: new THREE.Vector3(0.20, 0.86, 1.04),
+        glowOuter: new THREE.Vector3(0.02, 0.45, 0.80),
+      },
+      ice: {
+        label: 'ICE',
+        coreHot: new THREE.Color(1.45, 1.78, 2.00),
+        armInner: new THREE.Color(0.60, 0.94, 1.00),
+        armMid: new THREE.Color(0.32, 0.82, 1.00),
+        armOuter: new THREE.Color(0.14, 0.50, 0.96),
+        aquaAccent: new THREE.Color(0.65, 0.95, 1.00),
+        nebulaInner: new THREE.Color(0.36, 0.85, 1.00),
+        nebulaOuter: new THREE.Color(0.10, 0.48, 0.94),
+        glowInner: new THREE.Vector3(0.38, 0.84, 1.04),
+        glowOuter: new THREE.Vector3(0.08, 0.40, 0.86),
+      },
+      aqua: {
+        label: 'AQUA',
+        coreHot: new THREE.Color(1.38, 1.82, 1.72),
+        armInner: new THREE.Color(0.42, 0.98, 0.92),
+        armMid: new THREE.Color(0.04, 0.96, 0.84),
+        armOuter: new THREE.Color(0.00, 0.64, 0.84),
+        aquaAccent: new THREE.Color(0.32, 1.00, 0.95),
+        nebulaInner: new THREE.Color(0.16, 0.92, 0.84),
+        nebulaOuter: new THREE.Color(0.00, 0.62, 0.80),
+        glowInner: new THREE.Vector3(0.14, 0.94, 0.86),
+        glowOuter: new THREE.Vector3(0.00, 0.50, 0.70),
+      }
+    };
+
+    const state = {
+      paused: false,
+      spinSpeed: 0.12,
+      twist: 4.25,
+      bloomStrength: 0.56,
+      coreIntensity: 1.00,
+      starCount: 78000,
+      nebulaCount: 14000,
+      sparkleCount: 320,
+      radius: 6.2,
+      paletteKey: 'cyan',
+      showCalibration: false
+    };
+
+    // =========================================================================
+    // 3. SCENE, CAMERA, RENDERER & HDR POST-PROCESSING
+    // =========================================================================
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+
+    const camera = new THREE.PerspectiveCamera(
+      40,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      120
+    );
+    const INITIAL_CAM_POS = new THREE.Vector3(0.0, 6.8, 14.4);
+    camera.position.copy(INITIAL_CAM_POS);
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      stencil: false
+    });
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    renderer.setPixelRatio(pixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000, 1);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    document.body.appendChild(renderer.domElement);
+
+    const composerTarget = new THREE.WebGLRenderTarget(
+      window.innerWidth * pixelRatio,
+      window.innerHeight * pixelRatio,
+      {
+        type: THREE.HalfFloatType,
+        samples: renderer.capabilities.isWebGL2 ? 4 : 0
+      }
+    );
+    const composer = new EffectComposer(renderer, composerTarget);
+    composer.setPixelRatio(pixelRatio);
+    composer.setSize(window.innerWidth, window.innerHeight);
+
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      state.bloomStrength,
+      0.48,
+      0.22
+    );
+    composer.addPass(bloomPass);
+
+    const outputPass = new OutputPass();
+    composer.addPass(outputPass);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.055;
+    controls.minDistance = 2.0;
+    controls.maxDistance = 28.0;
+    controls.target.set(0, 0, 0);
+
+    // =========================================================================
+    // 4. GALAXY CONTAINER & TILT ORIENTATION (MATCHING 07 GALAXY ANGLE)
+    // =========================================================================
+    const galaxyTiltGroup = new THREE.Group();
+    // Tilted bottom-left -> top-right diagonal inclination like 07 GALAXY
+    galaxyTiltGroup.rotation.set(0.14, 0.0, 0.42);
+    scene.add(galaxyTiltGroup);
+
+    const galaxySpinGroup = new THREE.Group();
+    galaxyTiltGroup.add(galaxySpinGroup);
+
+    // =========================================================================
+    // 5. VOLUMETRIC 3D OBLATE CORE HALO (RAY-CLOSEST-APPROACH SHADER)
+    // =========================================================================
+    const coreUniforms = {
+      uTime: { value: 0 },
+      uIntensity: { value: state.coreIntensity },
+      uGlowInner: { value: PALETTES[state.paletteKey].glowInner.clone() },
+      uGlowOuter: { value: PALETTES[state.paletteKey].glowOuter.clone() },
+      uLocalCamPos: { value: new THREE.Vector3() }
+    };
+
+    const coreShaderMat = new THREE.ShaderMaterial({
+      uniforms: coreUniforms,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.BackSide,
+      vertexShader: /* glsl */ `
+        varying vec3 vLocalPos;
+        void main() {
+          vLocalPos = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        uniform float uIntensity;
+        uniform vec3 uGlowInner;
+        uniform vec3 uGlowOuter;
+        uniform vec3 uLocalCamPos;
+        varying vec3 vLocalPos;
+
+        void main() {
+          vec3 ro = uLocalCamPos;
+          vec3 rd = normalize(vLocalPos - uLocalCamPos);
+
+          // Oblate galactic bulge compression (flattened along Y)
+          vec3 invScale = vec3(1.0, 1.92, 1.0);
+          vec3 roE = ro * invScale;
+          vec3 rdE = normalize(rd * invScale);
+
+          float tClosest = max(0.0, -dot(roE, rdE));
+          vec3 pClosest = roE + rdE * tClosest;
+          float d = length(pClosest);
+          float d2 = d * d;
+
+          // Subtle breathing pulse on emission core
+          float pulse = 1.0 + 0.03 * sin(uTime * 1.4);
+
+          float whiteCore = exp(-d2 * 7.8) * pulse;
+          float innerBulge = exp(-d2 * 2.05);
+          float outerAura = exp(-d2 * 0.44);
+          float edgeFade = smoothstep(3.35, 0.85, d);
+
+          vec3 col =
+            whiteCore * vec3(1.50, 1.80, 1.98) +
+            innerBulge * uGlowInner * 0.55 +
+            outerAura * uGlowOuter * 0.22;
+
+          col *= edgeFade * uIntensity;
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `
+    });
+
+    const coreGlowMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(3.6, 48, 32),
+      coreShaderMat
+    );
+    coreGlowMesh.renderOrder = 1;
+    galaxySpinGroup.add(coreGlowMesh);
+
+    // =========================================================================
+    // 6. SHADER MATERIALS FOR MICRO-STARS, NEBULA VEIL & HERO SPARKLES
+    // =========================================================================
+    const sharedParticleUniforms = {
+      uTime: { value: 0 },
+      uPixelRatio: { value: pixelRatio },
+      uViewportHeight: { value: window.innerHeight }
+    };
+
+    const starMaterial = new THREE.ShaderMaterial({
+      uniforms: sharedParticleUniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: /* glsl */ `
+        attribute float aSize;
+        attribute vec3 aColor;
+        attribute float aAlpha;
+        attribute float aPhase;
+
+        uniform float uTime;
+        uniform float uPixelRatio;
+        uniform float uViewportHeight;
+
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec3 pos = position;
+          float r = length(pos.xz);
+
+          // Gentle holographic wave ripple & micro-shimmer without breaking spiral cohesion
+          float wave = sin(r * 1.85 - uTime * 1.35 + aPhase * 0.35);
+          pos.y += wave * 0.018 * smoothstep(0.5, 5.5, r);
+
+          vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+          float dist = max(0.5, -mvPosition.z);
+
+          float twinkle = 0.82 + 0.18 * sin(uTime * (1.8 + mod(aPhase, 2.5)) + aPhase * 6.2831);
+          float sizeFactor = (uViewportHeight * 0.0038) * uPixelRatio;
+          gl_PointSize = clamp(aSize * sizeFactor * (11.5 / dist) * (0.94 + 0.06 * twinkle), 1.0, 36.0);
+
+          vColor = aColor * (0.92 + 0.10 * wave);
+          vAlpha = aAlpha * twinkle;
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec2 uv = gl_PointCoord - 0.5;
+          float d2 = dot(uv, uv) * 4.0;
+          if (d2 > 1.0) discard;
+
+          // Razor-sharp pinpoint core + delicate micro-halo
+          float core = exp(-d2 * 9.5);
+          float halo = exp(-d2 * 2.4) * 0.22;
+          float alpha = (core + halo) * vAlpha;
+
+          gl_FragColor = vec4(vColor * alpha, alpha);
+        }
+      `
+    });
+
+    const nebulaMaterial = new THREE.ShaderMaterial({
+      uniforms: sharedParticleUniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: /* glsl */ `
+        attribute float aSize;
+        attribute vec3 aColor;
+        attribute float aAlpha;
+        attribute float aPhase;
+
+        uniform float uTime;
+        uniform float uPixelRatio;
+        uniform float uViewportHeight;
+
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec3 pos = position;
+          float r = length(pos.xz);
+          pos.y += sin(r * 1.4 - uTime * 1.1 + aPhase) * 0.02;
+
+          vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+          float dist = max(0.8, -mvPosition.z);
+
+          float sizeFactor = (uViewportHeight * 0.0115) * uPixelRatio;
+          gl_PointSize = clamp(aSize * sizeFactor * (9.5 / dist), 2.0, 150.0);
+
+          vColor = aColor;
+          vAlpha = aAlpha;
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec2 uv = gl_PointCoord - 0.5;
+          float d2 = dot(uv, uv) * 4.0;
+          if (d2 > 1.0) discard;
+
+          // Smooth Gaussian plasma veil
+          float cloud = exp(-d2 * 3.8) * smoothstep(1.0, 0.2, d2);
+          float alpha = cloud * vAlpha;
+          gl_FragColor = vec4(vColor * alpha, alpha);
+        }
+      `
+    });
+
+    const sparkleMaterial = new THREE.ShaderMaterial({
+      uniforms: sharedParticleUniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: /* glsl */ `
+        attribute float aSize;
+        attribute vec3 aColor;
+        attribute float aAlpha;
+        attribute float aPhase;
+
+        uniform float uTime;
+        uniform float uPixelRatio;
+        uniform float uViewportHeight;
+
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          float dist = max(0.8, -mvPosition.z);
+          float pulse = 0.65 + 0.35 * sin(uTime * 2.4 + aPhase * 6.2831);
+
+          float sizeFactor = (uViewportHeight * 0.0065) * uPixelRatio;
+          gl_PointSize = clamp(aSize * sizeFactor * (9.5 / dist) * (0.85 + 0.25 * pulse), 2.0, 56.0);
+
+          vColor = aColor;
+          vAlpha = aAlpha * pulse;
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vColor;
+        varying float vAlpha;
+
+        void main() {
+          vec2 uv = (gl_PointCoord - 0.5) * 2.0;
+          float d2 = dot(uv, uv);
+          if (d2 > 1.0) discard;
+
+          float center = exp(-d2 * 10.0);
+          float crossX = exp(-abs(uv.y) * 18.0) * exp(-abs(uv.x) * 4.2);
+          float crossY = exp(-abs(uv.x) * 18.0) * exp(-abs(uv.y) * 4.2);
+          float intensity = (center + (crossX + crossY) * 0.45) * smoothstep(1.0, 0.15, d2);
+
+          gl_FragColor = vec4(vColor * intensity * vAlpha, intensity * vAlpha);
+        }
+      `
+    });
+
+    // =========================================================================
+    // 7. PROCEDURAL SPIRAL GALAXY GENERATOR
+    // =========================================================================
+    let starPoints = null;
+    let nebulaPoints = null;
+    let sparklePoints = null;
+
+    function buildGalaxy() {
+      const palette = PALETTES[state.paletteKey];
+      const rng = new PRNG(70707);
+      const R = state.radius;
+      const twist = state.twist;
+
+      // Update volumetric core colors
+      coreUniforms.uGlowInner.value.copy(palette.glowInner);
+      coreUniforms.uGlowOuter.value.copy(palette.glowOuter);
+
+      // Helper: compute logarithmic spiral angle + subtle organic warp
+      const spiralAngle = (r, armOffset) => {
+        const logPhase = twist * Math.log(1.0 + r / 0.52);
+        const ripple = 0.11 * Math.sin(r * 1.25 + armOffset * 1.7);
+        return armOffset + logPhase + ripple;
+      };
+
+      // -----------------------------------------------------------------------
+      // A. MICRO-PARTICLE STARS (Core Bulge + 2 Primary Arms + Spurs + Outer Halo)
+      // -----------------------------------------------------------------------
+      const N = state.starCount;
+      const sPos = new Float32Array(N * 3);
+      const sCol = new Float32Array(N * 3);
+      const sSize = new Float32Array(N);
+      const sAlpha = new Float32Array(N);
+      const sPhase = new Float32Array(N);
+
+      const tmpCol = new THREE.Color();
+
+      for (let i = 0; i < N; i++) {
+        const i3 = i * 3;
+        const role = rng.next();
+        let x = 0, y = 0, z = 0;
+        let radialNorm = 0;
+        let ridgeFactor = 1.0;
+
+        if (role < 0.14) {
+          // 1) Oblate Central Bulge & Inner Bar Transition
+          const r = 1.15 * Math.pow(rng.next(), 1.65);
+          const theta = rng.range(0, Math.PI * 2);
+          const cosPhi = rng.range(-1, 1);
+          const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
+          x = r * sinPhi * Math.cos(theta);
+          y = r * cosPhi * 0.44;
+          z = r * sinPhi * Math.sin(theta);
+
+          radialNorm = (r / R) * 0.25;
+          ridgeFactor = 1.0;
+          sSize[i] = rng.next() < 0.12 ? rng.range(1.4, 2.3) : rng.range(0.65, 1.35);
+          sAlpha[i] = rng.range(0.40, 0.78) * (1.0 - 0.35 * (r / 1.2));
+        } else if (role < 0.66) {
+          // 2) 2 Dominant Sweeping Spiral Arms with Multi-Filament Feathering
+          const armIdx = i % 2;
+          const armOffset = armIdx * Math.PI;
+          const t = Math.pow(rng.next(), 0.74);
+          const r = 0.28 + t * (R - 0.28);
+          radialNorm = r / R;
+
+          const baseAngle = spiralAngle(r, armOffset);
+          // Multi-band sub-filaments + wider trailing feathered dust
+          const isWake = rng.next() < 0.28;
+          const subBranch = rng.next() < 0.35 ? 0.16 * Math.sin(r * 2.1 + armIdx) : 0.0;
+          const sigmaAngle = (0.14 + 0.22 * radialNorm) * (isWake ? 2.1 : 1.0);
+          const dAngle = rng.gaussian() * sigmaAngle + (isWake ? -0.14 : 0.0) + subBranch;
+          const angle = baseAngle + dAngle;
+
+          const diskThick = 0.045 + 0.08 * radialNorm + 0.20 * Math.exp(-r / 0.85);
+          x = Math.cos(angle) * r;
+          z = Math.sin(angle) * r;
+          y = rng.gaussian() * diskThick;
+
+          ridgeFactor = Math.exp(-Math.abs(dAngle) / (0.16 + 0.18 * radialNorm));
+          const isHero = rng.next() < 0.055;
+          sSize[i] = isHero ? rng.range(1.75, 2.8) : rng.range(0.62, 1.45);
+          sAlpha[i] = (0.24 + 0.48 * ridgeFactor) * (1.0 - 0.32 * Math.pow(radialNorm, 1.45));
+        } else if (role < 0.86) {
+          // 3) Secondary Inter-Arm Filaments / Spurs
+          const spurIdx = i % 2;
+          const spurOffset = spurIdx * Math.PI + 0.44 * Math.PI;
+          const t = Math.pow(rng.next(), 0.78);
+          const r = 0.95 + t * (R * 0.96 - 0.95);
+          radialNorm = r / R;
+
+          const baseAngle = twist * 1.08 * Math.log(1.0 + r / 0.56) + spurOffset;
+          const sigmaAngle = 0.17 + 0.25 * radialNorm;
+          const dAngle = rng.gaussian() * sigmaAngle;
+          const angle = baseAngle + dAngle;
+
+          const diskThick = 0.055 + 0.095 * radialNorm;
+          x = Math.cos(angle) * r;
+          z = Math.sin(angle) * r;
+          y = rng.gaussian() * diskThick;
+
+          ridgeFactor = Math.exp(-Math.abs(dAngle) / 0.25) * 0.65;
+          sSize[i] = rng.range(0.60, 1.35);
+          sAlpha[i] = rng.range(0.20, 0.52) * (1.0 - 0.40 * radialNorm);
+        } else {
+          // 4) Scattered Outer Corona & Micro-Particle Dust Halo
+          const r = 0.85 + Math.pow(rng.next(), 0.54) * (R * 1.18 - 0.85);
+          radialNorm = Math.min(1.0, r / (R * 1.15));
+          const angle = rng.range(0, Math.PI * 2);
+          const haloThick = 0.12 + 0.34 * radialNorm;
+
+          x = Math.cos(angle) * r;
+          z = Math.sin(angle) * r;
+          y = rng.gaussian() * haloThick;
+
+          ridgeFactor = 0.32;
+          sSize[i] = rng.next() < 0.1 ? rng.range(1.35, 2.2) : rng.range(0.55, 1.2);
+          sAlpha[i] = rng.range(0.16, 0.58) * (1.0 - 0.52 * Math.pow(radialNorm, 1.55));
+        }
+
+        sPos[i3] = x;
+        sPos[i3 + 1] = y;
+        sPos[i3 + 2] = z;
+        sPhase[i] = rng.next();
+
+        // Color mixing: white-hot core -> icy cyan ridge -> electric cyan -> outer ice blue
+        if (radialNorm < 0.09) {
+          tmpCol.copy(palette.coreHot).lerp(palette.armInner, radialNorm / 0.09);
+        } else if (radialNorm < 0.45) {
+          const k = (radialNorm - 0.09) / 0.36;
+          tmpCol.copy(palette.armInner).lerp(palette.armMid, k);
+        } else {
+          const k = Math.min(1.0, (radialNorm - 0.45) / 0.55);
+          tmpCol.copy(palette.armMid).lerp(palette.armOuter, k);
+        }
+
+        // Crisp white-hot pinpoint highlights & neon-aqua star sparkles
+        const sparkRoll = rng.next();
+        if (sparkRoll < 0.09 * ridgeFactor + 0.025) {
+          tmpCol.lerp(palette.coreHot, 0.78);
+        } else if (sparkRoll < 0.24) {
+          tmpCol.lerp(palette.aquaAccent, 0.36);
+        }
+
+        sCol[i3] = tmpCol.r;
+        sCol[i3 + 1] = tmpCol.g;
+        sCol[i3 + 2] = tmpCol.b;
+      }
+
+      const starGeo = new THREE.BufferGeometry();
+      starGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+      starGeo.setAttribute('aColor', new THREE.BufferAttribute(sCol, 3));
+      starGeo.setAttribute('aSize', new THREE.BufferAttribute(sSize, 1));
+      starGeo.setAttribute('aAlpha', new THREE.BufferAttribute(sAlpha, 1));
+      starGeo.setAttribute('aPhase', new THREE.BufferAttribute(sPhase, 1));
+
+      if (starPoints) {
+        starPoints.geometry.dispose();
+        starPoints.geometry = starGeo;
+      } else {
+        starPoints = new THREE.Points(starGeo, starMaterial);
+        starPoints.renderOrder = 3;
+        galaxySpinGroup.add(starPoints);
+      }
+
+      // -----------------------------------------------------------------------
+      // B. TRANSLUCENT VOLUMETRIC SPIRAL NEBULA VEIL
+      // -----------------------------------------------------------------------
+      const M = state.nebulaCount;
+      const nPos = new Float32Array(M * 3);
+      const nCol = new Float32Array(M * 3);
+      const nSize = new Float32Array(M);
+      const nAlpha = new Float32Array(M);
+      const nPhase = new Float32Array(M);
+
+      for (let i = 0; i < M; i++) {
+        const i3 = i * 3;
+        const role = rng.next();
+        let r = 0, angle = 0, y = 0;
+
+        if (role < 0.24) {
+          // Inner glowing ring & core cloud
+          r = Math.pow(rng.next(), 1.35) * 2.1;
+          angle = rng.range(0, Math.PI * 2);
+          y = rng.gaussian() * (0.24 * Math.exp(-r / 1.2) + 0.06);
+        } else if (role < 0.86) {
+          // Tight plasma clouds along primary spiral arms
+          const armIdx = i % 2;
+          const t = Math.pow(rng.next(), 0.78);
+          r = 0.3 + t * (R * 0.92 - 0.3);
+          const radialNorm = r / R;
+          angle = spiralAngle(r, armIdx * Math.PI) + rng.gaussian() * (0.11 + 0.16 * radialNorm);
+          y = rng.gaussian() * (0.06 + 0.08 * radialNorm);
+        } else {
+          // Secondary spur wisps
+          const spurIdx = i % 2;
+          const t = rng.next();
+          r = 1.2 + t * (R * 0.86 - 1.2);
+          angle = twist * 1.1 * Math.log(1.0 + r / 0.58) + spurIdx * Math.PI + 0.46 * Math.PI + rng.gaussian() * 0.22;
+          y = rng.gaussian() * 0.08;
+        }
+
+        const radialNorm = Math.min(1.0, r / R);
+        nPos[i3] = Math.cos(angle) * r;
+        nPos[i3 + 1] = y;
+        nPos[i3 + 2] = Math.sin(angle) * r;
+        nPhase[i] = rng.next() * Math.PI * 2;
+
+        nSize[i] = rng.range(2.0, 4.8) * (0.75 + 0.55 * radialNorm);
+        nAlpha[i] = (0.011 + 0.012 * (1.0 - radialNorm)) * (role < 0.24 ? 1.15 : 1.0);
+
+        tmpCol.copy(palette.nebulaInner).lerp(palette.nebulaOuter, Math.pow(radialNorm, 0.75));
+        nCol[i3] = tmpCol.r;
+        nCol[i3 + 1] = tmpCol.g;
+        nCol[i3 + 2] = tmpCol.b;
+      }
+
+      const nebulaGeo = new THREE.BufferGeometry();
+      nebulaGeo.setAttribute('position', new THREE.BufferAttribute(nPos, 3));
+      nebulaGeo.setAttribute('aColor', new THREE.BufferAttribute(nCol, 3));
+      nebulaGeo.setAttribute('aSize', new THREE.BufferAttribute(nSize, 1));
+      nebulaGeo.setAttribute('aAlpha', new THREE.BufferAttribute(nAlpha, 1));
+      nebulaGeo.setAttribute('aPhase', new THREE.BufferAttribute(nPhase, 1));
+
+      if (nebulaPoints) {
+        nebulaPoints.geometry.dispose();
+        nebulaPoints.geometry = nebulaGeo;
+      } else {
+        nebulaPoints = new THREE.Points(nebulaGeo, nebulaMaterial);
+        nebulaPoints.renderOrder = 2;
+        galaxySpinGroup.add(nebulaPoints);
+      }
+
+      // -----------------------------------------------------------------------
+      // C. BRIGHT WHITE-HOT STARBURST HERO NODES
+      // -----------------------------------------------------------------------
+      const K = state.sparkleCount;
+      const kPos = new Float32Array(K * 3);
+      const kCol = new Float32Array(K * 3);
+      const kSize = new Float32Array(K);
+      const kAlpha = new Float32Array(K);
+      const kPhase = new Float32Array(K);
+
+      for (let i = 0; i < K; i++) {
+        const i3 = i * 3;
+        const armIdx = i % 2;
+        const t = Math.pow(rng.next(), 0.92);
+        const r = 0.25 + t * (R * 0.88 - 0.25);
+        const radialNorm = r / R;
+        const angle = spiralAngle(r, armIdx * Math.PI) + rng.gaussian() * (0.08 + 0.11 * radialNorm);
+
+        kPos[i3] = Math.cos(angle) * r;
+        kPos[i3 + 1] = rng.gaussian() * 0.05;
+        kPos[i3 + 2] = Math.sin(angle) * r;
+
+        tmpCol.copy(palette.coreHot).lerp(palette.armMid, radialNorm * 0.45);
+        kCol[i3] = tmpCol.r;
+        kCol[i3 + 1] = tmpCol.g;
+        kCol[i3 + 2] = tmpCol.b;
+
+        kSize[i] = rng.range(2.2, 4.6) * (1.1 - 0.35 * radialNorm);
+        kAlpha[i] = rng.range(0.55, 0.95) * (1.0 - 0.3 * radialNorm);
+        kPhase[i] = rng.next();
+      }
+
+      const sparkleGeo = new THREE.BufferGeometry();
+      sparkleGeo.setAttribute('position', new THREE.BufferAttribute(kPos, 3));
+      sparkleGeo.setAttribute('aColor', new THREE.BufferAttribute(kCol, 3));
+      sparkleGeo.setAttribute('aSize', new THREE.BufferAttribute(kSize, 1));
+      sparkleGeo.setAttribute('aAlpha', new THREE.BufferAttribute(kAlpha, 1));
+      sparkleGeo.setAttribute('aPhase', new THREE.BufferAttribute(kPhase, 1));
+
+      if (sparklePoints) {
+        sparklePoints.geometry.dispose();
+        sparklePoints.geometry = sparkleGeo;
+      } else {
+        sparklePoints = new THREE.Points(sparkleGeo, sparkleMaterial);
+        sparklePoints.renderOrder = 4;
+        galaxySpinGroup.add(sparklePoints);
+      }
+
+      document.getElementById('telemetryCount').textContent = (N + M + K).toLocaleString();
+    }
+
+    // =========================================================================
+    // 8. OPTIONAL HOLOGRAPHIC FUI CALIBRATION OVERLAY (TOGGLEABLE)
+    // =========================================================================
+    const calibrationGroup = new THREE.Group();
+    calibrationGroup.visible = state.showCalibration;
+    galaxyTiltGroup.add(calibrationGroup);
+
+    function makeFuiLineMaterial(hexColor, opacity) {
+      return new THREE.ShaderMaterial({
+        uniforms: {
+          uColor: { value: new THREE.Color(hexColor) },
+          uOpacity: { value: opacity }
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        vertexShader: /* glsl */ `
+          void main() {
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: /* glsl */ `
+          uniform vec3 uColor;
+          uniform float uOpacity;
+          void main() {
+            gl_FragColor = vec4(uColor * uOpacity, uOpacity);
+          }
+        `
+      });
+    }
+
+    function buildCalibrationGrid() {
+      const cyanLineMat = makeFuiLineMaterial(0x00eaff, 0.28);
+      const dimLineMat = makeFuiLineMaterial(0x0099cc, 0.15);
+
+      // Concentric dashed/solid holographic rings
+      const ringRadii = [2.4, 4.6, 6.7, 7.15];
+      ringRadii.forEach((rad, idx) => {
+        const segs = 144;
+        const pts = [];
+        for (let i = 0; i < segs; i++) {
+          if (idx === 1 && i % 4 >= 2) continue; // dashed inner ring
+          const a = (i / segs) * Math.PI * 2;
+          const a2 = ((i + 1) / segs) * Math.PI * 2;
+          pts.push(
+            new THREE.Vector3(Math.cos(a) * rad, 0, Math.sin(a) * rad),
+            new THREE.Vector3(Math.cos(a2) * rad, 0, Math.sin(a2) * rad)
+          );
+        }
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const obj = new THREE.LineSegments(geo, idx === 2 ? cyanLineMat : dimLineMat);
+        calibrationGroup.add(obj);
+      });
+
+      // Outer degree ticks & crosshairs
+      const tickPts = [];
+      for (let deg = 0; deg < 360; deg += 5) {
+        const rad = THREE.MathUtils.degToRad(deg);
+        const isMajor = deg % 30 === 0;
+        const r0 = 6.85;
+        const r1 = isMajor ? 7.35 : 7.02;
+        tickPts.push(
+          new THREE.Vector3(Math.cos(rad) * r0, 0, Math.sin(rad) * r0),
+          new THREE.Vector3(Math.cos(rad) * r1, 0, Math.sin(rad) * r1)
+        );
+      }
+      // Subtle galactic axis crosshairs
+      tickPts.push(
+        new THREE.Vector3(-7.7, 0, 0), new THREE.Vector3(-6.5, 0, 0),
+        new THREE.Vector3(6.5, 0, 0), new THREE.Vector3(7.7, 0, 0),
+        new THREE.Vector3(0, 0, -7.7), new THREE.Vector3(0, 0, -6.5),
+        new THREE.Vector3(0, 0, 6.5), new THREE.Vector3(0, 0, 7.7),
+        new THREE.Vector3(0, -1.8, 0), new THREE.Vector3(0, 1.8, 0)
+      );
+
+      calibrationGroup.add(
+        new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(tickPts), cyanLineMat)
+      );
+    }
+
+    buildCalibrationGrid();
+    buildGalaxy();
+
+    // =========================================================================
+    // 9. UI BINDINGS & KEYBOARD SHORTCUTS
+    // =========================================================================
+    const fuiLayer = document.getElementById('fuiLayer');
+    const controlsWrap = document.getElementById('controlsWrap');
+    const fuiPanel = document.getElementById('fuiPanel');
+    const btnTogglePanel = document.getElementById('btnTogglePanel');
+    const btnPlayPause = document.getElementById('btnPlayPause');
+    const btnReset = document.getElementById('btnReset');
+    const btnCalibration = document.getElementById('btnCalibration');
+    const btnColorPreset = document.getElementById('btnColorPreset');
+    const telemetryTilt = document.getElementById('telemetryTilt');
+
+    const ctrlSpin = document.getElementById('ctrlSpin');
+    const ctrlTwist = document.getElementById('ctrlTwist');
+    const ctrlBloom = document.getElementById('ctrlBloom');
+    const ctrlCore = document.getElementById('ctrlCore');
+    const ctrlStars = document.getElementById('ctrlStars');
+
+    btnTogglePanel.addEventListener('click', () => {
+      const open = fuiPanel.classList.toggle('open');
+      btnTogglePanel.classList.toggle('active', open);
+    });
+
+    function togglePause() {
+      state.paused = !state.paused;
+      btnPlayPause.textContent = state.paused ? 'PLAY' : 'PAUSE';
+      btnPlayPause.classList.toggle('active', state.paused);
+    }
+
+    function resetView() {
+      camera.position.copy(INITIAL_CAM_POS);
+      controls.target.set(0, 0, 0);
+      controls.update();
+      galaxySpinGroup.rotation.y = 0;
+    }
+
+    btnPlayPause.addEventListener('click', togglePause);
+    btnReset.addEventListener('click', resetView);
+
+    btnCalibration.addEventListener('click', () => {
+      state.showCalibration = !state.showCalibration;
+      calibrationGroup.visible = state.showCalibration;
+      btnCalibration.textContent = `FUI GRID: ${state.showCalibration ? 'ON' : 'OFF'}`;
+      btnCalibration.classList.toggle('active', state.showCalibration);
+    });
+
+    const paletteKeys = Object.keys(PALETTES);
+    btnColorPreset.addEventListener('click', () => {
+      const nextIdx = (paletteKeys.indexOf(state.paletteKey) + 1) % paletteKeys.length;
+      state.paletteKey = paletteKeys[nextIdx];
+      btnColorPreset.textContent = `PALETTE: ${PALETTES[state.paletteKey].label}`;
+      buildGalaxy();
+    });
+
+    ctrlSpin.addEventListener('input', (e) => {
+      state.spinSpeed = parseFloat(e.target.value);
+      document.getElementById('valSpin').textContent = state.spinSpeed.toFixed(2);
+    });
+
+    ctrlTwist.addEventListener('input', (e) => {
+      state.twist = parseFloat(e.target.value);
+      document.getElementById('valTwist').textContent = state.twist.toFixed(2);
+      buildGalaxy();
+    });
+
+    ctrlBloom.addEventListener('input', (e) => {
+      state.bloomStrength = parseFloat(e.target.value);
+      bloomPass.strength = state.bloomStrength;
+      document.getElementById('valBloom').textContent = state.bloomStrength.toFixed(2);
+    });
+
+    ctrlCore.addEventListener('input', (e) => {
+      state.coreIntensity = parseFloat(e.target.value);
+      coreUniforms.uIntensity.value = state.coreIntensity;
+      document.getElementById('valCore').textContent = state.coreIntensity.toFixed(2);
+    });
+
+    ctrlStars.addEventListener('input', (e) => {
+      state.starCount = parseInt(e.target.value, 10);
+      document.getElementById('valStars').textContent = state.starCount.toLocaleString();
+      buildGalaxy();
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePause();
+      } else if (e.key === 'r' || e.key === 'R') {
+        resetView();
+      } else if (e.key === 'h' || e.key === 'H') {
+        fuiLayer.classList.toggle('hidden');
+        controlsWrap.classList.toggle('hidden');
+      }
+    });
+
+    // =========================================================================
+    // 10. ANIMATION LOOP & RESPONSIVE RESIZE
+    // =========================================================================
+    const clock = new THREE.Clock();
+    const invCoreMatrix = new THREE.Matrix4();
+    const localNormalVec = new THREE.Vector3();
+    const camDirVec = new THREE.Vector3();
+    let simTime = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const dt = Math.min(clock.getDelta(), 0.05);
+      if (!state.paused) {
+        simTime += dt;
+        galaxySpinGroup.rotation.y += dt * state.spinSpeed;
+        calibrationGroup.rotation.y -= dt * 0.025;
+      }
+
+      sharedParticleUniforms.uTime.value = simTime;
+      coreUniforms.uTime.value = simTime;
+
+      controls.update();
+
+      // Update local camera position for ray-ellipsoid volumetric core shader
+      coreGlowMesh.updateMatrixWorld();
+      invCoreMatrix.copy(coreGlowMesh.matrixWorld).invert();
+      coreUniforms.uLocalCamPos.value.copy(camera.position).applyMatrix4(invCoreMatrix);
+
+      // Update live inclination telemetry
+      localNormalVec.set(0, 1, 0).applyQuaternion(galaxyTiltGroup.quaternion);
+      camDirVec.copy(camera.position).sub(controls.target).normalize();
+      const incDeg = 90 - THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(Math.abs(localNormalVec.dot(camDirVec)), 0, 1)));
+      telemetryTilt.textContent = `${incDeg.toFixed(1)}°`;
+
+      composer.render();
+    }
+
+    animate();
+
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const pr = Math.min(window.devicePixelRatio || 1, 2);
+
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+
+      renderer.setPixelRatio(pr);
+      renderer.setSize(w, h);
+
+      composer.setPixelRatio(pr);
+      composer.setSize(w, h);
+      bloomPass.resolution.set(w, h);
+
+      sharedParticleUniforms.uPixelRatio.value = pr;
+      sharedParticleUniforms.uViewportHeight.value = h;
+    });
+  </script>
+</body>
+</html>

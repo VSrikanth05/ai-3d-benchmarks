@@ -1,0 +1,2938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pagoda Bridge Gate</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #081220;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ============================================================================
+// 1. DETERMINISTIC PRNG & PROCEDURAL NOISE UTILITIES
+// ============================================================================
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hash2i(ix, iy, seed = 0) {
+  let n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 1442695041);
+  n = (n ^ (n >>> 13)) | 0;
+  n = Math.imul(n, 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function tileableValueNoise(x, y, periodX, periodY, seed = 0) {
+  const gx = ((x % periodX) + periodX) % periodX;
+  const gy = ((y % periodY) + periodY) % periodY;
+  const ix = Math.floor(gx);
+  const iy = Math.floor(gy);
+  const fx = gx - ix;
+  const fy = gy - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const ix1 = (ix + 1) % periodX;
+  const iy1 = (iy + 1) % periodY;
+  const a = hash2i(ix, iy, seed);
+  const b = hash2i(ix1, iy, seed);
+  const c = hash2i(ix, iy1, seed);
+  const d = hash2i(ix1, iy1, seed);
+  return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy;
+}
+
+function tileableFbm(u, v, basePeriod, octaves, seed = 0) {
+  let sum = 0;
+  let amp = 0.5;
+  let norm = 0;
+  let p = basePeriod;
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * tileableValueNoise(u * p, v * p, p, p, seed + o * 31);
+    norm += amp;
+    amp *= 0.5;
+    p *= 2;
+  }
+  return sum / norm;
+}
+
+// ============================================================================
+// 2. PARAMETRIC LOFTING & ANALYTIC NORMAL GEOMETRY ENGINE (NO PLACEHOLDER BOXES)
+// ============================================================================
+const _vA = new THREE.Vector3();
+const _vB = new THREE.Vector3();
+const _vC = new THREE.Vector3();
+const _du = new THREE.Vector3();
+const _dv = new THREE.Vector3();
+const _nrm = new THREE.Vector3();
+
+/**
+ * Core parametric surface builder with exact analytic normals N = normalize(dP/du x dP/dv).
+ * evalFn(u, v, outPos, outDu, outDv, outWeather) where u,v in [0, 1].
+ * outWeather: THREE.Vector3(ao, mossAffinity, toneShift)
+ */
+function buildParametricSurface(uSegs, vSegs, evalFn, opts = {}) {
+  const {
+    flipNormal = false,
+    uvScaleU = 1,
+    uvScaleV = 1,
+    defaultAO = 1.0,
+    defaultMoss = 0.25,
+    defaultTone = 0.0,
+  } = opts;
+
+  const cols = uSegs + 1;
+  const rows = vSegs + 1;
+  const count = cols * rows;
+
+  const positions = new Float32Array(count * 3);
+  const normals = new Float32Array(count * 3);
+  const uvs = new Float32Array(count * 2);
+  const weather = new Float32Array(count * 3);
+
+  const pos = new THREE.Vector3();
+  const du = new THREE.Vector3();
+  const dv = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  const w = new THREE.Vector3();
+
+  for (let j = 0; j <= vSegs; j++) {
+    const v = j / vSegs;
+    for (let i = 0; i <= uSegs; i++) {
+      const u = i / uSegs;
+      const idx = j * cols + i;
+
+      w.set(defaultAO, defaultMoss, defaultTone);
+      evalFn(u, v, pos, du, dv, w);
+
+      n.crossVectors(du, dv);
+      const len = n.length();
+      if (len > 1e-10) {
+        n.divideScalar(len);
+      } else {
+        // Analytic pole fallback via slight epsilon offset along interior v
+        const vEps = v < 0.5 ? Math.min(1, v + 1e-4) : Math.max(0, v - 1e-4);
+        evalFn(u, vEps, _vA, _du, _dv, _vB);
+        n.crossVectors(_du, _dv);
+        if (n.lengthSq() > 1e-12) {
+          n.normalize();
+        } else {
+          n.set(0, v > 0.5 ? 1 : -1, 0);
+        }
+      }
+      if (flipNormal) n.negate();
+
+      positions[idx * 3] = pos.x;
+      positions[idx * 3 + 1] = pos.y;
+      positions[idx * 3 + 2] = pos.z;
+
+      normals[idx * 3] = n.x;
+      normals[idx * 3 + 1] = n.y;
+      normals[idx * 3 + 2] = n.z;
+
+      uvs[idx * 2] = u * uvScaleU;
+      uvs[idx * 2 + 1] = v * uvScaleV;
+
+      weather[idx * 3] = w.x;
+      weather[idx * 3 + 1] = w.y;
+      weather[idx * 3 + 2] = w.z;
+    }
+  }
+
+  const indices = new Uint32Array(uSegs * vSegs * 6);
+  let ptr = 0;
+  for (let j = 0; j < vSegs; j++) {
+    for (let i = 0; i < uSegs; i++) {
+      const a = j * cols + i;
+      const b = a + 1;
+      const d = (j + 1) * cols + i;
+      const c = d + 1;
+      if (!flipNormal) {
+        indices[ptr++] = a; indices[ptr++] = b; indices[ptr++] = c;
+        indices[ptr++] = a; indices[ptr++] = c; indices[ptr++] = d;
+      } else {
+        indices[ptr++] = a; indices[ptr++] = c; indices[ptr++] = b;
+        indices[ptr++] = a; indices[ptr++] = d; indices[ptr++] = c;
+      }
+    }
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geom.setAttribute('aWeather', new THREE.BufferAttribute(weather, 3));
+  geom.setIndex(new THREE.BufferAttribute(indices, 1));
+  return geom;
+}
+
+/**
+ * Superellipse cross-section evaluator with exact analytic derivatives:
+ * |x|^p + |y|^p = 1, parameterized by angle theta in [0, 2pi]
+ * x = sgn(cos) * |cos|^e, y = sgn(sin) * |sin|^e where e = 2/p (e < 1 for rounded square)
+ */
+function evalSuperellipse(u, e, out) {
+  const th = u * Math.PI * 2;
+  const c = Math.cos(th);
+  const s = Math.sin(th);
+  const ac = Math.abs(c);
+  const as = Math.abs(s);
+  const eps = 1e-6;
+  const x = Math.sign(c) * Math.pow(ac + eps, e);
+  const y = Math.sign(s) * Math.pow(as + eps, e);
+  // Analytic derivatives w.r.t. u (chain rule * 2pi)
+  const dx = -Math.PI * 2 * e * Math.pow(ac + eps, e - 1) * s;
+  const dy = Math.PI * 2 * e * Math.pow(as + eps, e - 1) * c;
+  out.x = x;
+  out.y = y;
+  out.dx = dx;
+  out.dy = dy;
+}
+
+/**
+ * Closed beveled stone block (lofted superellipse along Y with smooth chamfered top & bottom caps).
+ * Replaces all box primitives with sculptural chamfered masonry with exact analytic normals!
+ */
+function buildBeveledBlock(w, h, d, opts = {}) {
+  const {
+    bevel = Math.min(w, h, d) * 0.08,
+    cornerExp = 0.24,      // 0.24 = crisp carved stone bevel; 0.45 = softer stone
+    taperTopX = 1.0,
+    taperTopZ = 1.0,
+    uSegs = 28,
+    vSegs = 12,
+    ao = 1.0,
+    moss = 0.28,
+    tone = 0.0,
+    topAO = 1.0,
+    botAO = 0.78,
+  } = opts;
+
+  const hx = w * 0.5;
+  const hy = h * 0.5;
+  const hz = d * 0.5;
+  const bv = Math.min(bevel, hx * 0.42, hy * 0.42, hz * 0.42);
+  const sec = { x: 0, y: 0, dx: 0, dy: 0 };
+
+  // Smooth closed profile in v in [0, 1]:
+  // v in [0, 0.14]: bottom cap from center r=0 to r=1-bv
+  // v in [0.14, 0.26]: bottom quarter-round bevel
+  // v in [0.26, 0.74]: straight/tapered side wall
+  // v in [0.74, 0.86]: top quarter-round bevel
+  // v in [0.86, 1.0]: top cap to center r=0
+  function evalHeightScale(v) {
+    const t0 = 0.14, t1 = 0.26, t2 = 0.74, t3 = 0.86;
+    const rxBevel = bv / Math.max(hx, 1e-4);
+    const rzBevel = bv / Math.max(hz, 1e-4);
+
+    let y, dy, sx, dsx, sz, dsz;
+    if (v <= t0) {
+      const s = v / t0;
+      const ds = 1 / t0;
+      const r0x = 1 - rxBevel;
+      const r0z = 1 - rzBevel;
+      y = -hy; dy = 0;
+      sx = s * r0x; dsx = ds * r0x;
+      sz = s * r0z; dsz = ds * r0z;
+    } else if (v <= t1) {
+      const a = ((v - t0) / (t1 - t0)) * (Math.PI * 0.5);
+      const da = (Math.PI * 0.5) / (t1 - t0);
+      y = -hy + bv * (1 - Math.cos(a));
+      dy = bv * Math.sin(a) * da;
+      sx = (1 - rxBevel) + rxBevel * Math.sin(a);
+      dsx = rxBevel * Math.cos(a) * da;
+      sz = (1 - rzBevel) + rzBevel * Math.sin(a);
+      dsz = rzBevel * Math.cos(a) * da;
+    } else if (v <= t2) {
+      const s = (v - t1) / (t2 - t1);
+      const ds = 1 / (t2 - t1);
+      y = -hy + bv + s * (h - 2 * bv);
+      dy = (h - 2 * bv) * ds;
+      sx = 1 + (taperTopX - 1) * s;
+      dsx = (taperTopX - 1) * ds;
+      sz = 1 + (taperTopZ - 1) * s;
+      dsz = (taperTopZ - 1) * ds;
+    } else if (v <= t3) {
+      const a = ((v - t2) / (t3 - t2)) * (Math.PI * 0.5);
+      const da = (Math.PI * 0.5) / (t3 - t2);
+      const bx = Math.min(rxBevel, taperTopX * 0.45);
+      const bz = Math.min(rzBevel, taperTopZ * 0.45);
+      y = hy - bv + bv * Math.sin(a);
+      dy = bv * Math.cos(a) * da;
+      sx = (taperTopX - bx) + bx * Math.cos(a);
+      dsx = -bx * Math.sin(a) * da;
+      sz = (taperTopZ - bz) + bz * Math.cos(a);
+      dsz = -bz * Math.sin(a) * da;
+    } else {
+      const s = (1 - v) / (1 - t3);
+      const ds = -1 / (1 - t3);
+      const bx = Math.min(rxBevel, taperTopX * 0.45);
+      const bz = Math.min(rzBevel, taperTopZ * 0.45);
+      const r1x = taperTopX - bx;
+      const r1z = taperTopZ - bz;
+      y = hy; dy = 0;
+      sx = s * r1x; dsx = ds * r1x;
+      sz = s * r1z; dsz = ds * r1z;
+    }
+    return { y, dy, sx, dsx, sz, dsz };
+  }
+
+  return buildParametricSurface(uSegs, vSegs, (u, v, pos, du, dv, weather) => {
+    evalSuperellipse(u, cornerExp, sec);
+    const p = evalHeightScale(v);
+
+    // CCW in XZ when viewed from +Y: x = hx*sx*sec.x, z = -hz*sz*sec.y
+    pos.set(hx * p.sx * sec.x, p.y, -hz * p.sz * sec.y);
+    du.set(hx * p.sx * sec.dx, 0, -hz * p.sz * sec.dy);
+    dv.set(hx * p.dsx * sec.x, p.dy, -hz * p.dsz * sec.y);
+
+    // Handle flat top/bottom pole normals analytically
+    if (v < 0.001) {
+      du.set(1, 0, 0); dv.set(0, 0, 1); // du x dv = (0, -1, 0)
+    } else if (v > 0.999) {
+      du.set(1, 0, 0); dv.set(0, 0, -1); // du x dv = (0, +1, 0)
+    }
+
+    const vLerp = Math.max(0, Math.min(1, (p.y + hy) / Math.max(h, 1e-4)));
+    weather.set(
+      ao * (botAO + (topAO - botAO) * vLerp),
+      moss + (v > 0.78 ? 0.16 : 0.0),
+      tone
+    );
+  }, {
+    uvScaleU: Math.max(1, (w + d) * 0.65),
+    uvScaleV: Math.max(1, h * 0.7),
+  });
+}
+
+/**
+ * Analytic surface of revolution (Lathe) with optional harmonic radial fluting/gadrooning.
+ * profileFn(v) -> { r, dr, y, dy, fluteAmp?, ao?, moss? } for v in [0, 1].
+ */
+function buildAnalyticLathe(profileFn, radialSegs = 40, heightSegs = 32, opts = {}) {
+  const {
+    fluteCount = 0,
+    uvScaleU = 2.0,
+    uvScaleV = 2.0,
+    tone = 0.0,
+  } = opts;
+
+  return buildParametricSurface(radialSegs, heightSegs, (u, v, pos, du, dv, weather) => {
+    const th = u * Math.PI * 2;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+    const prof = profileFn(v);
+
+    let r = prof.r;
+    let drdv = prof.dr;
+    let drdu = 0;
+
+    if (fluteCount > 0 && prof.fluteAmp) {
+      const fArg = fluteCount * th;
+      const fCos = Math.cos(fArg);
+      const fSin = Math.sin(fArg);
+      r += prof.fluteAmp * fCos;
+      drdu = -prof.fluteAmp * fluteCount * Math.PI * 2 * fSin;
+      if (prof.dFluteAmp) {
+        drdv += prof.dFluteAmp * fCos;
+      }
+    }
+
+    pos.set(r * c, prof.y, -r * s);
+
+    // dP/du
+    const dth = Math.PI * 2;
+    if (r < 1e-5) {
+      // Exact analytic pole tangent so du x dv points cleanly (0, ±1, 0)
+      const signY = prof.dr >= 0 ? -1 : 1;
+      du.set(c, 0, -s);
+      dv.set(-s * signY, 0, -c * signY);
+    } else {
+      du.set(drdu * c - r * s * dth, 0, -drdu * s - r * c * dth);
+      dv.set(drdv * c, prof.dy, -drdv * s);
+    }
+
+    weather.set(
+      prof.ao !== undefined ? prof.ao : 1.0,
+      prof.moss !== undefined ? prof.moss : 0.2,
+      tone
+    );
+  }, { uvScaleU, uvScaleV });
+}
+
+/**
+ * Parallel-transport lofted tube along a 3D parametric curve with analytic normals.
+ * pathFn(v) -> { pos: Vec3, tang: Vec3, sx, sy, dsx, dsy } (optional upHint)
+ * Sweeps a superellipse cross-section (cornerExp) with closed beveled ends if capped=true.
+ */
+function buildLoftedTube(pathFn, uSegs = 16, vSegs = 24, opts = {}) {
+  const {
+    cornerExp = 0.35,
+    capped = true,
+    upHint = new THREE.Vector3(0, 1, 0),
+    ao = 1.0,
+    moss = 0.22,
+    tone = 0.0,
+    uvScaleU = 1.0,
+    uvScaleV = 2.0,
+  } = opts;
+
+  // Precompute parallel-transport frames along v
+  const totalV = capped ? vSegs + 4 : vSegs;
+  const vSamples = [];
+  for (let j = 0; j <= totalV; j++) {
+    let vParam;
+    let endScale = 1.0;
+    let dEndScale = 0.0;
+    if (capped) {
+      if (j === 0) { vParam = 0.0; endScale = 0.0; dEndScale = 1.0; }
+      else if (j === 1) { vParam = 0.005; endScale = 0.82; dEndScale = 0.2; }
+      else if (j === totalV - 1) { vParam = 0.995; endScale = 0.82; dEndScale = -0.2; }
+      else if (j === totalV) { vParam = 1.0; endScale = 0.0; dEndScale = -1.0; }
+      else { vParam = (j - 2) / (vSegs); }
+    } else {
+      vParam = j / vSegs;
+    }
+    const sample = pathFn(vParam);
+    const T = sample.tang.clone().normalize();
+    vSamples.push({
+      v: vParam,
+      pos: sample.pos.clone(),
+      tang: sample.tang.clone(),
+      T,
+      sx: sample.sx * endScale,
+      sy: sample.sy * endScale,
+      dsx: (sample.dsx || 0) * endScale + sample.sx * dEndScale,
+      dsy: (sample.dsy || 0) * endScale + sample.sy * dEndScale,
+      endCap: capped && (j === 0 || j === totalV) ? (j === 0 ? -1 : 1) : 0,
+      N: new THREE.Vector3(),
+      B: new THREE.Vector3(),
+    });
+  }
+
+  // Initial frame at j=0
+  const T0 = vSamples[0].T;
+  let refUp = upHint.clone();
+  if (Math.abs(T0.dot(refUp)) > 0.95) {
+    refUp.set(1, 0, 0);
+    if (Math.abs(T0.dot(refUp)) > 0.95) refUp.set(0, 0, 1);
+  }
+  vSamples[0].N.crossVectors(refUp, T0).normalize();
+  vSamples[0].B.crossVectors(T0, vSamples[0].N).normalize();
+
+  // Parallel transport
+  const axis = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  for (let j = 1; j <= totalV; j++) {
+    const prev = vSamples[j - 1];
+    const curr = vSamples[j];
+    const dot = Math.max(-1, Math.min(1, prev.T.dot(curr.T)));
+    if (dot > 0.999999) {
+      curr.N.copy(prev.N);
+    } else {
+      axis.crossVectors(prev.T, curr.T);
+      if (axis.lengthSq() > 1e-10) {
+        axis.normalize();
+        const angle = Math.acos(dot);
+        q.setFromAxisAngle(axis, angle);
+        curr.N.copy(prev.N).applyQuaternion(q);
+      } else {
+        curr.N.copy(prev.N);
+      }
+    }
+    // Re-orthogonalize
+    curr.N.addScaledVector(curr.T, -curr.N.dot(curr.T)).normalize();
+    curr.B.crossVectors(curr.T, curr.N).normalize();
+  }
+
+  // Estimate frame derivatives dN/dv, dB/dv via central difference for exact curved-tube normals
+  for (let j = 0; j <= totalV; j++) {
+    const j0 = Math.max(0, j - 1);
+    const j1 = Math.min(totalV, j + 1);
+    const dvStep = Math.max(1e-4, vSamples[j1].v - vSamples[j0].v);
+    vSamples[j].dN = vSamples[j1].N.clone().sub(vSamples[j0].N).divideScalar(dvStep);
+    vSamples[j].dB = vSamples[j1].B.clone().sub(vSamples[j0].B).divideScalar(dvStep);
+  }
+
+  const sec = { x: 0, y: 0, dx: 0, dy: 0 };
+  return buildParametricSurface(uSegs, totalV, (u, vFrac, pos, du, dv, weather) => {
+    const j = Math.round(vFrac * totalV);
+    const fr = vSamples[j];
+    evalSuperellipse(u, cornerExp, sec);
+
+    pos.copy(fr.pos)
+      .addScaledVector(fr.N, fr.sx * sec.x)
+      .addScaledVector(fr.B, fr.sy * sec.y);
+
+    if (fr.endCap !== 0) {
+      // End cap outward normal = ±T
+      du.copy(fr.N);
+      dv.copy(fr.B).multiplyScalar(fr.endCap); // N x (±B) = ±T
+    } else {
+      du.set(0, 0, 0)
+        .addScaledVector(fr.N, fr.sx * sec.dx)
+        .addScaledVector(fr.B, fr.sy * sec.dy);
+
+      dv.copy(fr.tang)
+        .addScaledVector(fr.N, fr.dsx * sec.x)
+        .addScaledVector(fr.B, fr.dsy * sec.y)
+        .addScaledVector(fr.dN, fr.sx * sec.x)
+        .addScaledVector(fr.dB, fr.sy * sec.y);
+    }
+
+    weather.set(ao, moss, tone);
+  }, { uvScaleU, uvScaleV });
+}
+
+// Helper to transform a geometry in-place cleanly (updates positions & normals)
+function transformGeom(geom, { pos, rot, scale }) {
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  if (rot) q.setFromEuler(new THREE.Euler(rot[0] || 0, rot[1] || 0, rot[2] || 0));
+  const p = pos ? new THREE.Vector3(pos[0] || 0, pos[1] || 0, pos[2] || 0) : new THREE.Vector3();
+  const s = scale ? new THREE.Vector3(scale[0] ?? 1, scale[1] ?? 1, scale[2] ?? 1) : new THREE.Vector3(1, 1, 1);
+  m.compose(p, q, s);
+  geom.applyMatrix4(m);
+  return geom;
+}
+
+// ============================================================================
+// 3. PROCEDURAL CALIBRATED PBR TEXTURES & CREVICE MOSS SHADER ENHANCEMENT
+// ============================================================================
+function createLimestoneTextures() {
+  const size = 512;
+  const colCanvas = document.createElement('canvas');
+  const bmpCanvas = document.createElement('canvas');
+  const rghCanvas = document.createElement('canvas');
+  colCanvas.width = bmpCanvas.width = rghCanvas.width = size;
+  colCanvas.height = bmpCanvas.height = rghCanvas.height = size;
+
+  const colCtx = colCanvas.getContext('2d');
+  const bmpCtx = bmpCanvas.getContext('2d');
+  const rghCtx = rghCanvas.getContext('2d');
+
+  const colImg = colCtx.createImageData(size, size);
+  const bmpImg = bmpCtx.createImageData(size, size);
+  const rghImg = rghCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const nBroad = tileableFbm(u, v, 4, 4, 11);
+      const nStrata = tileableFbm(u * 0.5, v * 2.0, 6, 4, 37);
+      const nFine = tileableFbm(u, v, 32, 3, 73);
+      const nPit = tileableValueNoise(u * 64, v * 64, 64, 64, 109);
+      const pit = nPit < 0.14 ? (0.14 - nPit) / 0.14 : 0.0;
+
+      // Calibrated weathered pale limestone (warm ivory-beige-grey)
+      const tone = 0.78 + (nBroad - 0.5) * 0.14 + (nStrata - 0.5) * 0.09 + (nFine - 0.5) * 0.05 - pit * 0.14;
+      const warmShift = (nBroad - 0.5) * 14;
+
+      const r = Math.max(0, Math.min(255, Math.round(tone * 224 + warmShift)));
+      const g = Math.max(0, Math.min(255, Math.round(tone * 217 + warmShift * 0.6)));
+      const b = Math.max(0, Math.min(255, Math.round(tone * 204 - warmShift * 0.4)));
+
+      const hVal = Math.max(0, Math.min(255, Math.round((0.55 + (nStrata - 0.5) * 0.25 + (nFine - 0.5) * 0.25 - pit * 0.45) * 255)));
+      const rough = Math.max(0, Math.min(255, Math.round((0.83 + (1 - nFine) * 0.10 + pit * 0.08) * 255)));
+
+      const idx = (y * size + x) * 4;
+      colImg.data[idx] = r; colImg.data[idx + 1] = g; colImg.data[idx + 2] = b; colImg.data[idx + 3] = 255;
+      bmpImg.data[idx] = hVal; bmpImg.data[idx + 1] = hVal; bmpImg.data[idx + 2] = hVal; bmpImg.data[idx + 3] = 255;
+      rghImg.data[idx] = rough; rghImg.data[idx + 1] = rough; rghImg.data[idx + 2] = rough; rghImg.data[idx + 3] = 255;
+    }
+  }
+
+  colCtx.putImageData(colImg, 0, 0);
+  bmpCtx.putImageData(bmpImg, 0, 0);
+  rghCtx.putImageData(rghImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(colCanvas);
+  const bumpMap = new THREE.CanvasTexture(bmpCanvas);
+  const roughnessMap = new THREE.CanvasTexture(rghCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  for (const t of [map, bumpMap, roughnessMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  }
+  return { map, bumpMap, roughnessMap };
+}
+
+function createRoofTileTextures() {
+  const size = 512;
+  const colCanvas = document.createElement('canvas');
+  const bmpCanvas = document.createElement('canvas');
+  const rghCanvas = document.createElement('canvas');
+  colCanvas.width = bmpCanvas.width = rghCanvas.width = size;
+  colCanvas.height = bmpCanvas.height = rghCanvas.height = size;
+
+  const colCtx = colCanvas.getContext('2d');
+  const bmpCtx = bmpCanvas.getContext('2d');
+  const rghCtx = rghCanvas.getContext('2d');
+
+  const colImg = colCtx.createImageData(size, size);
+  const bmpImg = bmpCtx.createImageData(size, size);
+  const rghImg = rghCtx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    // Overlapping horizontal tile course seams along v
+    const courseFrac = (v * 14) % 1;
+    const courseStep = courseFrac < 0.09 ? courseFrac / 0.09 : 1.0;
+    const courseShade = 0.72 + 0.28 * courseStep;
+
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const nBroad = tileableFbm(u, v, 5, 4, 211);
+      const nStreak = tileableFbm(u * 2.5, v * 0.6, 8, 3, 257);
+      const nFine = tileableFbm(u, v, 28, 3, 307);
+
+      // Aged slate-blue-charcoal East-Asian glazed roof tile with subtle mineral bloom
+      const base = (0.34 + (nBroad - 0.5) * 0.14 + (nStreak - 0.5) * 0.09 + (nFine - 0.5) * 0.04) * courseShade;
+      const frost = Math.max(0, nBroad - 0.62) * 0.22;
+
+      const r = Math.max(0, Math.min(255, Math.round((base * 0.84 + frost * 0.78) * 255)));
+      const g = Math.max(0, Math.min(255, Math.round((base * 0.96 + frost * 0.84) * 255)));
+      const b = Math.max(0, Math.min(255, Math.round((base * 1.10 + frost * 0.88) * 255)));
+
+      const hVal = Math.max(0, Math.min(255, Math.round((0.35 + 0.45 * courseStep + (nFine - 0.5) * 0.16) * 255)));
+      const rough = Math.max(0, Math.min(255, Math.round((0.50 + (1 - nStreak) * 0.18 + frost * 0.35 + (1 - courseStep) * 0.22) * 255)));
+
+      const idx = (y * size + x) * 4;
+      colImg.data[idx] = r; colImg.data[idx + 1] = g; colImg.data[idx + 2] = b; colImg.data[idx + 3] = 255;
+      bmpImg.data[idx] = hVal; bmpImg.data[idx + 1] = hVal; bmpImg.data[idx + 2] = hVal; bmpImg.data[idx + 3] = 255;
+      rghImg.data[idx] = rough; rghImg.data[idx + 1] = rough; rghImg.data[idx + 2] = rough; rghImg.data[idx + 3] = 255;
+    }
+  }
+
+  colCtx.putImageData(colImg, 0, 0);
+  bmpCtx.putImageData(bmpImg, 0, 0);
+  rghCtx.putImageData(rghImg, 0, 0);
+
+  const map = new THREE.CanvasTexture(colCanvas);
+  const bumpMap = new THREE.CanvasTexture(bmpCanvas);
+  const roughnessMap = new THREE.CanvasTexture(rghCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  for (const t of [map, bumpMap, roughnessMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+  }
+  return { map, bumpMap, roughnessMap };
+}
+
+/**
+ * Enhances a calibrated MeshStandardMaterial with:
+ * - Baked vertex AO & crevice darkening (aWeather.x)
+ * - Soft organic crevice & waterline moss via 3D world-space procedural noise (aWeather.y)
+ * - Subtle stone tonal variation (aWeather.z)
+ * - Damp darkened waterline band near Y = 0..0.38
+ */
+function applyWeatheringShader(mat, opts = {}) {
+  const {
+    mossStrength = 0.72,
+    waterlineWetness = 0.65,
+    mossTintA = new THREE.Color(0x3e5534),
+    mossTintB = new THREE.Color(0x5e7648),
+  } = opts;
+
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uMossStrength = { value: mossStrength };
+    shader.uniforms.uWaterWet = { value: waterlineWetness };
+    shader.uniforms.uMossA = { value: mossTintA };
+    shader.uniforms.uMossB = { value: mossTintB };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        attribute vec3 aWeather;
+        varying vec3 vWeather;
+        varying vec3 vWorldPosW;
+        varying vec3 vWorldNormW;`
+      )
+      .replace(
+        '#include <worldpos_vertex>',
+        `#include <worldpos_vertex>
+        vWeather = aWeather;
+        vec4 wpW = modelMatrix * vec4(transformed, 1.0);
+        vWorldPosW = wpW.xyz;
+        vWorldNormW = normalize(mat3(modelMatrix) * objectNormal);`
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uMossStrength;
+        uniform float uWaterWet;
+        uniform vec3 uMossA;
+        uniform vec3 uMossB;
+        varying vec3 vWeather;
+        varying vec3 vWorldPosW;
+        varying vec3 vWorldNormW;
+
+        float hash31w(vec3 p) {
+          p = fract(p * 0.1031);
+          p += dot(p, p.yzx + 33.33);
+          return fract((p.x + p.y) * p.z);
+        }
+        float vnoise3w(vec3 p) {
+          vec3 i = floor(p);
+          vec3 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          float n000 = hash31w(i + vec3(0,0,0));
+          float n100 = hash31w(i + vec3(1,0,0));
+          float n010 = hash31w(i + vec3(0,1,0));
+          float n110 = hash31w(i + vec3(1,1,0));
+          float n001 = hash31w(i + vec3(0,0,1));
+          float n101 = hash31w(i + vec3(1,0,1));
+          float n011 = hash31w(i + vec3(0,1,1));
+          float n111 = hash31w(i + vec3(1,1,1));
+          float nx00 = mix(n000, n100, f.x);
+          float nx10 = mix(n010, n110, f.x);
+          float nx01 = mix(n001, n101, f.x);
+          float nx11 = mix(n011, n111, f.x);
+          return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
+        }
+        float fbm3w(vec3 p) {
+          float s = 0.55 * vnoise3w(p);
+          s += 0.30 * vnoise3w(p * 2.13 + vec3(7.1, 3.2, 5.4));
+          s += 0.15 * vnoise3w(p * 4.41 + vec3(1.9, 9.7, 2.3));
+          return s;
+        }`
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float wAO = clamp(vWeather.x, 0.25, 1.0);
+        float wMossHint = clamp(vWeather.y, 0.0, 1.0);
+        float wTone = vWeather.z;
+
+        // Subtle stone tone modulation + baked architectural crevice AO
+        float macroVar = (fbm3w(vWorldPosW * 0.42) - 0.5) * 0.16;
+        diffuseColor.rgb *= (1.0 + wTone * 0.14 + macroVar);
+        diffuseColor.rgb *= mix(0.54, 1.0, wAO);
+
+        // Soft velvety moss in crevices, ledges, and damp waterline
+        float nMoss = fbm3w(vWorldPosW * 1.45 + vec3(2.3, 0.7, 4.1));
+        float nMossDetail = fbm3w(vWorldPosW * 4.2);
+        float upFace = smoothstep(0.18, 0.82, vWorldNormW.y);
+        float creviceFactor = smoothstep(0.95, 0.58, wAO);
+        float waterBand = (1.0 - smoothstep(0.05, 0.95, vWorldPosW.y)) * smoothstep(-0.35, 0.06, vWorldPosW.y);
+
+        float mossDrive = wMossHint * (0.45 + 0.55 * upFace) + creviceFactor * 0.48 + waterBand * 0.78;
+        float mossMask = smoothstep(0.46, 0.78, mossDrive * 0.62 + nMoss * 0.55) * uMossStrength;
+        mossMask = clamp(mossMask, 0.0, 0.84);
+
+        vec3 mossCol = mix(uMossA, uMossB, nMossDetail);
+        diffuseColor.rgb = mix(diffuseColor.rgb, mossCol, mossMask);
+
+        // Wet darkened stone right near the water surface
+        float wetMask = (1.0 - smoothstep(0.02, 0.42, vWorldPosW.y)) * uWaterWet;
+        diffuseColor.rgb *= mix(1.0, 0.56, wetMask);`
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        float wetR = (1.0 - smoothstep(0.02, 0.36, vWorldPosW.y)) * uWaterWet;
+        roughnessFactor = mix(roughnessFactor, 0.28, wetR * 0.75);
+        float mCrev = smoothstep(0.92, 0.60, vWeather.x) * vWeather.y * uMossStrength;
+        roughnessFactor = mix(roughnessFactor, 0.96, clamp(mCrev, 0.0, 0.7));`
+      );
+  };
+  return mat;
+}
+
+// ============================================================================
+// 4. PROCEDURAL STUDIO ENVIRONMENT MAP (SOFTBOX PMREM)
+// ============================================================================
+function createStudioEnvironment(renderer) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  const envScene = new THREE.Scene();
+  envScene.background = new THREE.Color(0x0c192b);
+
+  // Soft overhead cool studio dome
+  const domeGeo = buildAnalyticLathe((v) => {
+    const a = v * Math.PI;
+    return { r: Math.sin(a) * 18, dr: Math.cos(a) * Math.PI * 18, y: -Math.cos(a) * 18, dy: Math.sin(a) * Math.PI * 18 };
+  }, 32, 24);
+  const domeMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {},
+    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      varying vec3 vDir;
+      void main() {
+        float y = vDir.y;
+        vec3 nadir = vec3(0.03, 0.06, 0.12);
+        vec3 horizon = vec3(0.18, 0.28, 0.42);
+        vec3 zenith = vec3(0.07, 0.12, 0.22);
+        vec3 col = y < 0.0 ? mix(horizon, nadir, clamp(-y * 2.2, 0.0, 1.0))
+                           : mix(horizon, zenith, pow(clamp(y, 0.0, 1.0), 0.75));
+        // Soft overhead key softbox
+        float keyBox = smoothstep(0.55, 0.96, dot(vDir, normalize(vec3(-0.45, 0.75, 0.5))));
+        col += vec3(0.75, 0.80, 0.88) * keyBox * 1.1;
+        // Cool rim softbox
+        float rimBox = smoothstep(0.60, 0.96, dot(vDir, normalize(vec3(0.65, 0.42, -0.65))));
+        col += vec3(0.32, 0.56, 0.92) * rimBox * 0.85;
+        // Subtle warm bounce
+        float warmSide = smoothstep(0.62, 0.95, dot(vDir, normalize(vec3(0.35, 0.18, 0.88))));
+        col += vec3(0.45, 0.34, 0.22) * warmSide * 0.45;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `
+  });
+  envScene.add(new THREE.Mesh(domeGeo, domeMat));
+
+  const envRT = pmrem.fromScene(envScene, 0.04);
+  domeGeo.dispose();
+  domeMat.dispose();
+  pmrem.dispose();
+  return envRT.texture;
+}
+
+// ============================================================================
+// 5. ARCHITECTURAL BUILDER: STYLIZED EAST-ASIAN PAGODA BRIDGE GATE
+// ============================================================================
+function buildPagodaBridgeGate(materials) {
+  const buckets = {
+    limestone: [],
+    columnStone: [],
+    recessDark: [],
+    roofTile: [],
+    accentBronze: [],
+  };
+
+  // Lantern registry for animation (glowing cores + glow halos + local lights)
+  const lanterns = [];
+  const root = new THREE.Group();
+
+  const push = (bucket, geom, xform) => {
+    if (xform) transformGeom(geom, xform);
+    buckets[bucket].push(geom);
+  };
+
+  // --------------------------------------------------------------------------
+  // A. SUBMERGED FOOTINGS & WATERLINE PLINTHS
+  // --------------------------------------------------------------------------
+  for (const side of [-1, 1]) {
+    // Pier water footing (2 stepped chamfered courses entering the water)
+    push('limestone', buildBeveledBlock(2.84, 0.56, 5.05, {
+      bevel: 0.07, cornerExp: 0.22, ao: 0.78, moss: 0.82, tone: -0.25, botAO: 0.55
+    }), { pos: [side * 3.38, -0.14, 0] });
+
+    push('limestone', buildBeveledBlock(2.68, 0.26, 4.78, {
+      bevel: 0.055, cornerExp: 0.22, ao: 0.88, moss: 0.68, tone: -0.10
+    }), { pos: [side * 3.36, 0.24, 0] });
+
+    // Stairway outer landing & wing-wall water footing
+    push('limestone', buildBeveledBlock(4.85, 0.52, 4.68, {
+      bevel: 0.07, cornerExp: 0.22, ao: 0.76, moss: 0.85, tone: -0.25, botAO: 0.52
+    }), { pos: [side * 7.02, -0.14, 0] });
+
+    push('limestone', buildBeveledBlock(4.62, 0.22, 4.46, {
+      bevel: 0.05, cornerExp: 0.22, ao: 0.88, moss: 0.65, tone: -0.08
+    }), { pos: [side * 7.00, 0.22, 0] });
+  }
+
+  // --------------------------------------------------------------------------
+  // B. CENTRAL ROUND ARCH: BARREL VAULT, VOUSSOIRS, KEYSTONE & SPANDREL WALL
+  // --------------------------------------------------------------------------
+  const archR = 2.02;
+  const archSpringY = 0.36;
+  const archDepth = 4.46;
+  const deckUnderY = 3.12;
+
+  // 1) Arch jamb vertical side walls from waterline up to springline
+  for (const side of [-1, 1]) {
+    push('limestone', buildBeveledBlock(0.32, 0.82, archDepth + 0.08, {
+      bevel: 0.04, cornerExp: 0.25, ao: 0.72, moss: 0.75, tone: -0.18
+    }), { pos: [side * (archR + 0.14), 0.02, 0] });
+  }
+
+  // 2) Inner curved arch barrel vault (parametric half-cylinder with fluted stone courses)
+  const vaultGeom = buildParametricSurface(44, 18, (u, v, pos, du, dv, weather) => {
+    const th = u * Math.PI; // 0 (+X) -> pi (-X)
+    const z = (v - 0.5) * archDepth;
+    // Subtle recessed masonry course grooves along the arch barrel
+    const courseWave = Math.pow(Math.abs(Math.sin(u * Math.PI * 15)), 0.25);
+    const r = archR + (1 - courseWave) * 0.022;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+
+    pos.set(r * c, archSpringY + r * s, z);
+    // Outward normal for an INNER tunnel points INWARD toward center (0, archSpringY, z)
+    // dP/du = (-r sin th * pi, r cos th * pi, 0), dP/dv = (0, 0, archDepth)
+    // du x dv = (r cos th * pi * archDepth, r sin th * pi * archDepth, 0) -> points OUTWARD radially
+    // So we use flipNormal: true so normals point INWARD into the arch opening!
+    du.set(-r * s * Math.PI, r * c * Math.PI, 0);
+    dv.set(0, 0, archDepth);
+
+    const depthDark = 1.0 - 0.34 * (1.0 - Math.abs(v - 0.5) * 2.0);
+    weather.set(0.76 * depthDark, 0.32 * (1 - s * 0.7), -0.22);
+  }, { flipNormal: true, uvScaleU: 3.5, uvScaleV: 2.5 });
+  push('limestone', vaultGeom);
+
+  // 3) Parametric solid spandrel walls (front & back faces + top cap bridging arch to deck)
+  const spandrelHalfW = 2.48;
+  const spandrelHalfZ = archDepth * 0.5;
+  for (const zSign of [-1, 1]) {
+    const spandrelFace = buildParametricSurface(44, 10, (u, v, pos, du, dv, weather) => {
+      const x = (u * 2 - 1) * spandrelHalfW;
+      const dxdu = 2 * spandrelHalfW;
+      const rad = archR + 0.02;
+      const inside = Math.abs(x) < rad - 0.01;
+      const yBot = inside ? archSpringY + Math.sqrt(Math.max(0.0001, rad * rad - x * x)) : archSpringY;
+      const dyBotdu = inside ? (-x / Math.sqrt(Math.max(0.0001, rad * rad - x * x))) * dxdu : 0;
+
+      const y = yBot + v * (deckUnderY - yBot);
+      const dydu = (1 - v) * dyBotdu;
+      const dydv = deckUnderY - yBot;
+
+      pos.set(x, y, zSign * spandrelHalfZ);
+      du.set(dxdu, dydu, 0);
+      dv.set(0, dydv, 0);
+      // Note: du x dv = (0, 0, dxdu * dydv) -> +Z! For zSign = -1 we flipNormal.
+      weather.set(0.88 + 0.10 * v, 0.30, 0.04);
+    }, { flipNormal: zSign < 0, uvScaleU: 2.8, uvScaleV: 1.4 });
+    push('limestone', spandrelFace);
+  }
+
+  // 4) Individual carved stone arch voussoir blocks on both +Z and -Z facades
+  const numVoussoirs = 19;
+  for (let i = 0; i < numVoussoirs; i++) {
+    const isKeystone = i === Math.floor(numVoussoirs / 2);
+    const th0 = (i / numVoussoirs) * Math.PI;
+    const th1 = ((i + 1) / numVoussoirs) * Math.PI;
+    const thMid = (th0 + th1) * 0.5;
+    const rIn = archR - 0.02;
+    const rOut = archR + (isKeystone ? 0.50 : 0.37);
+    const halfArc = (th1 - th0) * 0.47;
+    const vThick = isKeystone ? 0.24 : 0.16;
+
+    for (const zSign of [-1, 1]) {
+      const vGeo = buildLoftedTube((t) => {
+        const th = thMid + (t * 2 - 1) * halfArc;
+        const rMid = (rIn + rOut) * 0.5;
+        const pos = new THREE.Vector3(
+          rMid * Math.cos(th),
+          archSpringY + rMid * Math.sin(th),
+          zSign * (spandrelHalfZ + (isKeystone ? 0.06 : 0.025))
+        );
+        const tang = new THREE.Vector3(
+          -rMid * Math.sin(th) * (2 * halfArc),
+          rMid * Math.cos(th) * (2 * halfArc),
+          0
+        );
+        return {
+          pos,
+          tang,
+          sx: vThick * 0.5,
+          sy: (rOut - rIn) * 0.5,
+          dsx: 0,
+          dsy: 0,
+        };
+      }, 14, 6, {
+        cornerExp: 0.22,
+        capped: true,
+        upHint: new THREE.Vector3(0, 0, zSign),
+        ao: isKeystone ? 0.98 : 0.94,
+        moss: 0.24 + (1 - Math.sin(thMid)) * 0.25,
+        tone: isKeystone ? 0.22 : (i % 2 === 0 ? 0.08 : -0.06),
+      });
+      push('limestone', vGeo);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // C. TWO MASSIVE PIER BLOCKS WITH CARVED SQUARE LATTICE PANELS
+  // --------------------------------------------------------------------------
+  for (const side of [-1, 1]) {
+    const px = side * 3.34;
+    // 6 stacked slightly battered stone masonry courses (Y = 0.35 to 3.12)
+    const courseHeights = [0.46, 0.46, 0.46, 0.46, 0.46, 0.47];
+    let curY = 0.35;
+    for (let c = 0; c < courseHeights.length; c++) {
+      const ch = courseHeights[c];
+      const frac = c / courseHeights.length;
+      const cw = 2.60 - frac * 0.08;
+      const cd = 4.54 - frac * 0.08;
+      push('limestone', buildBeveledBlock(cw, ch - 0.012, cd, {
+        bevel: 0.042,
+        cornerExp: 0.22,
+        taperTopX: 0.994,
+        taperTopZ: 0.994,
+        uSegs: 32,
+        vSegs: 10,
+        ao: 0.88 + frac * 0.10,
+        moss: 0.26 + (1 - frac) * 0.34,
+        tone: (c % 2 === 0 ? 0.05 : -0.05),
+      }), { pos: [px, curY + ch * 0.5, 0] });
+      curY += ch;
+    }
+
+    // Carved Square Lattice Panels on Front (+Z) and Back (-Z) of each massive pier block
+    for (const zSign of [-1, 1]) {
+      const faceZ = zSign * 2.24;
+      const panelCenterY = 1.74;
+      const panelSize = 1.66;
+      const innerSize = 1.38;
+
+      // Dark recessed stone backing plate inside the lattice frame
+      push('recessDark', buildBeveledBlock(innerSize + 0.06, innerSize + 0.06, 0.10, {
+        bevel: 0.015, cornerExp: 0.20, uSegs: 16, vSegs: 6, ao: 0.48, moss: 0.45, tone: -0.25
+      }), { pos: [px, panelCenterY, faceZ - zSign * 0.01] });
+
+      // Outer molded square frame (4 lofted beveled bars)
+      const frameThick = 0.14;
+      const frameDepth = 0.18;
+      const fOff = (panelSize - frameThick) * 0.5;
+      // Top & bottom frame bars
+      for (const yDir of [-1, 1]) {
+        push('limestone', buildBeveledBlock(panelSize, frameThick, frameDepth, {
+          bevel: 0.025, cornerExp: 0.22, uSegs: 16, vSegs: 8, ao: 0.94, moss: yDir < 0 ? 0.58 : 0.35, tone: 0.12
+        }), { pos: [px, panelCenterY + yDir * fOff, faceZ + zSign * 0.04] });
+      }
+      // Left & right frame bars
+      for (const xDir of [-1, 1]) {
+        push('limestone', buildBeveledBlock(frameThick, panelSize - frameThick * 1.9, frameDepth, {
+          bevel: 0.025, cornerExp: 0.22, uSegs: 16, vSegs: 8, ao: 0.94, moss: 0.35, tone: 0.12
+        }), { pos: [px + xDir * fOff, panelCenterY, faceZ + zSign * 0.04] });
+      }
+
+      // Helper to add a carved beveled lattice bar in the pier's XY plane
+      const addLatticeBar = (x1, y1, x2, y2, barW = 0.068, barD = 0.115) => {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-4) return;
+        const cx = px + (x1 + x2) * 0.5;
+        const cy = panelCenterY + (y1 + y2) * 0.5;
+        const angle = Math.atan2(dy, dx);
+        push('columnStone', buildBeveledBlock(len + barW * 0.45, barW, barD, {
+          bevel: 0.014, cornerExp: 0.28, uSegs: 12, vSegs: 6, ao: 0.86, moss: 0.36, tone: 0.08
+        }), { pos: [cx, cy, faceZ + zSign * 0.048], rot: [0, 0, angle] });
+      };
+
+      // Traditional East-Asian geometric square lattice (*koshi* / *huiwen* fretwork):
+      // 1) Inner concentric frame (mid-square)
+      const m = 0.40;
+      addLatticeBar(-m, m, m, m);
+      addLatticeBar(-m, -m, m, -m);
+      addLatticeBar(-m, -m, -m, m);
+      addLatticeBar(m, -m, m, m);
+
+      // 2) Outer sub-border inset frame
+      const o = 0.65;
+      addLatticeBar(-o, o, o, o, 0.055, 0.095);
+      addLatticeBar(-o, -o, o, -o, 0.055, 0.095);
+      addLatticeBar(-o, -o, -o, o, 0.055, 0.095);
+      addLatticeBar(o, -o, o, o, 0.055, 0.095);
+
+      // 3) Central square medallion + carved boss
+      const c = 0.17;
+      addLatticeBar(-c, c, c, c, 0.062, 0.12);
+      addLatticeBar(-c, -c, c, -c, 0.062, 0.12);
+      addLatticeBar(-c, -c, -c, c, 0.062, 0.12);
+      addLatticeBar(c, -c, c, c, 0.062, 0.12);
+
+      // Central carved circular stone medallion boss
+      const boss = buildAnalyticLathe((v) => {
+        const a = v * Math.PI * 0.5;
+        return {
+          r: 0.115 * Math.sin(a),
+          dr: 0.115 * Math.cos(a) * Math.PI * 0.5,
+          y: 0.065 * Math.cos(a),
+          dy: -0.065 * Math.sin(a) * Math.PI * 0.5,
+          ao: 0.96, moss: 0.20,
+        };
+      }, 18, 8, { tone: 0.15 });
+      push('columnStone', boss, {
+        pos: [px, panelCenterY, faceZ + zSign * 0.055],
+        rot: [zSign > 0 ? Math.PI * 0.5 : -Math.PI * 0.5, 0, 0]
+      });
+
+      // 4) Cardinal axial struts connecting outer, middle, and inner squares
+      addLatticeBar(-o, 0, -c, 0);
+      addLatticeBar(c, 0, o, 0);
+      addLatticeBar(0, -o, 0, -c);
+      addLatticeBar(0, c, 0, o);
+
+      // 5) Corner interlocking square-key frets in all 4 quadrants
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          // Outer corner L-key returning inward
+          addLatticeBar(sx * m, sy * 0.53, sx * 0.53, sy * 0.53, 0.056, 0.105);
+          addLatticeBar(sx * 0.53, sy * m, sx * 0.53, sy * 0.53, 0.056, 0.105);
+          // Diagonal bridge bar linking corner of outer frame to corner of mid-square
+          addLatticeBar(sx * m, sy * m, sx * o, sy * o, 0.052, 0.095);
+          // Inner quadrant L-brace linking mid-square to center medallion
+          addLatticeBar(sx * 0.28, sy * c, sx * 0.28, sy * 0.28, 0.054, 0.105);
+          addLatticeBar(sx * c, sy * 0.28, sx * 0.28, sy * 0.28, 0.054, 0.105);
+        }
+      }
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // D. MAIN BRIDGE DECK CORNICE, DENTIL FRIEZE & PAVILION PLINTH
+  // --------------------------------------------------------------------------
+  // Lower cornice molding
+  push('limestone', buildBeveledBlock(9.45, 0.16, 4.74, {
+    bevel: 0.04, cornerExp: 0.20, uSegs: 36, vSegs: 8, ao: 0.86, moss: 0.35, tone: 0.06
+  }), { pos: [0, 3.16, 0] });
+
+  // Carved dentil blocks tucked under upper cornice along front & back
+  for (let i = -10; i <= 10; i++) {
+    const dx = i * 0.44;
+    for (const zSign of [-1, 1]) {
+      push('limestone', buildBeveledBlock(0.20, 0.11, 0.18, {
+        bevel: 0.02, cornerExp: 0.24, uSegs: 12, vSegs: 6, ao: 0.78, moss: 0.22, tone: -0.05
+      }), { pos: [dx, 3.24, zSign * 2.38] });
+    }
+  }
+
+  // Upper overhanging deck cornice slab
+  push('limestone', buildBeveledBlock(9.68, 0.18, 4.98, {
+    bevel: 0.045, cornerExp: 0.20, uSegs: 36, vSegs: 8, ao: 0.98, moss: 0.32, tone: 0.12
+  }), { pos: [0, 3.34, 0] });
+
+  // Raised central pavilion plinth on bridge deck supporting the 4 bulbous columns
+  push('limestone', buildBeveledBlock(7.65, 0.24, 4.24, {
+    bevel: 0.06, cornerExp: 0.26, taperTopX: 0.98, taperTopZ: 0.97, uSegs: 36, vSegs: 10, ao: 0.98, moss: 0.26, tone: 0.08
+  }), { pos: [0, 3.53, 0] });
+
+  // Subtle decorative stone paving slabs across central walkway
+  for (let i = -4; i <= 4; i++) {
+    push('columnStone', buildBeveledBlock(0.76, 0.045, 2.52, {
+      bevel: 0.014, cornerExp: 0.25, uSegs: 16, vSegs: 6, ao: 0.96, moss: 0.24, tone: (i % 2 === 0 ? 0.06 : -0.04)
+    }), { pos: [i * 0.80, 3.66, 0] });
+  }
+
+  // --------------------------------------------------------------------------
+  // E. TWO SYMMETRICAL STEPPED STAIRWAYS, WING-WALLS & BALUSTRADES
+  // --------------------------------------------------------------------------
+  const numSteps = 11;
+  const stairXStart = 4.62;
+  const stairXEnd = 8.48;
+  const stairYTop = 3.38;
+  const stairYBot = 0.34;
+  const stepDx = (stairXEnd - stairXStart) / numSteps;
+  const stepDy = (stairYTop - stairYBot) / numSteps;
+
+  for (const side of [-1, 1]) {
+    // 1) Stepped stone stair treads (lofted beveled slabs with bullnose)
+    for (let s = 0; s < numSteps; s++) {
+      const sx = side * (stairXStart + (s + 0.5) * stepDx);
+      const syTop = stairYTop - s * stepDy;
+      const treadH = stepDy + 0.08;
+      push('limestone', buildBeveledBlock(stepDx + 0.09, treadH, 3.88, {
+        bevel: 0.032, cornerExp: 0.26, uSegs: 24, vSegs: 8,
+        ao: 0.92, moss: 0.28 + (s / numSteps) * 0.30, tone: (s % 2 === 0 ? 0.04 : -0.05)
+      }), { pos: [sx, syTop - treadH * 0.5, 0] });
+
+      // Solid masonry fill beneath each step down to water plinth
+      const fillH = Math.max(0.2, syTop - treadH - 0.25);
+      if (fillH > 0.22) {
+        push('limestone', buildBeveledBlock(stepDx + 0.04, fillH + 0.14, 3.84, {
+          bevel: 0.025, cornerExp: 0.20, uSegs: 16, vSegs: 6,
+          ao: 0.82, moss: 0.45, tone: -0.10
+        }), { pos: [sx, 0.25 + fillH * 0.5, 0] });
+      }
+    }
+
+    // 2) Bottom quay stone landing pad
+    push('limestone', buildBeveledBlock(1.06, 0.20, 4.38, {
+      bevel: 0.045, cornerExp: 0.24, uSegs: 24, vSegs: 8, ao: 0.90, moss: 0.58, tone: 0.02
+    }), { pos: [side * 8.95, 0.36, 0] });
+
+    // 3) Sloped cheek-walls (wing walls) & balustrades along +Z and -Z
+    const slopeAngle = Math.atan2(stairYTop - stairYBot, stairXEnd - stairXStart);
+    const slopeLen = Math.hypot(stairXEnd - stairXStart, stairYTop - stairYBot);
+    const midX = side * ((stairXStart + stairXEnd) * 0.5);
+    const midY = (stairYTop + stairYBot) * 0.5;
+
+    for (const zSign of [-1, 1]) {
+      const bz = zSign * 2.08;
+
+      // Parametric sloped stone cheek-wall filling exact trapezoid from water plinth up to stair slope!
+      const cheekGeom = buildParametricSurface(20, 10, (u, v, pos, du, dv, weather) => {
+        // u goes along stair length from top (u=0) to bottom (u=1)
+        const xLocal = stairXStart - 0.12 + u * (stairXEnd - stairXStart + 0.32);
+        const yTopLine = stairYTop + 0.08 - u * (stairYTop - stairYBot + 0.04);
+        const yBotLine = 0.24;
+        const y = yBotLine + v * (yTopLine - yBotLine);
+        const zOut = bz + zSign * 0.18;
+
+        pos.set(side * xLocal, y, zOut);
+        du.set(side * (stairXEnd - stairXStart + 0.32), -v * (stairYTop - stairYBot + 0.04), 0);
+        dv.set(0, yTopLine - yBotLine, 0);
+        weather.set(0.86 + 0.10 * v, 0.34 + (1 - v) * 0.38, -0.04);
+      }, { flipNormal: (side * zSign) < 0, uvScaleU: 3.0, uvScaleV: 1.5 });
+      push('limestone', cheekGeom);
+
+      // Sloped solid masonry stringer coping beam (lofted tube along stair slope)
+      const stringer = buildLoftedTube((t) => {
+        const x = side * (stairXStart - 0.08 + t * (stairXEnd - stairXStart + 0.26));
+        const y = stairYTop + 0.04 - t * (stairYTop - stairYBot);
+        return {
+          pos: new THREE.Vector3(x, y, bz),
+          tang: new THREE.Vector3(side * (stairXEnd - stairXStart + 0.26), -(stairYTop - stairYBot), 0),
+          sx: 0.20, sy: 0.18, dsx: 0, dsy: 0,
+        };
+      }, 16, 12, { cornerExp: 0.24, ao: 0.92, moss: 0.36, tone: 0.05 });
+      push('limestone', stringer);
+
+      // Sloped upper handrail (rounded cloud-mushroom profile lofted along the stair balustrade)
+      const railH = 0.82;
+      const handrail = buildLoftedTube((t) => {
+        const x = side * (stairXStart - 0.02 + t * (stairXEnd - stairXStart + 0.38));
+        const y = stairYTop + railH - t * (stairYTop - stairYBot + 0.02);
+        return {
+          pos: new THREE.Vector3(x, y, bz),
+          tang: new THREE.Vector3(side * (stairXEnd - stairXStart + 0.38), -(stairYTop - stairYBot + 0.02), 0),
+          sx: 0.135, sy: 0.095, dsx: 0, dsy: 0,
+        };
+      }, 18, 14, { cornerExp: 0.48, ao: 0.98, moss: 0.26, tone: 0.14 });
+      push('columnStone', handrail);
+
+      // Sloped lower sub-rail
+      const subrail = buildLoftedTube((t) => {
+        const x = side * (stairXStart - 0.02 + t * (stairXEnd - stairXStart + 0.38));
+        const y = stairYTop + 0.24 - t * (stairYTop - stairYBot + 0.02);
+        return {
+          pos: new THREE.Vector3(x, y, bz),
+          tang: new THREE.Vector3(side * (stairXEnd - stairXStart + 0.38), -(stairYTop - stairYBot + 0.02), 0),
+          sx: 0.095, sy: 0.075, dsx: 0, dsy: 0,
+        };
+      }, 14, 10, { cornerExp: 0.28, ao: 0.88, moss: 0.38, tone: 0.04 });
+      push('limestone', subrail);
+
+      // Turned vase-like balusters between sloped handrail and sub-rail
+      const numBalusters = 8;
+      for (let b = 0; b < numBalusters; b++) {
+        const t = (b + 0.5) / numBalusters;
+        // Leave space where mid-stair lantern post sits (t ≈ 0.5)
+        if (Math.abs(t - 0.5) < 0.09) continue;
+        const bx = side * (stairXStart + t * (stairXEnd - stairXStart));
+        const byBase = stairYTop + 0.22 - t * (stairYTop - stairYBot);
+        const bal = buildAnalyticLathe((v) => {
+          const h = 0.58;
+          const y = v * h;
+          const r = 0.052 + 0.026 * Math.sin(v * Math.PI) - 0.015 * Math.sin(v * Math.PI * 3);
+          const dr = 0.026 * Math.PI * Math.cos(v * Math.PI) - 0.045 * Math.PI * Math.cos(v * Math.PI * 3);
+          return { r: Math.max(0.028, r), dr, y, dy: h, ao: 0.90, moss: 0.28 };
+        }, 14, 14, { tone: 0.06 });
+        push('columnStone', bal, { pos: [bx, byBase, bz] });
+      }
+
+      // Horizontal bridge-deck balustrade flanking the main pavilion entrance (X = ±3.55 to ±4.50)
+      const deckRail = buildLoftedTube((t) => ({
+        pos: new THREE.Vector3(side * (3.42 + t * 1.12), 3.40 + 0.84, zSign * 2.22),
+        tang: new THREE.Vector3(side * 1.12, 0, 0),
+        sx: 0.135, sy: 0.095, dsx: 0, dsy: 0,
+      }), 16, 6, { cornerExp: 0.48, ao: 0.98, moss: 0.24, tone: 0.14 });
+      push('columnStone', deckRail);
+
+      const deckCurb = buildBeveledBlock(1.16, 0.22, 0.24, {
+        bevel: 0.03, cornerExp: 0.25, uSegs: 16, vSegs: 6, ao: 0.92, moss: 0.34, tone: 0.06
+      });
+      push('limestone', deckCurb, { pos: [side * 3.98, 3.52, zSign * 2.22] });
+
+      for (let b = 0; b < 3; b++) {
+        const bx = side * (3.64 + b * 0.32);
+        const bal = buildAnalyticLathe((v) => {
+          const h = 0.58;
+          const r = 0.055 + 0.025 * Math.sin(v * Math.PI);
+          const dr = 0.025 * Math.PI * Math.cos(v * Math.PI);
+          return { r, dr, y: v * h, dy: h, ao: 0.90, moss: 0.26 };
+        }, 14, 12, { tone: 0.08 });
+        push('columnStone', bal, { pos: [bx, 3.62, zSign * 2.22] });
+      }
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // F. SMALL LANTERN-TOPPED POSTS (TŌRŌ STYLE — 12 SYMMETRICAL POSTS)
+  // --------------------------------------------------------------------------
+  function addStoneLanternPost(x, yBase, z, scale = 1.0, phaseOffset = 0) {
+    // 1) Chamfered square pedestal & newel post
+    push('limestone', buildBeveledBlock(0.42 * scale, 0.18 * scale, 0.42 * scale, {
+      bevel: 0.03 * scale, cornerExp: 0.24, uSegs: 16, vSegs: 6, ao: 0.92, moss: 0.42, tone: 0.04
+    }), { pos: [x, yBase + 0.09 * scale, z] });
+
+    push('limestone', buildBeveledBlock(0.30 * scale, 0.78 * scale, 0.30 * scale, {
+      bevel: 0.035 * scale, cornerExp: 0.28, taperTopX: 0.90, taperTopZ: 0.90, uSegs: 18, vSegs: 8, ao: 0.94, moss: 0.30, tone: 0.08
+    }), { pos: [x, yBase + 0.56 * scale, z] });
+
+    // 2) Fluted lotus-petal tray (chūdai)
+    const trayY = yBase + 0.95 * scale;
+    const tray = buildAnalyticLathe((v) => {
+      const h = 0.16 * scale;
+      const r = (0.14 + 0.15 * Math.sin(v * Math.PI * 0.82)) * scale;
+      const dr = (0.15 * Math.PI * 0.82 * Math.cos(v * Math.PI * 0.82)) * scale;
+      return { r, dr, y: v * h, dy: h, fluteAmp: 0.012 * scale * Math.sin(v * Math.PI), ao: 0.94, moss: 0.26 };
+    }, 24, 10, { fluteCount: 8, tone: 0.10 });
+    push('columnStone', tray, { pos: [x, trayY, z] });
+
+    // 3) Open lantern firebox (4 slender corner mullions + glowing inner amber core)
+    const fireY = trayY + 0.16 * scale;
+    const fireH = 0.34 * scale;
+    const mOff = 0.145 * scale;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        push('limestone', buildBeveledBlock(0.052 * scale, fireH, 0.052 * scale, {
+          bevel: 0.01 * scale, cornerExp: 0.35, uSegs: 10, vSegs: 6, ao: 0.92, moss: 0.18, tone: 0.05
+        }), { pos: [x + sx * mOff, fireY + fireH * 0.5, z + sz * mOff] });
+      }
+    }
+
+    // Glowing amber lantern core (separate animated mesh!)
+    const coreGeom = buildAnalyticLathe((v) => {
+      const a = v * Math.PI;
+      const r = (0.01 + 0.11 * Math.pow(Math.sin(a), 0.55)) * scale;
+      const dr = 0.11 * 0.55 * Math.pow(Math.max(1e-4, Math.sin(a)), -0.45) * Math.cos(a) * Math.PI * scale;
+      const y = (0.03 + 0.28 * v) * scale;
+      return { r, dr, y, dy: 0.28 * scale, ao: 1, moss: 0 };
+    }, 18, 12);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(2.4, 1.48, 0.52), // HDR warm amber for subtle bloom
+      toneMapped: false,
+    });
+    const coreMesh = new THREE.Mesh(coreGeom, coreMat);
+    coreMesh.position.set(x, fireY, z);
+    root.add(coreMesh);
+
+    lanterns.push({
+      mesh: coreMesh,
+      mat: coreMat,
+      pos: new THREE.Vector3(x, fireY + fireH * 0.5, z),
+      baseColor: new THREE.Color(2.35, 1.42, 0.48),
+      phase: phaseOffset,
+      scale,
+      isPeak: false,
+    });
+
+    // 4) Miniature upswept curved 4-sided pagoda cap (kasa)
+    const capY = fireY + fireH - 0.015 * scale;
+    addPagodaRoofTier({
+      yBot: capY,
+      yTop: capY + 0.26 * scale,
+      rxTop: 0.05 * scale,
+      rzTop: 0.05 * scale,
+      rxBot: 0.34 * scale,
+      rzBot: 0.34 * scale,
+      liftY: 0.062 * scale,
+      flareXY: 0.09,
+      thickness: 0.036 * scale,
+      uSegs: 14,
+      vSegs: 10,
+      tileRibs: 0,
+      addCurledFinials: false,
+      addRafters: false,
+      centerX: x,
+      centerZ: z,
+      bucket: 'roofTile',
+    });
+
+    // 5) Turned lotus-bud finial (hōju) on top of the lantern cap
+    const finial = buildAnalyticLathe((v) => {
+      const h = 0.20 * scale;
+      // Bulbous tear-drop bud profile
+      const s = Math.sin(v * Math.PI);
+      const r = (0.078 * Math.pow(s, 0.72) * (1 - 0.55 * v)) * scale;
+      const eps = 1e-4;
+      const v1 = Math.min(1, v + eps);
+      const v0 = Math.max(0, v - eps);
+      const r1 = (0.078 * Math.pow(Math.sin(v1 * Math.PI), 0.72) * (1 - 0.55 * v1)) * scale;
+      const r0 = (0.078 * Math.pow(Math.sin(v0 * Math.PI), 0.72) * (1 - 0.55 * v0)) * scale;
+      return { r: Math.max(0.002, r), dr: (r1 - r0) / (v1 - v0), y: v * h, dy: h, ao: 0.98, moss: 0.15 };
+    }, 16, 14, { tone: 0.12 });
+    push('columnStone', finial, { pos: [x, capY + 0.25 * scale, z] });
+  }
+
+  let lIdx = 0;
+  for (const side of [-1, 1]) {
+    for (const zSign of [-1, 1]) {
+      // Bottom of stairway posts
+      addStoneLanternPost(side * 8.95, 0.44, zSign * 2.08, 0.96, lIdx++ * 1.37);
+      // Mid-stairway posts
+      addStoneLanternPost(side * 6.55, 1.88, zSign * 2.08, 0.92, lIdx++ * 1.37);
+      // Top of stairway / bridge corner posts
+      addStoneLanternPost(side * 4.55, 3.40, zSign * 2.22, 1.02, lIdx++ * 1.37);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // G. TWO PAIRS OF BULBOUS VASE-SHAPED COLUMNS & DOUGONG BRACKETS
+  // --------------------------------------------------------------------------
+  function addBulbousVaseColumn(cx, cz) {
+    const baseY = 3.64;
+
+    // 1) Stepped octagonal-chamfered stone base plinth
+    push('limestone', buildBeveledBlock(1.12, 0.20, 1.12, {
+      bevel: 0.045, cornerExp: 0.34, uSegs: 24, vSegs: 8, ao: 0.92, moss: 0.38, tone: 0.05
+    }), { pos: [cx, baseY + 0.10, cz] });
+
+    // 2) Bulbous vase-shaped column shaft (parametric analytic surface of revolution with smooth vertical gadrooning!)
+    const colH = 2.66;
+    const vaseProfile = (v) => {
+      // Piecewise-smooth sculptural vase profile (C1 smooth via smoothstep blends)
+      // Base lotus ring (v=0..0.14), lush bulbous belly (v=0.14..0.62), pinched neck + collar rings (v=0.62..0.84), flaring bell mouth (v=0.84..1.0)
+      const lotus = 0.095 * Math.exp(-Math.pow((v - 0.07) / 0.055, 2));
+      const belly = 0.285 * Math.exp(-Math.pow((v - 0.36) / 0.195, 2));
+      const collar1 = 0.042 * Math.exp(-Math.pow((v - 0.66) / 0.025, 2));
+      const collar2 = 0.032 * Math.exp(-Math.pow((v - 0.73) / 0.020, 2));
+      const neckPinch = -0.055 * Math.exp(-Math.pow((v - 0.78) / 0.075, 2));
+      const bell = 0.175 * Math.pow(Math.max(0, (v - 0.78) / 0.22), 2.1);
+      const lip = 0.032 * Math.exp(-Math.pow((v - 0.96) / 0.024, 2));
+      const r = 0.315 + lotus + belly + collar1 + collar2 + neckPinch + bell + lip;
+
+      // Exact analytic derivative dr/dv!
+      const dLotus = lotus * (-2 * (v - 0.07) / (0.055 * 0.055));
+      const dBelly = belly * (-2 * (v - 0.36) / (0.195 * 0.195));
+      const dCollar1 = collar1 * (-2 * (v - 0.66) / (0.025 * 0.025));
+      const dCollar2 = collar2 * (-2 * (v - 0.73) / (0.020 * 0.020));
+      const dNeck = neckPinch * (-2 * (v - 0.78) / (0.075 * 0.075));
+      const dBell = v > 0.78 ? 0.175 * 2.1 * Math.pow((v - 0.78) / 0.22, 1.1) / 0.22 : 0;
+      const dLip = lip * (-2 * (v - 0.96) / (0.024 * 0.024));
+      const dr = dLotus + dBelly + dCollar1 + dCollar2 + dNeck + dBell + dLip;
+
+      // Subtle sculpted fluting along the bulbous belly & lotus base
+      const fluteEnv = Math.exp(-Math.pow((v - 0.37) / 0.16, 2));
+      const fluteAmp = 0.014 * fluteEnv;
+      const dFluteAmp = fluteAmp * (-2 * (v - 0.37) / (0.16 * 0.16));
+
+      return {
+        r,
+        dr,
+        y: v * colH,
+        dy: colH,
+        fluteAmp,
+        dFluteAmp,
+        ao: 0.88 + 0.10 * Math.sin(v * Math.PI),
+        moss: 0.16 + (1 - v) * 0.22,
+      };
+    };
+
+    const colGeom = buildAnalyticLathe(vaseProfile, 48, 44, {
+      fluteCount: 16,
+      uvScaleU: 2.6,
+      uvScaleV: 2.2,
+      tone: 0.08,
+    });
+    push('columnStone', colGeom, { pos: [cx, baseY + 0.18, cz] });
+
+    // 3) Carved Dougong bracket cluster crowning each column (Y = 6.46..6.92)
+    const capY = baseY + 0.18 + colH;
+    // Lower bearing block (daitou / lu-dou)
+    push('limestone', buildBeveledBlock(0.84, 0.18, 0.84, {
+      bevel: 0.032, cornerExp: 0.24, taperTopX: 1.12, taperTopZ: 1.12, uSegs: 20, vSegs: 8, ao: 0.90, moss: 0.14, tone: 0.04
+    }), { pos: [cx, capY + 0.07, cz] });
+
+    // Crossed curved bracket arms (gong) in X and Z with smaller bearing blocks (dou)
+    for (let tier = 0; tier < 2; tier++) {
+      const ty = capY + 0.22 + tier * 0.18;
+      const armSpan = 1.28 + tier * 0.44;
+      for (const rotY of [0, Math.PI * 0.5]) {
+        // Curved upturned bracket arm lofted along a shallow U-curve
+        const arm = buildLoftedTube((t) => {
+          const s = t * 2 - 1;
+          const x = s * armSpan * 0.5;
+          const y = 0.085 * s * s;
+          return {
+            pos: new THREE.Vector3(x, y, 0),
+            tang: new THREE.Vector3(armSpan, 0.34 * s, 0),
+            sx: 0.095, sy: 0.075, dsx: 0, dsy: 0,
+          };
+        }, 14, 12, { cornerExp: 0.26, ao: 0.84, moss: 0.12, tone: -0.02 });
+        push('columnStone', arm, { pos: [cx, ty, cz], rot: [0, rotY, 0] });
+
+        // End bearing blocks (dou) on bracket tips
+        for (const end of [-1, 1]) {
+          const ex = Math.cos(rotY) * end * armSpan * 0.46;
+          const ez = -Math.sin(rotY) * end * armSpan * 0.46;
+          push('limestone', buildBeveledBlock(0.22, 0.12, 0.22, {
+            bevel: 0.02, cornerExp: 0.22, uSegs: 12, vSegs: 6, ao: 0.85, moss: 0.10, tone: 0.08
+          }), { pos: [cx + ex, ty + 0.12, cz + ez] });
+        }
+      }
+    }
+  }
+
+  // Two symmetrical pairs of bulbous columns flanking the central portal
+  const colX = 2.86;
+  const colZ = 1.48;
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      addBulbousVaseColumn(sx * colX, sz * colZ);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // H. UPPER PORTAL ARCHITRAVE BEAMS, RAINBOW TIE-BEAMS & CARVED TRANSOM
+  // --------------------------------------------------------------------------
+  // Cross tie-beams connecting front & back columns in each pair
+  for (const sx of [-1, 1]) {
+    const crossBeam = buildLoftedTube((t) => {
+      const z = (t * 2 - 1) * 1.92;
+      const archLift = 0.12 * (1 - (t * 2 - 1) * (t * 2 - 1));
+      return {
+        pos: new THREE.Vector3(sx * colX, 6.26 + archLift, z),
+        tang: new THREE.Vector3(0, -0.48 * (t * 2 - 1), 3.84),
+        sx: 0.18, sy: 0.16, dsx: 0, dsy: 0,
+      };
+    }, 16, 14, { cornerExp: 0.28, ao: 0.86, moss: 0.14, tone: 0.02 });
+    push('columnStone', crossBeam);
+  }
+
+  // Main longitudinal architrave beams spanning front & back across both pairs
+  for (const sz of [-1, 1]) {
+    push('limestone', buildBeveledBlock(6.95, 0.30, 0.36, {
+      bevel: 0.04, cornerExp: 0.24, uSegs: 24, vSegs: 8, ao: 0.88, moss: 0.15, tone: 0.06
+    }), { pos: [0, 6.46, sz * colZ] });
+
+    // Gently arched rainbow tie-beam (kōryō) spanning the central portal
+    const rainbowBeam = buildLoftedTube((t) => {
+      const s = t * 2 - 1;
+      const x = s * 2.55;
+      const y = 5.84 + 0.26 * (1 - s * s);
+      return {
+        pos: new THREE.Vector3(x, y, sz * colZ),
+        tang: new THREE.Vector3(5.10, -1.04 * s, 0),
+        sx: 0.14, sy: 0.13, dsx: 0, dsy: 0,
+      };
+    }, 16, 16, { cornerExp: 0.30, ao: 0.88, moss: 0.14, tone: 0.10 });
+    push('columnStone', rainbowBeam);
+
+    // Ornamental carved transom mullions (ranma) between rainbow beam and architrave
+    for (let m = -5; m <= 5; m++) {
+      const mx = m * 0.44;
+      const s = mx / 2.55;
+      const yBot = 5.88 + 0.24 * (1 - s * s);
+      const yTop = 6.34;
+      const mh = Math.max(0.14, yTop - yBot);
+      push('columnStone', buildBeveledBlock(0.085, mh, 0.11, {
+        bevel: 0.015, cornerExp: 0.30, uSegs: 12, vSegs: 6, ao: 0.84, moss: 0.12, tone: 0.08
+      }), { pos: [mx, yBot + mh * 0.5, sz * colZ] });
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // I. DOUBLE-TIERED UPSWEPT CURVED ROOF BUILDER WITH CURLED CORNER FINIALS
+  // --------------------------------------------------------------------------
+  function addCurledCornerFinial(tipPos, dirXZ, scale = 1.0) {
+    // 3D stylized cloud-volute / curled dragon-scroll finial curling upward & inward!
+    const dx = dirXZ.x;
+    const dz = dirXZ.z;
+    const spiral = buildLoftedTube((t) => {
+      // Smooth spiral: sweeps outward/upward, then coils gracefully inward ~305 degrees
+      const theta = t * Math.PI * 1.72;
+      const rSpiral = (0.34 * Math.exp(-0.62 * t) + 0.05) * scale;
+      // Forward sweep + vertical curl
+      const along = (0.28 * t + 0.36 * Math.sin(theta) * Math.exp(-0.52 * t)) * scale;
+      const up = (0.38 * (1 - Math.cos(theta)) * Math.exp(-0.34 * t) + 0.24 * t) * scale;
+
+      const eps = 1e-3;
+      const t1 = Math.min(1, t + eps);
+      const th1 = t1 * Math.PI * 1.72;
+      const along1 = (0.28 * t1 + 0.36 * Math.sin(th1) * Math.exp(-0.52 * t1)) * scale;
+      const up1 = (0.38 * (1 - Math.cos(th1)) * Math.exp(-0.34 * t1) + 0.24 * t1) * scale;
+      const dt = Math.max(1e-4, t1 - t);
+
+      const dAlong = (along1 - along) / dt;
+      const dUp = (up1 - up) / dt;
+
+      const radScale = (1 - 0.68 * t) * scale;
+      return {
+        pos: new THREE.Vector3(
+          tipPos.x + dx * along,
+          tipPos.y + up,
+          tipPos.z + dz * along
+        ),
+        tang: new THREE.Vector3(dx * dAlong, dUp, dz * dAlong),
+        sx: 0.092 * radScale,
+        sy: 0.115 * radScale,
+        dsx: -0.062 * scale,
+        dsy: -0.078 * scale,
+      };
+    }, 14, 26, {
+      cornerExp: 0.36,
+      capped: true,
+      upHint: new THREE.Vector3(-dz, 0, dx),
+      ao: 0.96,
+      moss: 0.16,
+      tone: 0.18,
+    });
+    push('roofTile', spiral);
+
+    // Secondary petite counter-curl tendril nestled at base of corner finial
+    const tendril = buildLoftedTube((t) => {
+      const th = t * Math.PI * 1.15;
+      const along = (-0.12 - 0.16 * Math.sin(th)) * scale;
+      const up = (0.04 + 0.17 * (1 - Math.cos(th))) * scale;
+      const dAlong = -0.16 * Math.PI * 1.15 * Math.cos(th) * scale;
+      const dUp = 0.17 * Math.PI * 1.15 * Math.sin(th) * scale;
+      const rs = (1 - 0.65 * t) * scale;
+      return {
+        pos: new THREE.Vector3(tipPos.x + dx * along, tipPos.y + up, tipPos.z + dz * along),
+        tang: new THREE.Vector3(dx * dAlong, dUp, dz * dAlong),
+        sx: 0.055 * rs, sy: 0.065 * rs, dsx: -0.036 * scale, dsy: -0.042 * scale,
+      };
+    }, 10, 14, {
+      cornerExp: 0.40,
+      capped: true,
+      upHint: new THREE.Vector3(-dz, 0, dx),
+      ao: 0.94,
+      moss: 0.18,
+      tone: 0.14,
+    });
+    push('roofTile', tendril);
+  }
+
+  function addPagodaRoofTier(cfg) {
+    const {
+      yBot, yTop, rxTop, rzTop, rxBot, rzBot,
+      liftY = 0.85,
+      flareXY = 0.085,
+      thickness = 0.18,
+      uSegs = 28,
+      vSegs = 16,
+      tileRibs = 18,
+      addCurledFinials = true,
+      finialScale = 1.0,
+      addRafters = true,
+      centerX = 0,
+      centerZ = 0,
+      bucket = 'roofTile',
+    } = cfg;
+
+    // Shared exact parametric evaluator for a single roof face (faceId: 0=+Z, 1=-Z, 2=+X, 3=-X)
+    // Guarantees bit-for-bit seamless meeting along all 4 hip ridges!
+    function evalRoofPoint(faceId, s, v, yOffset = 0) {
+      const s2 = s * s;
+      const sPow = Math.pow(s2 + 1e-7, 1.25);
+      const dsPow = 2.5 * s * Math.pow(s2 + 1e-7, 0.25);
+      const vPow = Math.pow(v + 1e-7, 2.2);
+      const dvPow = 2.2 * Math.pow(v + 1e-7, 1.2);
+
+      const corner = sPow * vPow;
+      const dCornerDs = dsPow * vPow;
+      const dCornerDv = sPow * dvPow;
+
+      const rx = rxTop + (rxBot - rxTop) * v;
+      const rz = rzTop + (rzBot - rzTop) * v;
+      const drx = rxBot - rxTop;
+      const drz = rzBot - rzTop;
+
+      const flare = 1.0 + flareXY * corner;
+      const dFlareDs = flareXY * dCornerDs;
+      const dFlareDv = flareXY * dCornerDv;
+
+      // Classic East-Asian concave catenary-like roof curve
+      const curveExp = 1.72;
+      const oneMinusV = Math.max(1e-5, 1.0 - v);
+      const yBase = yTop - (yTop - yBot) * (1.0 - Math.pow(oneMinusV, curveExp));
+      const dyBaseDv = -(yTop - yBot) * curveExp * Math.pow(oneMinusV, curveExp - 1.0);
+
+      const y = yBase + liftY * corner + yOffset;
+      const dyDs = liftY * dCornerDs;
+      const dyDv = dyBaseDv + liftY * dCornerDv;
+
+      let x, z, dxDs, dzDs, dxDv, dzDv;
+      if (faceId === 0) { // +Z front face: s goes -1 -> +1 along +X
+        x = s * rx * flare;
+        z = rz * flare;
+        dxDs = rx * flare + s * rx * dFlareDs;
+        dzDs = rz * dFlareDs;
+        dxDv = s * drx * flare + s * rx * dFlareDv;
+        dzDv = drz * flare + rz * dFlareDv;
+      } else if (faceId === 1) { // -Z back face: s goes -1 -> +1 along -X
+        x = -s * rx * flare;
+        z = -rz * flare;
+        dxDs = -(rx * flare + s * rx * dFlareDs);
+        dzDs = -rz * dFlareDs;
+        dxDv = -(s * drx * flare + s * rx * dFlareDv);
+        dzDv = -(drz * flare + rz * dFlareDv);
+      } else if (faceId === 2) { // +X right face: s goes -1 -> +1 along -Z
+        x = rx * flare;
+        z = -s * rz * flare;
+        dxDs = rx * dFlareDs;
+        dzDs = -(rz * flare + s * rz * dFlareDs);
+        dxDv = drx * flare + rx * dFlareDv;
+        dzDv = -(s * drz * flare + s * rz * dFlareDv);
+      } else { // -X left face: s goes -1 -> +1 along +Z
+        x = -rx * flare;
+        z = s * rz * flare;
+        dxDs = -rx * dFlareDs;
+        dzDs = rz * flare + s * rz * dFlareDs;
+        dxDv = -(drx * flare + rx * dFlareDv);
+        dzDv = s * drz * flare + s * rz * dFlareDv;
+      }
+
+      return {
+        x: x + centerX, y, z: z + centerZ,
+        dxDs, dyDs, dzDs,
+        dxDv, dyDv, dzDv,
+      };
+    }
+
+    // Build all 4 faces: top tiled surface, underside eave soffit, and outer fascia rim
+    for (let f = 0; f < 4; f++) {
+      // 1) Top curved tiled surface (with subtle barrel-tile wave relief)
+      const topSurf = buildParametricSurface(uSegs, vSegs, (u, v, pos, du, dv, weather) => {
+        const s = u * 2 - 1;
+        const p = evalRoofPoint(f, s, v, 0);
+        // Note: as u increases (ds = 2) and v increases (downslope), check normal direction:
+        // On +Z face: du ≈ (+X), dv ≈ (-Y, +Z). du x dv ≈ (0, -Z, -Y) -> points DOWN/INWARD!
+        // So flipNormal: true makes top surface point UP & OUTWARD!
+        pos.set(p.x, p.y, p.z);
+        du.set(p.dxDs * 2, p.dyDs * 2, p.dzDs * 2);
+        dv.set(p.dxDv, p.dyDv, p.dzDv);
+        // Subtle moss nestled in the concave mid-valley of the roof
+        const valleyMoss = 0.25 + 0.35 * Math.sin(v * Math.PI);
+        weather.set(0.88 + 0.10 * (1 - Math.abs(v - 0.5)), valleyMoss, 0.0);
+      }, { flipNormal: true, uvScaleU: (f < 2 ? rxBot : rzBot) * 0.9, uvScaleV: 2.2 });
+      push(bucket, topSurf);
+
+      // 2) Underside eave soffit surface (offset downward by thickness)
+      const botSurf = buildParametricSurface(Math.max(8, uSegs >> 1), Math.max(6, vSegs >> 1), (u, v, pos, du, dv, weather) => {
+        const s = u * 2 - 1;
+        const p = evalRoofPoint(f, s, v, -thickness);
+        pos.set(p.x, p.y, p.z);
+        du.set(p.dxDs * 2, p.dyDs * 2, p.dzDs * 2);
+        dv.set(p.dxDv, p.dyDv, p.dzDv);
+        weather.set(0.68, 0.08, -0.14);
+      }, { flipNormal: false, uvScaleU: 2.0, uvScaleV: 1.5 });
+      push('columnStone', botSurf);
+
+      // 3) Outer eave fascia lip closing top & bottom cleanly along v = 1
+      const fascia = buildParametricSurface(uSegs, 3, (u, v, pos, du, dv, weather) => {
+        const s = u * 2 - 1;
+        const p = evalRoofPoint(f, s, 1.0, -v * thickness);
+        pos.set(p.x, p.y, p.z);
+        du.set(p.dxDs * 2, p.dyDs * 2, p.dzDs * 2);
+        dv.set(0, -thickness, 0);
+        // On +Z face: du ≈ (+X), dv ≈ (-Y) -> du x dv ≈ (0, 0, -1). FlipNormal -> +Z outward!
+        weather.set(0.95, 0.20, 0.14);
+      }, { flipNormal: true, uvScaleU: 4.0, uvScaleV: 0.4 });
+      push(bucket, fascia);
+
+      // 4) Individual sculpted barrel-tile ribs running down the curved slope!
+      if (tileRibs > 0) {
+        const faceSpan = f < 2 ? rxBot : rzBot;
+        const ribCount = Math.max(5, Math.round(tileRibs * (faceSpan / rxBot)));
+        for (let r = 0; r < ribCount; r++) {
+          const sFrac = -0.94 + (r / (ribCount - 1)) * 1.88;
+          // Determine where rib starts along v (so outer ribs terminate cleanly on the hip ridge!)
+          const vStart = Math.max(0.02, (Math.abs(sFrac) - 0.55) * 0.65);
+          const rib = buildLoftedTube((t) => {
+            const v = vStart + t * (1.0 - vStart);
+            const p = evalRoofPoint(f, sFrac, v, 0.035);
+            const spanV = 1.0 - vStart;
+            return {
+              pos: new THREE.Vector3(p.x, p.y, p.z),
+              tang: new THREE.Vector3(p.dxDv * spanV, p.dyDv * spanV, p.dzDv * spanV),
+              sx: 0.052, sy: 0.044, dsx: 0, dsy: 0,
+            };
+          }, 8, 10, { cornerExp: 0.72, capped: true, ao: 0.94, moss: 0.28, tone: (r % 2 === 0 ? 0.06 : -0.05) });
+          push(bucket, rib);
+        }
+      }
+
+      // 5) Exposed stone/timber rafter tails underneath the eaves
+      if (addRafters) {
+        const faceSpan = f < 2 ? rxBot : rzBot;
+        const rafCount = Math.max(5, Math.round(13 * (faceSpan / rxBot)));
+        for (let k = 0; k < rafCount; k++) {
+          const sFrac = -0.88 + (k / (rafCount - 1)) * 1.76;
+          const raf = buildLoftedTube((t) => {
+            const v = 0.28 + t * 0.68;
+            const p = evalRoofPoint(f, sFrac, v, -thickness - 0.045);
+            return {
+              pos: new THREE.Vector3(p.x, p.y, p.z),
+              tang: new THREE.Vector3(p.dxDv * 0.68, p.dyDv * 0.68, p.dzDv * 0.68),
+              sx: 0.042, sy: 0.052, dsx: 0, dsy: 0,
+            };
+          }, 8, 6, { cornerExp: 0.28, capped: true, ao: 0.72, moss: 0.08, tone: -0.10 });
+          push('columnStone', raf);
+        }
+      }
+    }
+
+    // 6) Four thick sculpted curved Hip Ridge beams along the diagonal seams + Curled Corner Finials!
+    const corners = [
+      { f: 0, s: 1, sx: 1, sz: 1 },
+      { f: 0, s: -1, sx: -1, sz: 1 },
+      { f: 1, s: -1, sx: 1, sz: -1 },
+      { f: 1, s: 1, sx: -1, sz: -1 },
+    ];
+    for (const c of corners) {
+      const hipRidge = buildLoftedTube((t) => {
+        const p = evalRoofPoint(c.f, c.s, t, 0.075);
+        return {
+          pos: new THREE.Vector3(p.x, p.y, p.z),
+          tang: new THREE.Vector3(p.dxDv, p.dyDv, p.dzDv),
+          sx: (0.095 + 0.025 * t) * finialScale,
+          sy: (0.115 + 0.03 * t) * finialScale,
+          dsx: 0.025 * finialScale,
+          dsy: 0.03 * finialScale,
+        };
+      }, 12, 16, { cornerExp: 0.30, capped: true, ao: 0.98, moss: 0.20, tone: 0.16 });
+      push(bucket, hipRidge);
+
+      if (addCurledFinials) {
+        const tip = evalRoofPoint(c.f, c.s, 1.0, 0.075);
+        const dirXZ = new THREE.Vector3(c.sx * rxBot, 0, c.sz * rzBot).normalize();
+        addCurledCornerFinial(new THREE.Vector3(tip.x, tip.y, tip.z), dirXZ, finialScale);
+      }
+    }
+  }
+
+  // --- LOWER ROOF TIER ---
+  addPagodaRoofTier({
+    yBot: 6.72,
+    yTop: 8.38,
+    rxTop: 2.66,
+    rzTop: 1.62,
+    rxBot: 5.38,
+    rzBot: 3.46,
+    liftY: 0.94,
+    flareXY: 0.09,
+    thickness: 0.19,
+    uSegs: 32,
+    vSegs: 16,
+    tileRibs: 20,
+    addCurledFinials: true,
+    finialScale: 1.04,
+    addRafters: true,
+    bucket: 'roofTile',
+  });
+
+  // --------------------------------------------------------------------------
+  // J. UPPER CLERESTORY STORY (BETWEEN LOWER AND UPPER ROOFS)
+  // --------------------------------------------------------------------------
+  const storyY0 = 8.10;
+  const storyY1 = 9.48;
+  const storyH = storyY1 - storyY0;
+
+  // Main upper story core block (dark recessed interior wall)
+  push('recessDark', buildBeveledBlock(4.92, storyH, 2.92, {
+    bevel: 0.04, cornerExp: 0.22, uSegs: 24, vSegs: 8, ao: 0.62, moss: 0.18, tone: -0.22
+  }), { pos: [0, storyY0 + storyH * 0.5, 0] });
+
+  // Lower & upper molded stone belt cornices around the upper story
+  push('limestone', buildBeveledBlock(5.32, 0.22, 3.30, {
+    bevel: 0.04, cornerExp: 0.22, uSegs: 28, vSegs: 8, ao: 0.92, moss: 0.30, tone: 0.08
+  }), { pos: [0, storyY0 + 0.18, 0] });
+
+  push('limestone', buildBeveledBlock(5.46, 0.22, 3.42, {
+    bevel: 0.04, cornerExp: 0.22, uSegs: 28, vSegs: 8, ao: 0.88, moss: 0.18, tone: 0.08
+  }), { pos: [0, storyY1 - 0.08, 0] });
+
+  // Corner pilasters & carved lattice mullions on upper story
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      push('columnStone', buildBeveledBlock(0.38, storyH, 0.38, {
+        bevel: 0.04, cornerExp: 0.28, uSegs: 16, vSegs: 8, ao: 0.94, moss: 0.16, tone: 0.10
+      }), { pos: [sx * 2.48, storyY0 + storyH * 0.5, sz * 1.48] });
+    }
+  }
+
+  // Front & back upper clerestory decorative lattice windows + soft warm glow
+  for (const sz of [-1, 1]) {
+    for (let i = -4; i <= 4; i++) {
+      push('columnStone', buildBeveledBlock(0.08, storyH - 0.36, 0.12, {
+        bevel: 0.014, cornerExp: 0.28, uSegs: 10, vSegs: 6, ao: 0.90, moss: 0.14, tone: 0.08
+      }), { pos: [i * 0.48, storyY0 + storyH * 0.5, sz * 1.50] });
+    }
+    for (const yOff of [-0.22, 0.22]) {
+      push('columnStone', buildBeveledBlock(4.56, 0.075, 0.11, {
+        bevel: 0.014, cornerExp: 0.28, uSegs: 14, vSegs: 6, ao: 0.90, moss: 0.18, tone: 0.08
+      }), { pos: [0, storyY0 + storyH * 0.5 + yOff, sz * 1.50] });
+    }
+  }
+  // Side clerestory mullions
+  for (const sx of [-1, 1]) {
+    for (let i = -2; i <= 2; i++) {
+      push('columnStone', buildBeveledBlock(0.12, storyH - 0.36, 0.08, {
+        bevel: 0.014, cornerExp: 0.28, uSegs: 10, vSegs: 6, ao: 0.90, moss: 0.14, tone: 0.08
+      }), { pos: [sx * 2.50, storyY0 + storyH * 0.5, i * 0.46] });
+    }
+  }
+
+  // Upper story bracket frieze supporting the upper roof
+  for (let i = -4; i <= 4; i++) {
+    for (const sz of [-1, 1]) {
+      push('columnStone', buildBeveledBlock(0.18, 0.16, 0.36, {
+        bevel: 0.025, cornerExp: 0.26, uSegs: 12, vSegs: 6, ao: 0.80, moss: 0.10, tone: 0.02
+      }), { pos: [i * 0.56, storyY1 + 0.04, sz * 1.66] });
+    }
+  }
+
+  // --- UPPER ROOF TIER ---
+  addPagodaRoofTier({
+    yBot: 9.38,
+    yTop: 11.44,
+    rxTop: 1.68,
+    rzTop: 0.18,
+    rxBot: 4.30,
+    rzBot: 2.86,
+    liftY: 0.90,
+    flareXY: 0.095,
+    thickness: 0.18,
+    uSegs: 30,
+    vSegs: 16,
+    tileRibs: 16,
+    addCurledFinials: true,
+    finialScale: 0.94,
+    addRafters: true,
+    bucket: 'roofTile',
+  });
+
+  // Main upper ridge beam (sculpted curved saddle ridge along X)
+  const mainRidge = buildLoftedTube((t) => {
+    const s = t * 2 - 1;
+    const x = s * 1.84;
+    const y = 11.48 + 0.10 * s * s;
+    return {
+      pos: new THREE.Vector3(x, y, 0),
+      tang: new THREE.Vector3(3.68, 0.40 * s, 0),
+      sx: 0.20, sy: 0.22, dsx: 0, dsy: 0,
+    };
+  }, 16, 16, { cornerExp: 0.28, capped: true, ao: 0.98, moss: 0.18, tone: 0.16 });
+  push('roofTile', mainRidge);
+
+  // Ornamental curled ridge-end scrolls (chiwen) capping both ends of the main ridge
+  for (const sx of [-1, 1]) {
+    addCurledCornerFinial(
+      new THREE.Vector3(sx * 1.82, 11.56, 0),
+      new THREE.Vector3(sx, 0, 0),
+      0.72
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // K. CAPPED CHIMNEY-LIKE LANTERN AT THE ROOF'S PEAK
+  // --------------------------------------------------------------------------
+  const peakBaseY = 11.42;
+
+  // 1) Molded saddle plinth straddling the main roof ridge
+  push('limestone', buildBeveledBlock(1.24, 0.34, 0.94, {
+    bevel: 0.045, cornerExp: 0.24, taperTopX: 0.88, taperTopZ: 0.88, uSegs: 24, vSegs: 8, ao: 0.94, moss: 0.22, tone: 0.06
+  }), { pos: [0, peakBaseY + 0.16, 0] });
+
+  // 2) Tall tapered chimney-like lantern shaft with decorative relief collar rings
+  push('limestone', buildBeveledBlock(0.88, 0.82, 0.88, {
+    bevel: 0.05, cornerExp: 0.26, taperTopX: 0.86, taperTopZ: 0.86, uSegs: 24, vSegs: 10, ao: 0.96, moss: 0.18, tone: 0.10
+  }), { pos: [0, peakBaseY + 0.72, 0] });
+
+  // Horizontal decorative relief collar bands around the chimney shaft
+  push('columnStone', buildBeveledBlock(0.94, 0.10, 0.94, {
+    bevel: 0.025, cornerExp: 0.28, uSegs: 20, vSegs: 6, ao: 0.96, moss: 0.18, tone: 0.14
+  }), { pos: [0, peakBaseY + 0.56, 0] });
+
+  push('columnStone', buildBeveledBlock(0.92, 0.13, 0.92, {
+    bevel: 0.03, cornerExp: 0.26, taperTopX: 1.06, taperTopZ: 1.06, uSegs: 20, vSegs: 6, ao: 0.98, moss: 0.16, tone: 0.14
+  }), { pos: [0, peakBaseY + 1.15, 0] });
+
+  // 3) Open peak lantern firebox gallery (4 corner colonnettes + lattice bars + warm glowing core)
+  const pkFireY = peakBaseY + 1.21;
+  const pkFireH = 0.62;
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      push('columnStone', buildBeveledBlock(0.11, pkFireH, 0.11, {
+        bevel: 0.02, cornerExp: 0.34, uSegs: 12, vSegs: 6, ao: 0.96, moss: 0.10, tone: 0.10
+      }), { pos: [sx * 0.34, pkFireY + pkFireH * 0.5, sz * 0.34] });
+    }
+  }
+  // Slender central lattice mullions on each of the 4 sides of the peak lantern
+  for (const dir of [[0, 0.36], [0, -0.36], [0.36, 0], [-0.36, 0]]) {
+    push('columnStone', buildBeveledBlock(0.048, pkFireH, 0.048, {
+      bevel: 0.01, cornerExp: 0.30, uSegs: 10, vSegs: 6, ao: 0.92, moss: 0.10, tone: 0.08
+    }), { pos: [dir[0], pkFireY + pkFireH * 0.5, dir[1]] });
+  }
+
+  // Glowing peak lantern core
+  const pkCoreGeom = buildAnalyticLathe((v) => {
+    const a = v * Math.PI;
+    const r = 0.015 + 0.24 * Math.pow(Math.sin(a), 0.50);
+    const dr = 0.24 * 0.50 * Math.pow(Math.max(1e-4, Math.sin(a)), -0.50) * Math.cos(a) * Math.PI;
+    return { r, dr, y: 0.05 + 0.52 * v, dy: 0.52, ao: 1, moss: 0 };
+  }, 24, 14);
+  const pkCoreMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(2.75, 1.65, 0.58),
+    toneMapped: false,
+  });
+  const pkCoreMesh = new THREE.Mesh(pkCoreGeom, pkCoreMat);
+  pkCoreMesh.position.set(0, pkFireY, 0);
+  root.add(pkCoreMesh);
+
+  lanterns.push({
+    mesh: pkCoreMesh,
+    mat: pkCoreMat,
+    pos: new THREE.Vector3(0, pkFireY + pkFireH * 0.5, 0),
+    baseColor: new THREE.Color(2.75, 1.65, 0.58),
+    phase: 0.42,
+    scale: 1.85,
+    isPeak: true,
+  });
+
+  // 4) Overhanging curved square pagoda cap crowning the peak lantern
+  const pkCapY = pkFireY + pkFireH - 0.03;
+  addPagodaRoofTier({
+    yBot: pkCapY,
+    yTop: pkCapY + 0.52,
+    rxTop: 0.12,
+    rzTop: 0.12,
+    rxBot: 0.88,
+    rzBot: 0.88,
+    liftY: 0.20,
+    flareXY: 0.11,
+    thickness: 0.09,
+    uSegs: 16,
+    vSegs: 10,
+    tileRibs: 7,
+    addCurledFinials: true,
+    finialScale: 0.46,
+    addRafters: false,
+    bucket: 'roofTile',
+  });
+
+  // 5) Turned lotus-spire finial (hōju) at the apex
+  const apexFinial = buildAnalyticLathe((v) => {
+    const h = 0.58;
+    const baseRing = 0.16 * Math.exp(-Math.pow((v - 0.10) / 0.08, 2));
+    const bulb = 0.14 * Math.exp(-Math.pow((v - 0.36) / 0.16, 2));
+    const spire = 0.08 * Math.pow(Math.max(0, 1 - v), 1.6);
+    const r = 0.008 + baseRing + bulb + spire;
+    const dBase = baseRing * (-2 * (v - 0.10) / 0.0064);
+    const dBulb = bulb * (-2 * (v - 0.36) / 0.0256);
+    const dSpire = -0.08 * 1.6 * Math.pow(Math.max(1e-4, 1 - v), 0.6);
+    return { r, dr: dBase + dBulb + dSpire, y: v * h, dy: h, ao: 0.98, moss: 0.12 };
+  }, 24, 24, { tone: 0.18 });
+  push('accentBronze', apexFinial, { pos: [0, pkCapY + 0.48, 0] });
+
+  // --------------------------------------------------------------------------
+  // L. MERGE GEOMETRIES PER CALIBRATED MATERIAL FOR ULTRA-FAST 60FPS RENDERING
+  // --------------------------------------------------------------------------
+  const matMap = {
+    limestone: materials.limestone,
+    columnStone: materials.columnStone,
+    recessDark: materials.recessDark,
+    roofTile: materials.roofTile,
+    accentBronze: materials.accentBronze,
+  };
+
+  for (const [key, list] of Object.entries(buckets)) {
+    if (list.length === 0) continue;
+    const merged = mergeGeometries(list, false);
+    for (const g of list) g.dispose();
+    const mesh = new THREE.Mesh(merged, matMap[key]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    root.add(mesh);
+  }
+
+  return { root, lanterns };
+}
+
+// ============================================================================
+// 6. SOFT STUDIO SKY DOME & PLANAR REFLECTIVE ANIMATED DARK BLUE WATER
+// ============================================================================
+function createStudioSkyDome() {
+  const skyGeom = buildAnalyticLathe((v) => {
+    const a = v * Math.PI;
+    return {
+      r: Math.sin(a) * 140,
+      dr: Math.cos(a) * Math.PI * 140,
+      y: -Math.cos(a) * 140,
+      dy: Math.sin(a) * Math.PI * 140,
+    };
+  }, 36, 24);
+
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {},
+    vertexShader: `
+      varying vec3 vWorldDir;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldDir = normalize(wp.xyz);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vWorldDir;
+      void main() {
+        float y = clamp(vWorldDir.y, -1.0, 1.0);
+        // Calibrated soft-lit dark slate-blue studio cyclorama matching water horizon exactly
+        vec3 deepZenith  = vec3(0.028, 0.052, 0.102);
+        vec3 midStudio   = vec3(0.062, 0.112, 0.192);
+        vec3 horizonGlow = vec3(0.092, 0.152, 0.242);
+        vec3 lowerFloor  = vec3(0.024, 0.046, 0.090);
+
+        vec3 col;
+        if (y >= 0.0) {
+          float hBand = exp(-y * 4.5);
+          col = mix(midStudio, deepZenith, pow(y, 0.65));
+          col = mix(col, horizonGlow, hBand);
+        } else {
+          col = mix(horizonGlow, lowerFloor, smoothstep(0.0, -0.30, y));
+        }
+        // Subtle soft studio backlight aura centered cleanly behind the upper pagoda
+        float studioSoft = exp(-pow(y - 0.16, 2.0) * 14.0) * 0.032;
+        col += vec3(0.45, 0.62, 0.85) * studioSoft;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `
+  });
+
+  const mesh = new THREE.Mesh(skyGeom, skyMat);
+  mesh.renderOrder = -10;
+  return mesh;
+}
+
+/**
+ * Custom Planar Reflection + Animated Dark Blue Studio Water + Soft Contact Shadow.
+ * Uses exact Lengyel oblique near-plane clipping for crisp zero-artifact reflections.
+ */
+function createReflectiveWater(renderer, initialWidth, initialHeight) {
+  const getRTSize = (w, h) => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    return [
+      Math.max(512, Math.floor(w * dpr)),
+      Math.max(512, Math.floor(h * dpr)),
+    ];
+  };
+  const [rtW, rtH] = getRTSize(initialWidth, initialHeight);
+  const reflectionRT = new THREE.WebGLRenderTarget(rtW, rtH, {
+    type: THREE.HalfFloatType,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthBuffer: true,
+    samples: 4,
+  });
+
+  // Parametric radial disc with analytic upward normal (0, 1, 0)
+  const waterRadius = 128;
+  const waterGeom = buildParametricSurface(64, 24, (u, v, pos, du, dv, weather) => {
+    const th = u * Math.PI * 2;
+    const r = v * v * waterRadius;
+    const drdv = 2 * v * waterRadius;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+    pos.set(r * c, 0, -r * s);
+    if (v < 1e-4) {
+      du.set(1, 0, 0); dv.set(0, 0, -1); // du x dv = (0, +1, 0)
+    } else {
+      du.set(-r * s * Math.PI * 2, 0, -r * c * Math.PI * 2);
+      dv.set(drdv * c, 0, -drdv * s);
+    }
+    weather.set(1, 0, 0);
+  }, { flipNormal: true }); // Check: du=(-s,0,-c), dv=(c,0,-s) => du x dv = (0, -c^2 - s^2, 0) = (0,-1,0), flipNormal -> (0,+1,0)!
+
+  const textureMatrix = new THREE.Matrix4();
+  const waterUniforms = {
+    uTime: { value: 0 },
+    uReflectionMap: { value: reflectionRT.texture },
+    uTextureMatrix: { value: textureMatrix },
+    uKeyLightDir: { value: new THREE.Vector3(-0.48, 0.72, 0.50).normalize() },
+    uRimLightDir: { value: new THREE.Vector3(0.55, 0.45, -0.70).normalize() },
+  };
+
+  const waterMat = new THREE.ShaderMaterial({
+    uniforms: waterUniforms,
+    vertexShader: `
+      uniform mat4 uTextureMatrix;
+      varying vec4 vReflCoord;
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        vReflCoord = uTextureMatrix * wp;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform sampler2D uReflectionMap;
+      uniform vec3 uKeyLightDir;
+      uniform vec3 uRimLightDir;
+
+      varying vec4 vReflCoord;
+      varying vec3 vWorldPos;
+
+      float sdBox2(vec2 p, vec2 b) {
+        vec2 d = abs(p) - b;
+        return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+      }
+
+      // Ultra-clean, silky long-wavelength studio water ripples (zero noise or jagged distortion)
+      vec2 evalRippleGrad(vec2 p, float t) {
+        vec2 g = vec2(0.0);
+        // Gentle, long-wavelength calm studio swells drifting slowly across the water
+        vec2 k1 = vec2(0.28, 0.52);
+        g += k1 * cos(dot(p, k1) + t * 0.72) * 0.0022;
+
+        vec2 k2 = vec2(-0.42, 0.34);
+        g += k2 * cos(dot(p, k2) - t * 0.58) * 0.0018;
+
+        // Whisper-soft concentric ripple rings near the two main piers
+        for (int i = 0; i < 2; i++) {
+          vec2 c = vec2(i == 0 ? -3.38 : 3.38, 0.0);
+          vec2 dp = p - c;
+          float d = length(dp) + 0.001;
+          float env = exp(-d * 0.34) * smoothstep(1.5, 3.0, d);
+          float ph = d * 1.45 - t * 0.90;
+          g += (dp / d) * cos(ph) * env * 0.0024;
+        }
+        return g;
+      }
+
+      void main() {
+        vec2 p = vWorldPos.xz;
+        float dist = length(p);
+        vec3 viewDir = normalize(cameraPosition - vWorldPos);
+
+        // Attenuate ripple amplitude softly far toward the studio horizon
+        float rippleAtten = 1.0 - smoothstep(16.0, 48.0, dist);
+        vec2 grad = evalRippleGrad(p, uTime) * rippleAtten;
+        vec3 N = normalize(vec3(-grad.x, 1.0, -grad.y));
+
+        // Crystal-clear full-res planar reflection with delicate glassy ripple shimmer
+        vec2 reflUV = vReflCoord.xy / max(vReflCoord.w, 0.0001);
+        vec2 distUV = reflUV + grad * 0.032 * (1.0 - smoothstep(20.0, 50.0, dist));
+        distUV = clamp(distUV, vec2(0.001), vec2(0.999));
+        vec3 reflCol = texture2D(uReflectionMap, distUV).rgb;
+
+        // Deep calibrated studio dark-blue water body color
+        vec3 deepWater = vec3(0.012, 0.036, 0.082);
+        vec3 midWater  = vec3(0.024, 0.064, 0.135);
+        vec3 waterBody = mix(midWater, deepWater, smoothstep(2.0, 26.0, dist));
+
+        // Physically motivated Schlick Fresnel for clear mirror-like dark water
+        float NoV = max(dot(N, viewDir), 0.0);
+        float fresnel = 0.14 + 0.80 * pow(1.0 - NoV, 3.8);
+
+        // Soft Contact Shadow & Ambient Occlusion anchoring the gate to the water
+        float dPierL = sdBox2(p - vec2(-3.38, 0.0), vec2(1.36, 2.44));
+        float dPierR = sdBox2(p - vec2( 3.38, 0.0), vec2(1.36, 2.44));
+        float dWingL = sdBox2(p - vec2(-7.00, 0.0), vec2(2.34, 2.26));
+        float dWingR = sdBox2(p - vec2( 7.00, 0.0), vec2(2.34, 2.26));
+        float dArchTunnel = sdBox2(p - vec2(0.0, 0.0), vec2(2.02, 2.25));
+        float dStruct = min(min(dPierL, dPierR), min(dWingL, dWingR));
+
+        // Tight dark waterline contact AO + broad soft studio drop shadow
+        float tightAO = smoothstep(-0.10, 1.25, dStruct);
+        float broadShadow = smoothstep(-0.5, 4.6, min(dStruct, dArchTunnel));
+        float tunnelDark = smoothstep(-0.30, 1.15, dArchTunnel);
+        float contactShadow = mix(0.26, 1.0, tightAO) * mix(0.72, 1.0, broadShadow) * mix(0.56, 1.0, tunnelDark);
+
+        // Combine deep dark-blue water & crystal-clear reflection
+        vec3 col = mix(waterBody * contactShadow, reflCol * mix(0.68, 0.98, tightAO), fresnel * 0.88 + 0.08);
+
+        // Clean cool studio specular glints on the gentle swells
+        vec3 H1 = normalize(uKeyLightDir + viewDir);
+        float spec1 = pow(max(dot(N, H1), 0.0), 260.0) * 0.24 * contactShadow;
+        vec3 H2 = normalize(uRimLightDir + viewDir);
+        float spec2 = pow(max(dot(N, H2), 0.0), 150.0) * 0.14 * contactShadow;
+        col += vec3(0.78, 0.88, 1.0) * spec1 + vec3(0.44, 0.70, 0.98) * spec2;
+
+        // Smooth seamless fade into the exact studio cyclorama horizon
+        vec3 studioHorizon = vec3(0.092, 0.152, 0.242);
+        float horizonFade = smoothstep(34.0, 116.0, dist);
+        col = mix(col, studioHorizon, horizonFade);
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+
+  const waterMesh = new THREE.Mesh(waterGeom, waterMat);
+  waterMesh.receiveShadow = false; // Handled smoothly via planar reflection + analytic contact shadow
+
+  // Reusable reflection math objects (zero per-frame GC allocations)
+  const virtualCamera = new THREE.PerspectiveCamera();
+  const reflectorWorldPos = new THREE.Vector3(0, 0, 0);
+  const cameraWorldPos = new THREE.Vector3();
+  const rotationMatrix = new THREE.Matrix4();
+  const lookAtPos = new THREE.Vector3();
+  const view = new THREE.Vector3();
+  const target = new THREE.Vector3();
+  const up = new THREE.Vector3();
+  const normal = new THREE.Vector3(0, 1, 0);
+  const waterClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0.0);
+  const activeClipPlanes = [waterClipPlane];
+  const emptyClipPlanes = [];
+
+  function updateReflection(scene, camera, hideGroup = null) {
+    waterMesh.visible = false;
+    const prevHideVis = hideGroup ? hideGroup.visible : true;
+    if (hideGroup) hideGroup.visible = false;
+
+    cameraWorldPos.setFromMatrixPosition(camera.matrixWorld);
+    rotationMatrix.extractRotation(camera.matrixWorld);
+
+    view.subVectors(reflectorWorldPos, cameraWorldPos);
+    if (view.dot(normal) > 0) {
+      // Camera below water plane — skip reflection
+      waterMesh.visible = true;
+      if (hideGroup) hideGroup.visible = prevHideVis;
+      return;
+    }
+
+    view.reflect(normal).negate().add(reflectorWorldPos);
+    lookAtPos.set(0, 0, -1).applyMatrix4(rotationMatrix).add(cameraWorldPos);
+    target.subVectors(reflectorWorldPos, lookAtPos).reflect(normal).negate().add(reflectorWorldPos);
+    up.set(0, 1, 0).applyMatrix4(rotationMatrix).reflect(normal);
+
+    virtualCamera.position.copy(view);
+    virtualCamera.up.copy(up);
+    virtualCamera.lookAt(target);
+    virtualCamera.fov = camera.fov;
+    virtualCamera.aspect = camera.aspect;
+    virtualCamera.near = camera.near;
+    virtualCamera.far = camera.far;
+    virtualCamera.updateMatrixWorld();
+    virtualCamera.updateProjectionMatrix();
+
+    // Update texture matrix mapping world pos -> reflection UV
+    textureMatrix.set(
+      0.5, 0.0, 0.0, 0.5,
+      0.0, 0.5, 0.0, 0.5,
+      0.0, 0.0, 0.5, 0.5,
+      0.0, 0.0, 0.0, 1.0
+    );
+    textureMatrix.multiply(virtualCamera.projectionMatrix);
+    textureMatrix.multiply(virtualCamera.matrixWorldInverse);
+
+    // Hardware plane clipping at Y >= 0 preserves 100% depth buffer precision in reflectionRT (zero z-fighting noise!)
+    const prevRT = renderer.getRenderTarget();
+    const prevXR = renderer.xr.enabled;
+    const prevClip = renderer.clippingPlanes;
+    renderer.xr.enabled = false;
+    renderer.clippingPlanes = activeClipPlanes;
+    renderer.setRenderTarget(reflectionRT);
+    renderer.clear();
+    renderer.render(scene, virtualCamera);
+    renderer.clippingPlanes = prevClip || emptyClipPlanes;
+    renderer.setRenderTarget(prevRT);
+    renderer.xr.enabled = prevXR;
+
+    waterMesh.visible = true;
+    if (hideGroup) hideGroup.visible = prevHideVis;
+  }
+
+  function resize(w, h) {
+    const [rw, rh] = getRTSize(w, h);
+    reflectionRT.setSize(rw, rh);
+  }
+
+  return { waterMesh, waterUniforms, updateReflection, resize };
+}
+
+// ============================================================================
+// 7. ATMOSPHERIC EFFECTS: LANTERN HALOS, DRIFTING WATER MIST, PETALS & FIREFLIES
+// ============================================================================
+function createLanternGlowTexture() {
+  const size = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0.0, 'rgba(255, 224, 155, 0.95)');
+  g.addColorStop(0.24, 'rgba(255, 170, 74, 0.55)');
+  g.addColorStop(0.55, 'rgba(255, 118, 36, 0.16)');
+  g.addColorStop(1.0, 'rgba(255, 95, 20, 0.0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createDriftingMist() {
+  // Whisper-soft, completely noise-free analytic Gaussian mist ribbons flowing gently through the arch
+  const group = new THREE.Group();
+  const mistUniforms = { uTime: { value: 0 } };
+  const rand = mulberry32(409);
+
+  const mistMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.NormalBlending,
+    uniforms: mistUniforms,
+    vertexShader: `
+      attribute float aSeed;
+      varying vec2 vUv;
+      varying float vSeed;
+      varying vec3 vWorldPos;
+      void main() {
+        vUv = uv;
+        vSeed = aSeed;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      varying vec2 vUv;
+      varying float vSeed;
+      varying vec3 vWorldPos;
+
+      float sdBox2(vec2 p, vec2 b) {
+        vec2 d = abs(p) - b;
+        return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+      }
+
+      void main() {
+        vec2 d = (vUv - 0.5) * 2.0;
+        float radial = exp(-dot(d, d) * 2.8) * smoothstep(1.0, 0.25, length(d));
+
+        // Pure analytic cosine harmonics — 100% free of hash/value noise or blotchy grain
+        vec2 p = vWorldPos.xz;
+        float w1 = 0.5 + 0.5 * sin(p.x * 0.42 + p.y * 0.35 + uTime * 0.28 + vSeed);
+        float w2 = 0.5 + 0.5 * cos(p.x * 0.28 - p.y * 0.48 - uTime * 0.22 + vSeed * 1.7);
+        float wisp = smoothstep(0.35, 0.85, w1 * 0.55 + w2 * 0.45) * radial;
+
+        // Carve smoothly around solid stone piers and stair wings so mist never clips into stone
+        float dPierL = sdBox2(p - vec2(-3.38, 0.0), vec2(1.42, 2.48));
+        float dPierR = sdBox2(p - vec2( 3.38, 0.0), vec2(1.42, 2.48));
+        float dWingL = sdBox2(p - vec2(-7.00, 0.0), vec2(2.40, 2.30));
+        float dWingR = sdBox2(p - vec2( 7.00, 0.0), vec2(2.40, 2.30));
+        float dSolid = min(min(dPierL, dPierR), min(dWingL, dWingR));
+        float clearStone = smoothstep(-0.05, 0.85, dSolid);
+
+        float centerDist = length(p);
+        float warmLift = exp(-centerDist * 0.18) * 0.25;
+        vec3 mistCol = mix(vec3(0.34, 0.48, 0.68), vec3(0.72, 0.64, 0.54), warmLift);
+
+        float alpha = wisp * clearStone * 0.032;
+        if (alpha < 0.001) discard;
+        gl_FragColor = vec4(mistCol, alpha);
+      }
+    `
+  });
+
+  // Subtle mist ribbons confined to the arch channel & distant background water (zero foreground water haze)
+  const layers = [
+    { x: 0.0, y: 0.48, z: 0.0, rx: 1.75, rz: 6.2, rotY: 0.0 },    // Arch-channel ribbon
+    { x: 0.0, y: 0.32, z: -12.5, rx: 14.0, rz: 6.5, rotY: 0.08 }, // Distant background horizon mist
+  ];
+
+  layers.forEach((L, idx) => {
+    const g = buildParametricSurface(12, 12, (u, v, pos, du, dv, w) => {
+      const px = (u - 0.5) * L.rx * 2;
+      const pz = (v - 0.5) * L.rz * 2;
+      pos.set(px, 0, pz);
+      du.set(L.rx * 2, 0, 0);
+      dv.set(0, 0, L.rz * 2);
+      w.set(1, 0, 0);
+    }, { flipNormal: true });
+
+    const count = g.attributes.position.count;
+    const seeds = new Float32Array(count).fill(rand() * 10 + idx);
+    g.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+
+    const mesh = new THREE.Mesh(g, mistMat);
+    mesh.position.set(L.x, L.y, L.z);
+    mesh.rotation.y = L.rotY;
+    mesh.renderOrder = 2;
+    group.add(mesh);
+  });
+
+  return { group, mistUniforms };
+}
+
+/**
+ * Floating stylized sakura petals (parametric curved petal geometry, InstancedMesh)
+ * drifting lazily on a gentle breeze through the central round arch & over the water.
+ */
+function createFloatingPetals(count = 72) {
+  const petalGeom = buildParametricSurface(8, 8, (u, v, pos, du, dv, w) => {
+    // Heart-notched curved blossom petal with analytic normals
+    const s = u * 2 - 1; // -1..1 width
+    const len = 0.135;
+    const widthEnv = Math.sin(v * Math.PI) * (0.65 + 0.35 * Math.pow(v, 0.5));
+    const notch = v > 0.78 ? 0.014 * (1 - s * s) * ((v - 0.78) / 0.22) : 0;
+    const x = s * 0.052 * widthEnv;
+    const z = (v - 0.5) * len - notch;
+    const cup = 0.016 * (s * s) + 0.012 * Math.sin(v * Math.PI);
+
+    pos.set(x, cup, z);
+    du.set(0.104 * widthEnv, 0.064 * s, 0);
+    dv.set(0, 0.012 * Math.PI * Math.cos(v * Math.PI), len);
+    w.set(1, 0, 0);
+  }, { flipNormal: true });
+
+  const petalMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0xf6d9dc),
+    emissive: new THREE.Color(0x3a1c22),
+    emissiveIntensity: 0.25,
+    roughness: 0.65,
+    metalness: 0.0,
+    side: THREE.DoubleSide,
+  });
+
+  const inst = new THREE.InstancedMesh(petalGeom, petalMat, count);
+  const rand = mulberry32(9187);
+  const data = [];
+  for (let i = 0; i < count; i++) {
+    const throughArch = i < count * 0.62;
+    data.push({
+      throughArch,
+      xBase: throughArch ? (rand() * 2 - 1) * 1.55 : (rand() * 2 - 1) * 9.5,
+      yBase: throughArch ? 0.28 + rand() * 1.75 : 0.45 + rand() * 5.2,
+      zStart: (rand() * 2 - 1) * 12.0,
+      speedZ: 0.38 + rand() * 0.42,
+      swayAmp: 0.22 + rand() * 0.35,
+      swayFreq: 0.55 + rand() * 0.65,
+      phase: rand() * Math.PI * 2,
+      rotSpeed: new THREE.Vector3((rand() - 0.5) * 1.4, (rand() - 0.5) * 1.6, (rand() - 0.5) * 1.2),
+      scale: 0.72 + rand() * 0.58,
+    });
+  }
+
+  const dummy = new THREE.Object3D();
+  function update(t) {
+    for (let i = 0; i < count; i++) {
+      const p = data[i];
+      // Continuous slow drift along -Z (passing cleanly under the central arch!)
+      const zRange = 22.0;
+      let z = ((p.zStart - t * p.speedZ + zRange * 0.5) % zRange);
+      if (z < 0) z += zRange;
+      z -= zRange * 0.5;
+
+      let x = p.xBase + Math.sin(t * p.swayFreq + p.phase) * p.swayAmp;
+      let y = p.yBase + Math.cos(t * p.swayFreq * 0.8 + p.phase) * 0.18;
+
+      // Gently guide arch-channel petals through the round arch opening
+      if (p.throughArch && Math.abs(z) < 3.4) {
+        const archFit = 1.0 - Math.abs(z) / 3.4;
+        x *= (1.0 - archFit * 0.22);
+        const maxArchY = 0.35 + Math.sqrt(Math.max(0.1, 1.78 * 1.78 - x * x));
+        y = Math.min(y, maxArchY);
+      }
+      y = Math.max(0.08, y);
+
+      dummy.position.set(x, y, z);
+      dummy.rotation.set(
+        p.phase + t * p.rotSpeed.x,
+        p.phase * 1.3 + t * p.rotSpeed.y,
+        p.phase * 0.7 + t * p.rotSpeed.z
+      );
+      dummy.scale.setScalar(p.scale);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+  }
+
+  update(0);
+  return { mesh: inst, update };
+}
+
+/**
+ * Warm golden fireflies drifting softly beneath the central arch and along the water.
+ */
+function createFireflies(count = 54) {
+  const rand = mulberry32(2026);
+  const positions = new Float32Array(count * 3);
+  const phases = new Float32Array(count);
+  const sizes = new Float32Array(count);
+  const seeds = [];
+
+  for (let i = 0; i < count; i++) {
+    const inArch = i < count * 0.58;
+    const x = inArch ? (rand() * 2 - 1) * 2.1 : (rand() * 2 - 1) * 8.5;
+    const y = inArch ? 0.30 + rand() * 1.85 : 0.45 + rand() * 4.5;
+    const z = inArch ? (rand() * 2 - 1) * 4.8 : (rand() * 2 - 1) * 6.5;
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+    phases[i] = rand() * Math.PI * 2;
+    sizes[i] = 18.0 + rand() * 18.0;
+    seeds.push({
+      inArch, x, y, z,
+      rx: 0.35 + rand() * 0.55,
+      ry: 0.16 + rand() * 0.28,
+      rz: 0.65 + rand() * 1.15,
+      fx: 0.25 + rand() * 0.30,
+      fy: 0.35 + rand() * 0.35,
+      fz: 0.18 + rand() * 0.24,
+      ph: phases[i],
+    });
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+  geom.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+
+  const uniforms = {
+    uTime: { value: 0 },
+    uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+  };
+
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms,
+    vertexShader: `
+      attribute float aPhase;
+      attribute float aSize;
+      uniform float uTime;
+      uniform float uPixelRatio;
+      varying float vPulse;
+      void main() {
+        float pulse = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(uTime * 1.85 + aPhase * 3.0), 1.8);
+        vPulse = pulse;
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aSize * uPixelRatio * (0.75 + 0.45 * pulse) * (12.0 / max(-mvPos.z, 1.0));
+        gl_Position = projectionMatrix * mvPos;
+      }
+    `,
+    fragmentShader: `
+      varying float vPulse;
+      void main() {
+        float d = length(gl_PointCoord - 0.5) * 2.0;
+        float glow = exp(-d * d * 5.2);
+        float core = smoothstep(0.35, 0.0, d);
+        vec3 col = mix(vec3(1.1, 0.62, 0.16), vec3(1.8, 1.45, 0.72), core);
+        float alpha = glow * vPulse * 0.92;
+        if (alpha < 0.005) discard;
+        gl_FragColor = vec4(col, alpha);
+      }
+    `
+  });
+
+  const points = new THREE.Points(geom, mat);
+  points.renderOrder = 3;
+
+  function update(t) {
+    uniforms.uTime.value = t;
+    const posArr = geom.attributes.position.array;
+    for (let i = 0; i < count; i++) {
+      const s = seeds[i];
+      let x = s.x + Math.sin(t * s.fx + s.ph) * s.rx;
+      let y = s.y + Math.sin(t * s.fy + s.ph * 1.7) * s.ry;
+      let z = s.z + Math.cos(t * s.fz + s.ph * 0.9) * s.rz;
+      if (s.inArch) {
+        x = Math.max(-1.72, Math.min(1.72, x));
+        const ceiling = 0.34 + Math.sqrt(Math.max(0.08, 1.82 * 1.82 - x * x));
+        y = Math.max(0.22, Math.min(ceiling, y));
+      } else {
+        y = Math.max(0.26, y);
+      }
+      posArr[i * 3] = x;
+      posArr[i * 3 + 1] = y;
+      posArr[i * 3 + 2] = z;
+    }
+    geom.attributes.position.needsUpdate = true;
+  }
+
+  return { points, update, uniforms };
+}
+
+// ============================================================================
+// 8. MAIN SCENE ASSEMBLY, LIGHTING, POST-PROCESSING & CINEMATIC LOOP
+// ============================================================================
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.06;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x091322);
+scene.fog = new THREE.FogExp2(0x0f1c2e, 0.0115);
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.25, 240);
+camera.position.set(17.6, 8.8, 23.6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 5.45, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.045;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.26;
+controls.minDistance = 10.5;
+controls.maxDistance = 42.0;
+controls.minPolarAngle = 0.26;
+controls.maxPolarAngle = Math.PI * 0.482; // Keep camera gracefully above the water plane
+controls.enablePan = false;
+controls.update();
+
+// Studio PMREM reflections & Sky dome
+scene.environment = createStudioEnvironment(renderer);
+scene.environmentIntensity = 0.68;
+scene.add(createStudioSkyDome());
+
+// Calibrated Procedural PBR Materials
+const stoneTex = createLimestoneTextures();
+const tileTex = createRoofTileTextures();
+
+const materials = {
+  limestone: applyWeatheringShader(new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0xdcd6c8),
+    map: stoneTex.map,
+    bumpMap: stoneTex.bumpMap,
+    bumpScale: 0.032,
+    roughnessMap: stoneTex.roughnessMap,
+    roughness: 0.90,
+    metalness: 0.02,
+  }), { mossStrength: 0.74, waterlineWetness: 0.72 }),
+
+  columnStone: applyWeatheringShader(new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0xe6dfd0),
+    map: stoneTex.map,
+    bumpMap: stoneTex.bumpMap,
+    bumpScale: 0.024,
+    roughnessMap: stoneTex.roughnessMap,
+    roughness: 0.82,
+    metalness: 0.03,
+  }), { mossStrength: 0.48, waterlineWetness: 0.55 }),
+
+  recessDark: applyWeatheringShader(new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0x3a4048),
+    map: stoneTex.map,
+    bumpMap: stoneTex.bumpMap,
+    bumpScale: 0.035,
+    roughness: 0.95,
+    metalness: 0.02,
+  }), { mossStrength: 0.55, waterlineWetness: 0.45 }),
+
+  roofTile: applyWeatheringShader(new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0x526470),
+    map: tileTex.map,
+    bumpMap: tileTex.bumpMap,
+    bumpScale: 0.042,
+    roughnessMap: tileTex.roughnessMap,
+    roughness: 0.66,
+    metalness: 0.08,
+  }), {
+    mossStrength: 0.56,
+    waterlineWetness: 0.0,
+    mossTintA: new THREE.Color(0x354b32),
+    mossTintB: new THREE.Color(0x506944),
+  }),
+
+  accentBronze: new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0x7c745c),
+    roughness: 0.42,
+    metalness: 0.62,
+  }),
+};
+
+// Build the Pagoda Bridge Gate
+const { root: gateRoot, lanterns } = buildPagodaBridgeGate(materials);
+scene.add(gateRoot);
+
+// Soft Lantern Glow Halos (billboarded Gaussian sprites, included in water reflection!)
+const glowTex = createLanternGlowTexture();
+lanterns.forEach((L) => {
+  const spriteMat = new THREE.SpriteMaterial({
+    map: glowTex,
+    color: new THREE.Color(0xffb454),
+    transparent: true,
+    opacity: L.isPeak ? 0.72 : 0.56,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.position.copy(L.pos);
+  const s = L.isPeak ? 2.35 : 1.05 * L.scale;
+  sprite.scale.set(s, s, 1);
+  scene.add(sprite);
+  L.halo = sprite;
+  L.haloBaseScale = s;
+  L.haloBaseOpacity = spriteMat.opacity;
+});
+
+// Soft-Lit Studio Lighting Rig
+const hemiLight = new THREE.HemisphereLight(0x88acd4, 0x16263d, 0.85);
+scene.add(hemiLight);
+
+const keyLight = new THREE.DirectionalLight(0xf2ede4, 2.35);
+keyLight.position.set(-14.5, 22.0, 15.0);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.near = 4;
+keyLight.shadow.camera.far = 52;
+const dShadow = 14.5;
+keyLight.shadow.camera.left = -dShadow;
+keyLight.shadow.camera.right = dShadow;
+keyLight.shadow.camera.top = dShadow + 2;
+keyLight.shadow.camera.bottom = -dShadow + 2;
+keyLight.shadow.bias = -0.00045;
+keyLight.shadow.normalBias = 0.025;
+scene.add(keyLight);
+
+const rimLight = new THREE.DirectionalLight(0x6fa8e8, 1.35);
+rimLight.position.set(16.0, 13.5, -17.5);
+scene.add(rimLight);
+
+const fillLight = new THREE.DirectionalLight(0x4b6e98, 0.52);
+fillLight.position.set(12.0, 5.0, 14.0);
+scene.add(fillLight);
+
+// Warm Flickering Local Lantern Lights (clustered cleanly for rich warm limestone wash)
+const lanternLights = [
+  { light: new THREE.PointLight(0xffa642, 7.5, 9.5, 1.65), base: 7.5, phase: 0.42 }, // Peak roof lantern
+  { light: new THREE.PointLight(0xffa03c, 5.2, 8.5, 1.6),  base: 5.2, phase: 1.70 }, // Upper clerestory inner glow
+  { light: new THREE.PointLight(0xff9d3a, 4.6, 8.5, 1.65), base: 4.6, phase: 2.40 }, // Left upper bridge deck lanterns
+  { light: new THREE.PointLight(0xff9d3a, 4.6, 8.5, 1.65), base: 4.6, phase: 4.10 }, // Right upper bridge deck lanterns
+  { light: new THREE.PointLight(0xff9834, 3.8, 7.5, 1.7),  base: 3.8, phase: 5.30 }, // Left lower stairs lanterns
+  { light: new THREE.PointLight(0xff9834, 3.8, 7.5, 1.7),  base: 3.8, phase: 0.95 }, // Right lower stairs lanterns
+  { light: new THREE.PointLight(0xffa84c, 2.8, 7.0, 1.6),  base: 2.8, phase: 3.10 }, // Subtle warm bounce under central arch
+];
+lanternLights[0].light.position.set(0, 12.95, 0);
+lanternLights[1].light.position.set(0, 8.85, 0);
+lanternLights[2].light.position.set(-4.55, 4.65, 2.25);
+lanternLights[3].light.position.set( 4.55, 4.65, 2.25);
+lanternLights[4].light.position.set(-7.65, 2.25, 2.15);
+lanternLights[5].light.position.set( 7.65, 2.25, 2.15);
+lanternLights[6].light.position.set(0, 1.55, 0);
+lanternLights.forEach((l) => scene.add(l.light));
+
+// Reflective Dark Blue Water Floor
+const water = createReflectiveWater(renderer, window.innerWidth, window.innerHeight);
+scene.add(water.waterMesh);
+
+// Drifting Mist, Floating Petals & Fireflies
+const mist = createDriftingMist();
+scene.add(mist.group);
+
+const petals = createFloatingPetals(72);
+scene.add(petals.mesh);
+
+const fireflies = createFireflies(54);
+scene.add(fireflies.points);
+
+// Post-Processing: WebGL2 MSAA RenderTarget + Subtle HDR Bloom + ACES OutputPass
+const rtSize = renderer.getDrawingBufferSize(new THREE.Vector2());
+const composerRT = new THREE.WebGLRenderTarget(rtSize.x, rtSize.y, {
+  type: THREE.HalfFloatType,
+  samples: 4,
+});
+const composer = new EffectComposer(renderer, composerRT);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.34, // Subtle cinematic glow on lanterns & fireflies
+  0.58,
+  0.92  // High threshold so pale limestone stays crisp and never blows out
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// Responsive Resize Handler
+window.addEventListener('resize', () => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  bloomPass.setSize(w, h);
+  water.resize(w, h);
+  fireflies.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
+});
+
+// Smooth Cinematic Animation Loop
+const clock = new THREE.Clock();
+
+function evalLanternFlicker(t, phase) {
+  return (
+    1.0 +
+    0.085 * Math.sin(t * 2.15 + phase) +
+    0.055 * Math.sin(t * 5.40 + phase * 2.3) +
+    0.030 * Math.sin(t * 11.7 + phase * 4.1)
+  );
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  // Gentle vertical camera breathing on OrbitControls target
+  controls.target.y = 5.45 + Math.sin(t * 0.24) * 0.14;
+  controls.update();
+
+  // Animate softly glowing & flickering lanterns
+  for (let i = 0; i < lanterns.length; i++) {
+    const L = lanterns[i];
+    const f = evalLanternFlicker(t, L.phase);
+    L.mat.color.copy(L.baseColor).multiplyScalar(f);
+    L.halo.scale.setScalar(L.haloBaseScale * (0.94 + 0.08 * f));
+    L.halo.material.opacity = L.haloBaseOpacity * (0.86 + 0.16 * f);
+  }
+  for (let i = 0; i < lanternLights.length; i++) {
+    const item = lanternLights[i];
+    item.light.intensity = item.base * evalLanternFlicker(t, item.phase);
+  }
+
+  // Animate water ripples, drifting mist, floating petals, and fireflies
+  water.waterUniforms.uTime.value = t;
+  mist.mistUniforms.uTime.value = t;
+  petals.update(t);
+  fireflies.update(t);
+
+  // Render live planar reflection pass (excluding mist so reflection stays crystal-clear), then main frame
+  water.updateReflection(scene, camera, mist.group);
+  composer.render();
+}
+
+animate();
+</script>
+</body>
+</html>
