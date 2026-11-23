@@ -24,6 +24,7 @@ Opening the showcase URL above plays **Chandrayaan-3 Landing** fullscreen right 
 | 12 | **Coffee Ghost** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=coffee-ghost) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/coffee-ghost.html) | [`coffee-ghost.html`](./coffee-ghost.html) |
 | 13 | **Sci-Fi Galaxy Hologram** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=07-galaxy-hologram) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/07-galaxy-hologram.html) | [`07-galaxy-hologram.html`](./07-galaxy-hologram.html) |
 | 14 | **macOS Sequoia — Interactive Desktop (Gemini 4 Neon)** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=macos-sequoia-desktop) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/macos_sequoia_interactive_desktop.html) | [`macos_sequoia_interactive_desktop.html`](./macos_sequoia_interactive_desktop.html) |
+| 15 | **Jensen Huang: The 11-Day Comeback (Arcade Game — Gemini 4 Neon)** | [Play](https://vsrikanth05.github.io/ai-3d-benchmarks/?scene=jensen-huang-11-day-comeback) | [Standalone](https://vsrikanth05.github.io/ai-3d-benchmarks/jensen-huang-11-day-comeback.html) | [`jensen-huang-11-day-comeback.html`](./jensen-huang-11-day-comeback.html) |
 
 ## Tools & Tech Stack Used
 

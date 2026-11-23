@@ -1,0 +1,3957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>JENSEN HUANG: THE 11-DAY COMEBACK</title>
+<style>
+  :root {
+    --nv-green: #76B900;
+    --nv-bright: #9eff00;
+    --cyan: #00f0ff;
+    --ws-red: #ff2e4c;
+    --gold: #ffd43b;
+    --bg: #030508;
+    --panel: rgba(5, 10, 14, 0.72);
+    --border-green: rgba(118, 185, 0, 0.55);
+    --border-cyan: rgba(0, 240, 255, 0.45);
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: #f3f7fa;
+    font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+
+  #gameCanvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    z-index: 1;
+  }
+
+  /* Subtle CRT scanline sheen */
+  .scanlines {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.018) 0px,
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  }
+
+  /* ================= TOP HUD ================= */
+  #hud {
+    position: fixed;
+    top: 10px;
+    left: 12px;
+    right: 12px;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: minmax(210px, 1.15fr) minmax(240px, 1.55fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    pointer-events: none;
+  }
+
+  .hud-card {
+    background: var(--panel);
+    border: 1.5px solid var(--border-green);
+    border-radius: 10px;
+    padding: 7px 12px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 0 18px rgba(118, 185, 0, 0.16), inset 0 0 12px rgba(0, 240, 255, 0.06);
+  }
+
+  /* 1. Market Cap + Mini Chart */
+  .mcap-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border-color: var(--border-green);
+  }
+
+  .mcap-meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 112px;
+  }
+
+  .hud-label {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 10px;
+    letter-spacing: 1.3px;
+    font-weight: 800;
+    color: var(--cyan);
+    text-transform: uppercase;
+    opacity: 0.92;
+  }
+
+  .mcap-value-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  #mcapValue {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 24px;
+    font-weight: 900;
+    color: var(--nv-bright);
+    text-shadow: 0 0 12px rgba(118, 185, 0, 0.85);
+    line-height: 1.05;
+    transition: transform 0.12s ease, color 0.12s ease;
+  }
+
+  #mcapValue.bump {
+    transform: scale(1.12);
+    color: #ffffff;
+  }
+
+  #mcapValue.dip {
+    transform: scale(0.95);
+    color: var(--ws-red);
+    text-shadow: 0 0 12px rgba(255, 46, 76, 0.9);
+  }
+
+  #mcapDelta {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--nv-green);
+  }
+
+  #miniChart {
+    width: 96px;
+    height: 38px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(118, 185, 0, 0.35);
+    flex-shrink: 0;
+  }
+
+  /* 2. 11-Day Timeline Bar */
+  .timeline-card {
+    border-color: var(--border-cyan);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .timeline-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #dayBadge {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 900;
+    color: var(--nv-bright);
+    background: rgba(118, 185, 0, 0.18);
+    border: 1px solid rgba(118, 185, 0, 0.5);
+    padding: 1px 7px;
+    border-radius: 4px;
+    letter-spacing: 0.8px;
+  }
+
+  .timeline-track-wrap {
+    position: relative;
+    height: 14px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 99px;
+    border: 1px solid rgba(0, 240, 255, 0.35);
+    overflow: hidden;
+  }
+
+  #timelineFill {
+    height: 100%;
+    width: 0%;
+    border-radius: 99px;
+    background: linear-gradient(90deg, var(--ws-red) 0%, #ff9900 28%, var(--cyan) 54%, var(--nv-green) 80%, var(--nv-bright) 100%);
+    box-shadow: 0 0 14px rgba(118, 185, 0, 0.85);
+    transition: width 0.06s linear;
+  }
+
+  .timeline-tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.55);
+  }
+
+  .timeline-milestones {
+    display: flex;
+    justify-content: space-between;
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    color: rgba(226, 242, 255, 0.78);
+  }
+
+  .timeline-milestones span.active {
+    color: var(--nv-bright);
+    text-shadow: 0 0 8px rgba(118, 185, 0, 0.9);
+  }
+
+  .timeline-milestones .ms-exit { color: #ff7a8d; }
+  .timeline-milestones .ms-xpost { color: var(--cyan); }
+  .timeline-milestones .ms-throne { color: var(--nv-bright); }
+
+  /* 3. Leather-Jacket Lives */
+  .lives-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 11px;
+  }
+
+  #livesIcons {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .jacket-life {
+    width: 26px;
+    height: 26px;
+    transition: transform 0.22s cubic-bezier(.22,1.6,.36,1), opacity 0.25s ease, filter 0.25s ease;
+    filter: drop-shadow(0 0 6px rgba(118, 185, 0, 0.7));
+  }
+
+  .jacket-life.lost {
+    opacity: 0.18;
+    transform: scale(0.8);
+    filter: grayscale(1);
+  }
+
+  .jacket-life.shielded {
+    filter: drop-shadow(0 0 8px rgba(255, 212, 59, 0.95));
+    transform: scale(1.12);
+  }
+
+  /* 4. Mute Button */
+  #muteBtn {
+    pointer-events: auto;
+    cursor: pointer;
+    height: 46px;
+    min-width: 46px;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1.5px solid var(--border-cyan);
+    background: var(--panel);
+    color: var(--cyan);
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-weight: 900;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.16);
+    transition: transform 0.12s ease, border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+
+  #muteBtn:hover {
+    border-color: var(--nv-bright);
+    color: var(--nv-bright);
+    background: rgba(118, 185, 0, 0.18);
+  }
+
+  #muteBtn:active {
+    transform: scale(0.94);
+  }
+
+  #muteBtn.muted {
+    border-color: rgba(255, 46, 76, 0.55);
+    color: #ff6b81;
+  }
+
+  /* ================= OVERLAYS ================= */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .overlay.hidden {
+    opacity: 0;
+    pointer-events: none !important;
+    visibility: hidden;
+  }
+
+  /* Attract / Start Screen (Transparent over live action!) */
+  #startOverlay {
+    pointer-events: auto;
+    background: radial-gradient(circle at 50% 48%, rgba(3, 8, 12, 0.25) 0%, rgba(3, 5, 8, 0.55) 100%);
+  }
+
+  .arcade-title-wrap {
+    text-align: center;
+    max-width: 780px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin-top: 26px;
+  }
+
+  .title-kicker {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 3px;
+    color: var(--cyan);
+    background: rgba(0, 240, 255, 0.12);
+    border: 1px solid rgba(0, 240, 255, 0.5);
+    padding: 4px 14px;
+    border-radius: 999px;
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.9);
+  }
+
+  .arcade-title {
+    font-size: clamp(32px, 6.2vw, 72px);
+    font-weight: 900;
+    line-height: 0.95;
+    letter-spacing: -1px;
+    text-transform: uppercase;
+    color: #ffffff;
+    text-shadow:
+      0 0 18px rgba(118, 185, 0, 0.95),
+      0 0 42px rgba(118, 185, 0, 0.55),
+      0 4px 0 #1e3b00;
+  }
+
+  .arcade-title .sub-line {
+    display: block;
+    font-size: clamp(20px, 3.6vw, 42px);
+    color: var(--nv-bright);
+    letter-spacing: 2px;
+    margin-top: 4px;
+    text-shadow:
+      0 0 16px rgba(158, 255, 0, 0.9),
+      0 0 34px rgba(0, 240, 255, 0.45),
+      0 3px 0 #112400;
+  }
+
+  .play-btn {
+    pointer-events: auto;
+    cursor: pointer;
+    margin-top: 8px;
+    padding: 16px 34px;
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: clamp(16px, 2.3vw, 22px);
+    font-weight: 900;
+    letter-spacing: 1.5px;
+    color: #ffffff;
+    background: rgba(118, 185, 0, 0.22);
+    border: 2.5px solid var(--nv-bright);
+    border-radius: 14px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow:
+      0 0 28px rgba(118, 185, 0, 0.7),
+      inset 0 0 18px rgba(158, 255, 0, 0.25);
+    text-shadow: 0 0 10px rgba(0, 0, 0, 0.9);
+    animation: pulseCta 1.35s ease-in-out infinite;
+    transition: transform 0.12s ease, background 0.15s ease;
+  }
+
+  .play-btn:hover {
+    background: rgba(118, 185, 0, 0.42);
+    transform: scale(1.04);
+  }
+
+  .play-btn:active {
+    transform: scale(0.96);
+  }
+
+  @keyframes pulseCta {
+    0%, 100% {
+      box-shadow: 0 0 22px rgba(118, 185, 0, 0.65), inset 0 0 16px rgba(158, 255, 0, 0.22);
+      transform: scale(1);
+    }
+    50% {
+      box-shadow: 0 0 40px rgba(158, 255, 0, 0.95), 0 0 18px rgba(0, 240, 255, 0.55), inset 0 0 24px rgba(158, 255, 0, 0.35);
+      transform: scale(1.03);
+    }
+  }
+
+  .legend-pills {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  .legend-pill {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 11.5px;
+    font-weight: 800;
+    padding: 5px 11px;
+    border-radius: 8px;
+    background: rgba(5, 10, 15, 0.68);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(4px);
+    color: #e9f4ff;
+  }
+
+  .legend-pill.red { border-color: rgba(255, 46, 76, 0.6); color: #ff8b9c; }
+  .legend-pill.green { border-color: rgba(118, 185, 0, 0.65); color: #b7ff45; }
+  .legend-pill.gold { border-color: rgba(255, 212, 59, 0.65); color: #ffe47a; }
+  .legend-pill.cyan { border-color: rgba(0, 240, 255, 0.6); color: #8ff8ff; }
+
+  .controls-hint {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: rgba(230, 245, 255, 0.85);
+    background: rgba(0, 0, 0, 0.55);
+    padding: 5px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+  }
+
+  /* End Cards (Victory & Game Over) */
+  .end-card {
+    pointer-events: auto;
+    width: min(560px, 94vw);
+    background: rgba(5, 11, 16, 0.84);
+    border: 2.5px solid var(--nv-bright);
+    border-radius: 18px;
+    padding: 24px 26px;
+    text-align: center;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 0 48px rgba(118, 185, 0, 0.45), inset 0 0 24px rgba(118, 185, 0, 0.14);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    animation: popIn 0.35s cubic-bezier(.2,1.4,.35,1);
+  }
+
+  .end-card.gameover-card {
+    border-color: var(--ws-red);
+    box-shadow: 0 0 48px rgba(255, 46, 76, 0.45), inset 0 0 24px rgba(255, 46, 76, 0.14);
+  }
+
+  @keyframes popIn {
+    0% { opacity: 0; transform: scale(0.84) translateY(18px); }
+    100% { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .end-badge {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 2.2px;
+    padding: 4px 12px;
+    border-radius: 99px;
+    background: rgba(118, 185, 0, 0.22);
+    border: 1px solid var(--nv-bright);
+    color: var(--nv-bright);
+  }
+
+  .gameover-card .end-badge {
+    background: rgba(255, 46, 76, 0.2);
+    border-color: var(--ws-red);
+    color: #ff7c90;
+  }
+
+  .end-title {
+    font-size: clamp(26px, 4.6vw, 40px);
+    font-weight: 900;
+    line-height: 1.05;
+    color: #ffffff;
+    text-shadow: 0 0 18px rgba(118, 185, 0, 0.85);
+  }
+
+  .gameover-card .end-title {
+    color: #ff5770;
+    text-shadow: 0 0 18px rgba(255, 46, 76, 0.85);
+  }
+
+  .end-sub {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: clamp(15px, 2.4vw, 20px);
+    font-weight: 900;
+    color: var(--nv-bright);
+    letter-spacing: 1px;
+  }
+
+  .stats-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin: 4px 0;
+  }
+
+  .stat-box {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    padding: 9px 6px;
+  }
+
+  .stat-box .s-lbl {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 9.5px;
+    letter-spacing: 1px;
+    color: var(--cyan);
+    font-weight: 800;
+  }
+
+  .stat-box .s-val {
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-size: clamp(16px, 2.5vw, 22px);
+    font-weight: 900;
+    color: #ffffff;
+    margin-top: 2px;
+  }
+
+  .stat-box.green-hi .s-val {
+    color: var(--nv-bright);
+    text-shadow: 0 0 10px rgba(118, 185, 0, 0.8);
+  }
+
+  .quote-box {
+    font-style: italic;
+    font-size: clamp(15px, 2.2vw, 18px);
+    font-weight: 700;
+    color: #eaf7ff;
+    background: rgba(0, 240, 255, 0.08);
+    border-left: 3px solid var(--nv-bright);
+    padding: 8px 14px;
+    border-radius: 0 8px 8px 0;
+  }
+
+  .gameover-card .play-btn {
+    border-color: var(--cyan);
+    background: rgba(0, 240, 255, 0.18);
+    box-shadow: 0 0 24px rgba(0, 240, 255, 0.55);
+  }
+
+  /* ================= MOBILE TOUCH CONTROLS ================= */
+  #touchControls {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    z-index: 15;
+    display: none;
+    justify-content: space-between;
+    align-items: flex-end;
+    pointer-events: none;
+  }
+
+  body.is-touch #touchControls.active {
+    display: flex;
+  }
+
+  .touch-group {
+    display: flex;
+    gap: 10px;
+    pointer-events: auto;
+  }
+
+  .t-btn {
+    width: 60px;
+    height: 60px;
+    border-radius: 14px;
+    border: 2px solid rgba(0, 240, 255, 0.55);
+    background: rgba(5, 12, 18, 0.62);
+    color: var(--cyan);
+    font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+    font-weight: 900;
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.2);
+  }
+
+  .t-btn.jump-btn {
+    width: 82px;
+    border-color: rgba(158, 255, 0, 0.72);
+    color: var(--nv-bright);
+    font-size: 13px;
+    letter-spacing: 0.8px;
+    box-shadow: 0 0 16px rgba(118, 185, 0, 0.28);
+  }
+
+  .t-btn.pressed {
+    transform: scale(0.92);
+    background: rgba(118, 185, 0, 0.35);
+    border-color: #ffffff;
+    color: #ffffff;
+  }
+
+  /* ================= RESPONSIVE HUD ================= */
+  @media (max-width: 900px) {
+    #hud {
+      grid-template-columns: 1fr auto auto;
+      grid-template-rows: auto auto;
+      gap: 6px;
+      top: 8px;
+      left: 8px;
+      right: 8px;
+    }
+    .mcap-card {
+      grid-column: 1 / 2;
+      grid-row: 1;
+      padding: 5px 9px;
+    }
+    .lives-card {
+      grid-column: 2 / 3;
+      grid-row: 1;
+      padding: 5px 8px;
+    }
+    #muteBtn {
+      grid-column: 3 / 4;
+      grid-row: 1;
+      height: 42px;
+      min-width: 42px;
+      padding: 0 8px;
+    }
+    .timeline-card {
+      grid-column: 1 / 4;
+      grid-row: 2;
+      padding: 5px 10px;
+    }
+    #mcapValue { font-size: 19px; }
+    #miniChart { width: 70px; height: 32px; }
+    .jacket-life { width: 22px; height: 22px; }
+  }
+
+  @media (max-width: 480px) {
+    .mcap-meta { min-width: 86px; }
+    #mcapValue { font-size: 17px; }
+    #miniChart { width: 58px; height: 28px; }
+    .timeline-milestones { font-size: 8.5px; }
+    .hud-label { font-size: 9px; }
+    .legend-pill { font-size: 10px; padding: 4px 8px; }
+    .end-card { padding: 18px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+<div class="scanlines"></div>
+
+<!-- TOP HUD -->
+<div id="hud">
+  <!-- 1. Live NVDA Market Cap + Mini Chart -->
+  <div class="hud-card mcap-card">
+    <div class="mcap-meta">
+      <div class="hud-label">NVDA MARKET CAP</div>
+      <div class="mcap-value-row">
+        <span id="mcapValue">$2.80T</span>
+        <span id="mcapDelta">+0.0%</span>
+      </div>
+    </div>
+    <canvas id="miniChart" width="96" height="38"></canvas>
+  </div>
+
+  <!-- 2. Live 11-Day Timeline -->
+  <div class="hud-card timeline-card">
+    <div class="timeline-top">
+      <div class="hud-label">11-DAY TIMELINE</div>
+      <div id="dayBadge">NOV 12 • DAY 1/11</div>
+    </div>
+    <div class="timeline-track-wrap">
+      <div id="timelineFill"></div>
+      <div class="timeline-tick" style="left: 45.45%"></div>
+    </div>
+    <div class="timeline-milestones">
+      <span id="msExit" class="ms-exit active">NOV 12 (EXIT)</span>
+      <span id="msXpost" class="ms-xpost">NOV 17 (X POST)</span>
+      <span id="msThrone" class="ms-throne">NOV 23 (CEO THRONE)</span>
+    </div>
+  </div>
+
+  <!-- 3. 3 Leather-Jacket Lives -->
+  <div class="hud-card lives-card">
+    <div class="hud-label">JACKETS</div>
+    <div id="livesIcons"></div>
+  </div>
+
+  <!-- 4. Audio Mute Toggle -->
+  <button id="muteBtn" type="button" aria-label="Toggle Sound" title="Toggle Retro Synth Audio">
+    <span id="muteIcon">🔊</span>
+  </button>
+</div>
+
+<!-- START / ATTRACT OVERLAY (Transparent over live frame-0 gameplay!) -->
+<div id="startOverlay" class="overlay">
+  <div class="arcade-title-wrap">
+    <div class="title-kicker">NVIDIA ARCADE EDITION • NOV 12 → NOV 23</div>
+    <h1 class="arcade-title">
+      JENSEN HUANG
+      <span class="sub-line">THE 11-DAY COMEBACK</span>
+    </h1>
+    <button id="playBtn" class="play-btn" type="button">PLAY COMEBACK (SPACE / TAP)</button>
+    <div class="legend-pills">
+      <span class="legend-pill red">DODGE: -40% CANDLES • BOARD FUD • PANIC</span>
+      <span class="legend-pill green">GRAB: +30% ROCKETS • RUBIN GPUs</span>
+      <span class="legend-pill cyan">180K PETITION = WIPE FUD</span>
+      <span class="legend-pill gold">LEATHER JACKET SHIELD = 5s GOD MODE</span>
+    </div>
+    <div class="controls-hint">DESKTOP: ← / → or A / D Move • SPACE / ↑ Jump &amp; Air-Dash • SHIFT Turbo Dash &nbsp;|&nbsp; MOBILE: Drag &amp; Tap</div>
+  </div>
+</div>
+
+<!-- VICTORY OVERLAY -->
+<div id="victoryOverlay" class="overlay hidden">
+  <div class="end-card">
+    <div class="end-badge">NOV 23 • CEO THRONE RECLAIMED</div>
+    <div class="end-title">JENSEN IS BACK!</div>
+    <div id="victoryRebound" class="end-sub">+$1 TRILLION REBOUND</div>
+    <div class="stats-grid">
+      <div class="stat-box green-hi">
+        <div class="s-lbl">FINAL MARKET CAP</div>
+        <div id="vicMcap" class="s-val">$4.25T</div>
+      </div>
+      <div class="stat-box">
+        <div class="s-lbl">GPUs &amp; ROCKETS</div>
+        <div id="vicItems" class="s-val">14</div>
+      </div>
+      <div class="stat-box">
+        <div class="s-lbl">FUD DODGED/WIPED</div>
+        <div id="vicDodged" class="s-val">26</div>
+      </div>
+    </div>
+    <div class="quote-box">"I can't wait to get back to work."</div>
+    <button id="playAgainVicBtn" class="play-btn" type="button">PLAY AGAIN (SPACE / TAP)</button>
+  </div>
+</div>
+
+<!-- GAME OVER OVERLAY -->
+<div id="gameOverOverlay" class="overlay hidden">
+  <div class="end-card gameover-card">
+    <div id="goDayBadge" class="end-badge">STOPPED ON NOV 16</div>
+    <div class="end-title">STOCK DIPPED!</div>
+    <div id="goQuip" class="end-sub">WALL STREET PANICKED TOO HARD</div>
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="s-lbl">FINAL MARKET CAP</div>
+        <div id="goMcap" class="s-val">$3.12T</div>
+      </div>
+      <div class="stat-box">
+        <div class="s-lbl">DAY REACHED</div>
+        <div id="goDay" class="s-val">NOV 16</div>
+      </div>
+      <div class="stat-box">
+        <div class="s-lbl">GPUs COLLECTED</div>
+        <div id="goItems" class="s-val">7</div>
+      </div>
+    </div>
+    <button id="playAgainGoBtn" class="play-btn" type="button">BUY THE DIP — PLAY AGAIN</button>
+  </div>
+</div>
+
+<!-- MOBILE TOUCH CONTROLS -->
+<div id="touchControls">
+  <div class="touch-group">
+    <button id="tLeft" class="t-btn" type="button" aria-label="Move Left">◀</button>
+    <button id="tRight" class="t-btn" type="button" aria-label="Move Right">▶</button>
+  </div>
+  <div class="touch-group">
+    <button id="tDash" class="t-btn" type="button" aria-label="Dash" style="font-size:12px;width:64px;">DASH</button>
+    <button id="tJump" class="t-btn jump-btn" type="button" aria-label="Jump">JUMP</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // =========================================================================
+  // 1. CONSTANTS & DOM REFERENCES
+  // =========================================================================
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const miniCanvas = document.getElementById('miniChart');
+  const miniCtx = miniCanvas.getContext('2d');
+
+  const elMcapValue = document.getElementById('mcapValue');
+  const elMcapDelta = document.getElementById('mcapDelta');
+  const elDayBadge = document.getElementById('dayBadge');
+  const elTimelineFill = document.getElementById('timelineFill');
+  const elMsExit = document.getElementById('msExit');
+  const elMsXpost = document.getElementById('msXpost');
+  const elMsThrone = document.getElementById('msThrone');
+  const elLivesIcons = document.getElementById('livesIcons');
+  const elMuteBtn = document.getElementById('muteBtn');
+  const elMuteIcon = document.getElementById('muteIcon');
+
+  const elStartOverlay = document.getElementById('startOverlay');
+  const elVictoryOverlay = document.getElementById('victoryOverlay');
+  const elGameOverOverlay = document.getElementById('gameOverOverlay');
+  const elPlayBtn = document.getElementById('playBtn');
+  const elPlayAgainVicBtn = document.getElementById('playAgainVicBtn');
+  const elPlayAgainGoBtn = document.getElementById('playAgainGoBtn');
+
+  const elVictoryRebound = document.getElementById('victoryRebound');
+  const elVicMcap = document.getElementById('vicMcap');
+  const elVicItems = document.getElementById('vicItems');
+  const elVicDodged = document.getElementById('vicDodged');
+
+  const elGoDayBadge = document.getElementById('goDayBadge');
+  const elGoQuip = document.getElementById('goQuip');
+  const elGoMcap = document.getElementById('goMcap');
+  const elGoDay = document.getElementById('goDay');
+  const elGoItems = document.getElementById('goItems');
+
+  const elTouchControls = document.getElementById('touchControls');
+  const btnTLeft = document.getElementById('tLeft');
+  const btnTRight = document.getElementById('tRight');
+  const btnTJump = document.getElementById('tJump');
+  const btnTDash = document.getElementById('tDash');
+
+  const NV_GREEN = '#76B900';
+  const NV_BRIGHT = '#9eff00';
+  const CYAN = '#00f0ff';
+  const WS_RED = '#ff2e4c';
+  const GOLD = '#ffd43b';
+
+  const RUN_DURATION = 25.0; // Fast 25-second arcade run: Nov 12 -> Nov 23
+  const START_MCAP = 2800;   // $2.80T in billions
+  const MAX_LIVES = 3;
+
+  // Render crisp SVG Leather Jacket life icons
+  function buildLifeIcons() {
+    elLivesIcons.innerHTML = '';
+    for (let i = 0; i < MAX_LIVES; i++) {
+      const span = document.createElement('span');
+      span.className = 'jacket-life';
+      span.innerHTML = `
+        <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9 5L13 4L16 8L19 4L23 5L29 11L26 27H22V15L21 28H11L10 15V27H6L3 11L9 5Z" fill="#12161c" stroke="#76B900" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M13 4L16 11L19 4" stroke="#9eff00" stroke-width="1.6"/>
+          <line x1="16" y1="11" x2="16" y2="27" stroke="#c8d6e5" stroke-width="1.6" stroke-dasharray="2 1.5"/>
+          <path d="M7 11L10 8" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+          <path d="M25 11L22 8" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+        </svg>
+      `;
+      elLivesIcons.appendChild(span);
+    }
+  }
+  buildLifeIcons();
+
+  // =========================================================================
+  // 2. WEB AUDIO API RETRO CHIPTUNE & SFX SYNTHESIZER
+  // =========================================================================
+  class RetroAudio {
+    constructor() {
+      this.ctx = null;
+      this.master = null;
+      this.musicGain = null;
+      this.sfxGain = null;
+      this.muted = false;
+      this.unlocked = false;
+      this.musicActive = false;
+      this.step = 0;
+      this.nextNoteTime = 0;
+      this.timerId = null;
+      this.intensity = 0; // 0 = normal, 1 = high/turbo
+      this.shieldNodes = null;
+    }
+
+    unlock() {
+      if (!this.ctx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        this.ctx = new AudioCtx();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 0.72;
+        this.master.connect(this.ctx.destination);
+
+        this.musicGain = this.ctx.createGain();
+        this.musicGain.gain.value = 0.34;
+        this.musicGain.connect(this.master);
+
+        this.sfxGain = this.ctx.createGain();
+        this.sfxGain.gain.value = 0.78;
+        this.sfxGain.connect(this.master);
+      }
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
+      this.unlocked = true;
+    }
+
+    toggleMute() {
+      this.muted = !this.muted;
+      elMuteBtn.classList.toggle('muted', this.muted);
+      elMuteIcon.textContent = this.muted ? '🔇' : '🔊';
+      if (this.master && this.ctx) {
+        this.master.gain.setTargetAtTime(this.muted ? 0 : 0.72, this.ctx.currentTime, 0.02);
+      }
+    }
+
+    startMusic() {
+      if (!this.unlocked || !this.ctx || this.musicActive) return;
+      this.musicActive = true;
+      this.step = 0;
+      this.nextNoteTime = this.ctx.currentTime + 0.04;
+      this.timerId = setInterval(() => this._scheduleLoop(), 25);
+    }
+
+    stopMusic() {
+      this.musicActive = false;
+      if (this.timerId) {
+        clearInterval(this.timerId);
+        this.timerId = null;
+      }
+      this.stopShieldHum();
+    }
+
+    _scheduleLoop() {
+      if (!this.musicActive || !this.ctx || document.hidden) return;
+      const bpm = this.intensity > 0.5 ? 156 : 142;
+      const stepDur = (60 / bpm) / 4; // 16th note
+      while (this.nextNoteTime < this.ctx.currentTime + 0.12) {
+        this._playStep(this.step, this.nextNoteTime, stepDur);
+        this.nextNoteTime += stepDur;
+        this.step = (this.step + 1) % 32;
+      }
+    }
+
+    _playStep(step, t, dur) {
+      // Energetic synthwave-chiptune progression: Em -> C -> G -> D (classic heroic comeback!)
+      const bassNotes = [
+        82.41, 82.41, 164.81, 82.41, 82.41, 164.81, 123.47, 110.0,
+        65.41, 65.41, 130.81, 65.41, 65.41, 130.81, 98.0, 110.0,
+        98.0,  98.0,  196.0,  98.0,  98.0,  196.0,  146.83, 130.81,
+        73.42, 73.42, 146.83, 73.42, 73.42, 146.83, 110.0, 123.47
+      ];
+      const leadNotes = [
+        329.63, 0, 392.0, 493.88, 0, 659.25, 587.33, 493.88,
+        523.25, 0, 392.0, 523.25, 0, 659.25, 587.33, 0,
+        392.0,  0, 493.88, 587.33, 0, 783.99, 659.25, 587.33,
+        587.33, 0, 493.88, 440.0, 587.33, 0, 659.25, 739.99
+      ];
+
+      // Kick on 0, 4, 8, 12...
+      if (step % 4 === 0) {
+        this._drumKick(t);
+      }
+      // Snare on 4, 12, 20, 28
+      if (step % 8 === 4) {
+        this._drumSnare(t);
+      }
+      // Crisp hi-hat on offbeats
+      if (step % 2 === 1) {
+        this._drumHat(t, step % 4 === 3 ? 0.14 : 0.08);
+      }
+
+      // Driving bass
+      const bf = bassNotes[step];
+      if (bf) {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        const flt = this.ctx.createBiquadFilter();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(bf, t);
+        flt.type = 'lowpass';
+        flt.frequency.setValueAtTime(520 + this.intensity * 420, t);
+        flt.frequency.exponentialRampToValueAtTime(160, t + dur * 0.9);
+        g.gain.setValueAtTime(0.24, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.92);
+        osc.connect(flt);
+        flt.connect(g);
+        g.connect(this.musicGain);
+        osc.start(t);
+        osc.stop(t + dur);
+      }
+
+      // Chiptune lead
+      const lf = leadNotes[step];
+      if (lf) {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'square';
+        const oct = this.intensity > 0.6 ? 2 : 1;
+        osc.frequency.setValueAtTime(lf * oct, t);
+        g.gain.setValueAtTime(0.085, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur * 1.45);
+        osc.connect(g);
+        g.connect(this.musicGain);
+        osc.start(t);
+        osc.stop(t + dur * 1.5);
+      }
+    }
+
+    _drumKick(t) {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(155, t);
+      osc.frequency.exponentialRampToValueAtTime(36, t + 0.11);
+      g.gain.setValueAtTime(0.55, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+      osc.connect(g);
+      g.connect(this.musicGain);
+      osc.start(t);
+      osc.stop(t + 0.14);
+    }
+
+    _drumSnare(t) {
+      this._noiseBurst(t, 0.09, 1400, 0.24, this.musicGain);
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(210, t);
+      osc.frequency.exponentialRampToValueAtTime(95, t + 0.06);
+      g.gain.setValueAtTime(0.18, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+      osc.connect(g);
+      g.connect(this.musicGain);
+      osc.start(t);
+      osc.stop(t + 0.08);
+    }
+
+    _drumHat(t, vol) {
+      this._noiseBurst(t, 0.03, 7500, vol, this.musicGain);
+    }
+
+    _noiseBurst(t, dur, freq, vol, dest) {
+      if (!this.ctx) return;
+      const sampleRate = this.ctx.sampleRate;
+      const len = Math.max(1, Math.floor(sampleRate * dur));
+      const buf = this.ctx.createBuffer(1, len, sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const flt = this.ctx.createBiquadFilter();
+      flt.type = 'highpass';
+      flt.frequency.setValueAtTime(freq, t);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      src.connect(flt);
+      flt.connect(g);
+      g.connect(dest);
+      src.start(t);
+    }
+
+    sfxJump(isDouble) {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'square';
+      const base = isDouble ? 360 : 230;
+      osc.frequency.setValueAtTime(base, t);
+      osc.frequency.exponentialRampToValueAtTime(base * 2.4, t + 0.13);
+      g.gain.setValueAtTime(0.16, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      osc.connect(g);
+      g.connect(this.sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.15);
+    }
+
+    sfxDash() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      this._noiseBurst(t, 0.16, 1800, 0.28, this.sfxGain);
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(760, t);
+      osc.frequency.exponentialRampToValueAtTime(220, t + 0.14);
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      osc.connect(g);
+      g.connect(this.sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.16);
+    }
+
+    sfxPickupGpu() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      const notes = [587.33, 880, 1174.66];
+      notes.forEach((f, idx) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(f, t + idx * 0.045);
+        g.gain.setValueAtTime(0.16, t + idx * 0.045);
+        g.gain.exponentialRampToValueAtTime(0.001, t + idx * 0.045 + 0.11);
+        osc.connect(g);
+        g.connect(this.sfxGain);
+        osc.start(t + idx * 0.045);
+        osc.stop(t + idx * 0.045 + 0.12);
+      });
+    }
+
+    sfxCoin() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(987.77, t);
+      osc.frequency.setValueAtTime(1318.51, t + 0.045);
+      g.gain.setValueAtTime(0.2, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.connect(g);
+      g.connect(this.sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.19);
+    }
+
+    sfxRocket() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      // Turbo whoosh
+      this._noiseBurst(t, 0.42, 900, 0.34, this.sfxGain);
+      const notes = [440, 554.37, 659.25, 880, 1108.73];
+      notes.forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(f, t + i * 0.04);
+        g.gain.setValueAtTime(0.14, t + i * 0.04);
+        g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.04 + 0.22);
+        osc.connect(g);
+        g.connect(this.sfxGain);
+        osc.start(t + i * 0.04);
+        osc.stop(t + i * 0.04 + 0.24);
+      });
+    }
+
+    sfxPetition() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      // Megaphone synth sweep + power chord
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(320, t);
+      osc.frequency.exponentialRampToValueAtTime(1280, t + 0.22);
+      osc.frequency.exponentialRampToValueAtTime(640, t + 0.42);
+      g.gain.setValueAtTime(0.24, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+      osc.connect(g);
+      g.connect(this.sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.46);
+    }
+
+    sfxShieldStart() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      const chord = [523.25, 659.25, 783.99, 1046.5];
+      chord.forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(f, t + i * 0.055);
+        g.gain.setValueAtTime(0.22, t + i * 0.055);
+        g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.055 + 0.35);
+        osc.connect(g);
+        g.connect(this.sfxGain);
+        osc.start(t + i * 0.055);
+        osc.stop(t + i * 0.055 + 0.36);
+      });
+      this.startShieldHum();
+    }
+
+    startShieldHum() {
+      if (!this.unlocked || !this.ctx) return;
+      this.stopShieldHum();
+      const t = this.ctx.currentTime;
+      const osc1 = this.ctx.createOscillator();
+      const osc2 = this.ctx.createOscillator();
+      const lfo = this.ctx.createOscillator();
+      const lfoGain = this.ctx.createGain();
+      const g = this.ctx.createGain();
+
+      osc1.type = 'sine';
+      osc2.type = 'triangle';
+      osc1.frequency.setValueAtTime(146.83, t);
+      osc2.frequency.setValueAtTime(220.0, t);
+
+      lfo.type = 'sine';
+      lfo.frequency.setValueAtTime(7.5, t);
+      lfoGain.gain.setValueAtTime(0.04, t);
+
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.linearRampToValueAtTime(0.11, t + 0.15);
+
+      lfo.connect(lfoGain);
+      lfoGain.connect(g.gain);
+      osc1.connect(g);
+      osc2.connect(g);
+      g.connect(this.sfxGain);
+
+      osc1.start(t);
+      osc2.start(t);
+      lfo.start(t);
+      this.shieldNodes = { osc1, osc2, lfo, g };
+    }
+
+    stopShieldHum() {
+      if (!this.shieldNodes || !this.ctx) return;
+      const { osc1, osc2, lfo, g } = this.shieldNodes;
+      const t = this.ctx.currentTime;
+      try {
+        g.gain.cancelScheduledValues(t);
+        g.gain.setTargetAtTime(0.0001, t, 0.05);
+        osc1.stop(t + 0.22);
+        osc2.stop(t + 0.22);
+        lfo.stop(t + 0.22);
+      } catch (_) {}
+      this.shieldNodes = null;
+    }
+
+    sfxSmash() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      this._noiseBurst(t, 0.12, 1100, 0.26, this.sfxGain);
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(420, t);
+      osc.frequency.exponentialRampToValueAtTime(920, t + 0.12);
+      g.gain.setValueAtTime(0.18, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      osc.connect(g);
+      g.connect(this.sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.15);
+    }
+
+    sfxHit() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      this._noiseBurst(t, 0.24, 300, 0.45, this.sfxGain);
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(190, t);
+      osc.frequency.exponentialRampToValueAtTime(42, t + 0.28);
+      g.gain.setValueAtTime(0.32, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      osc.connect(g);
+      g.connect(this.sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.31);
+    }
+
+    sfxVictory() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      const melody = [
+        [523.25, 0.00, 0.13],
+        [659.25, 0.12, 0.13],
+        [783.99, 0.24, 0.13],
+        [1046.5, 0.38, 0.28],
+        [783.99, 0.64, 0.13],
+        [1046.5, 0.78, 0.55]
+      ];
+      melody.forEach(([f, offset, dur]) => {
+        [1, 0.5].forEach((mult, idx) => {
+          const osc = this.ctx.createOscillator();
+          const g = this.ctx.createGain();
+          osc.type = idx === 0 ? 'square' : 'triangle';
+          osc.frequency.setValueAtTime(f * mult, t + offset);
+          g.gain.setValueAtTime(idx === 0 ? 0.18 : 0.2, t + offset);
+          g.gain.exponentialRampToValueAtTime(0.001, t + offset + dur);
+          osc.connect(g);
+          g.connect(this.sfxGain);
+          osc.start(t + offset);
+          osc.stop(t + offset + dur + 0.02);
+        });
+      });
+    }
+
+    sfxGameOver() {
+      if (!this.unlocked || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      const notes = [
+        [392.0, 0.0, 0.18],
+        [369.99, 0.19, 0.18],
+        [349.23, 0.38, 0.18],
+        [311.13, 0.58, 0.48]
+      ];
+      notes.forEach(([f, off, d]) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(f, t + off);
+        if (off > 0.5) osc.frequency.linearRampToValueAtTime(f * 0.88, t + off + d);
+        g.gain.setValueAtTime(0.2, t + off);
+        g.gain.exponentialRampToValueAtTime(0.001, t + off + d);
+        osc.connect(g);
+        g.connect(this.sfxGain);
+        osc.start(t + off);
+        osc.stop(t + off + d + 0.03);
+      });
+    }
+  }
+
+  const audio = new RetroAudio();
+
+  // =========================================================================
+  // 3. VIEWPORT & RESPONSIVE COORDINATE SYSTEM
+  // =========================================================================
+  let cssW = window.innerWidth;
+  let cssH = window.innerHeight;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let VW = 1280;
+  let VH = 720;
+  let scale = 1;
+  let isPortrait = false;
+  let groundY = 580;
+  let hudSafeY = 92;
+  const elHud = document.getElementById('hud');
+
+  function resize() {
+    cssW = window.innerWidth;
+    cssH = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+
+    isPortrait = cssW < cssH * 0.92;
+    if (!isPortrait) {
+      VH = 720;
+      scale = cssH / VH;
+      VW = cssW / scale;
+      groundY = VH * 0.805;
+    } else {
+      VW = 700;
+      scale = cssW / VW;
+      VH = cssH / scale;
+      groundY = VH * 0.74;
+    }
+    const hudRect = elHud ? elHud.getBoundingClientRect() : null;
+    hudSafeY = hudRect && scale > 0 ? Math.max(80, hudRect.bottom / scale + 12) : 96;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Detect touch device
+  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  if (hasTouch) document.body.classList.add('is-touch');
+
+  // =========================================================================
+  // 4. GAME STATE & ENTITIES
+  // =========================================================================
+  // States: 'attract' | 'playing' | 'finale' | 'victory' | 'gameover'
+  let gameState = 'attract';
+  let elapsed = 0;          // 0 -> RUN_DURATION during playing
+  let worldTime = 0;        // Always increments
+  let endLockTimer = 0;     // Prevents accidental instant skip on victory/gameover
+
+  let mcap = START_MCAP;    // In Billions ($2800B = $2.80T)
+  let mcapDisplay = START_MCAP;
+  let lives = MAX_LIVES;
+  let itemsCollected = 0;
+  let fudCleared = 0;
+  let chartHistory = [];
+  let chartSampleTimer = 0;
+
+  // Screen juice
+  let shakeTime = 0;
+  let shakeMag = 0;
+  let hitStop = 0;
+  let flashAlpha = 0;
+  let flashColor = '#ffffff';
+  let bannerText = '';
+  let bannerSub = '';
+  let bannerColor = NV_BRIGHT;
+  let bannerTimer = 0;
+
+  // Timeline milestone flags
+  let xPostTriggered = false;
+  let finalRallyTriggered = false;
+
+  // World scroll & background candlesticks
+  let highwayOffset = 0;
+  let bgCandles = [];
+  let bgScroll = 0;
+  let tickerX = 0;
+  let speedLines = [];
+
+  // Entities
+  let obstacles = [];
+  let collectibles = [];
+  let coins = [];
+  let particles = [];
+  let popups = [];
+  let shockwaves = [];
+  let confetti = [];
+  let finaleCandles = [];
+
+  // Finale CEO Chair state
+  const ceoChair = {
+    active: false,
+    x: 1500,
+    targetX: 900,
+    y: 0,
+    seated: false,
+    leapT: 0,
+    leapStartX: 0,
+    leapStartY: 0,
+    celebrateTimer: 0
+  };
+
+  // Player (Jensen Huang)
+  const player = {
+    x: 260,
+    y: groundY,
+    vx: 0,
+    vy: 0,
+    w: 58,
+    h: 92,
+    onGround: true,
+    jumpsLeft: 2,
+    facing: 1,
+    runCycle: 0,
+    squashX: 1,
+    squashY: 1,
+    dashTimer: 0,
+    dashCooldown: 0,
+    turboTimer: 0,
+    shieldTimer: 0,
+    invulnTimer: 0,
+    expr: 'happy', // happy | hype | shock | boss
+    exprTimer: 0,
+    trail: []
+  };
+
+  // Wave scheduler
+  let nextObstacleTimer = 0.8;
+  let nextCollectibleTimer = 0.9;
+  let scheduledEvents = [];
+
+  // Input state
+  const keys = { left: false, right: false, up: false, dash: false };
+  let touchDragActive = false;
+  let touchDragTargetX = null;
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchStartTime = 0;
+  let touchMovedDist = 0;
+
+  // =========================================================================
+  // 5. BACKGROUND INITIALIZATION
+  // =========================================================================
+  function initBackground() {
+    bgCandles = [];
+    const count = 42;
+    let price = 140;
+    for (let i = 0; i < count; i++) {
+      const bullish = Math.random() > 0.44;
+      const body = 22 + Math.random() * 72;
+      const open = price;
+      const close = bullish ? open - body : open + body;
+      price = Math.max(70, Math.min(360, close));
+      bgCandles.push({
+        x: i * 48,
+        open,
+        close,
+        high: Math.min(open, close) - (12 + Math.random() * 34),
+        low: Math.max(open, close) + (12 + Math.random() * 34),
+        bullish,
+        layer: i % 2 === 0 ? 1 : 0.55
+      });
+    }
+
+    speedLines = [];
+    for (let i = 0; i < 22; i++) {
+      speedLines.push({
+        x: Math.random() * 1600,
+        y: Math.random() * 600,
+        len: 50 + Math.random() * 130,
+        speed: 650 + Math.random() * 900,
+        alpha: 0.1 + Math.random() * 0.25
+      });
+    }
+  }
+  initBackground();
+
+  // =========================================================================
+  // 6. HELPERS & JUICE TRIGGERS
+  // =========================================================================
+  function addShake(mag, dur) {
+    shakeMag = Math.max(shakeMag, mag);
+    shakeTime = Math.max(shakeTime, dur);
+  }
+
+  function addFlash(color, alpha) {
+    flashColor = color;
+    flashAlpha = Math.max(flashAlpha, alpha);
+  }
+
+  function showBanner(text, sub, color, dur = 1.9) {
+    bannerText = text;
+    bannerSub = sub || '';
+    bannerColor = color || NV_BRIGHT;
+    bannerTimer = dur;
+  }
+
+  function spawnPopup(x, y, text, color = NV_BRIGHT, size = 24) {
+    const padX = Math.min(VW * 0.25, Math.max(95, text.length * size * 0.34));
+    const safeX = Math.max(padX, Math.min(VW - padX, x));
+    let safeY = Math.max(hudSafeY + 26, y);
+    // Nudge vertically if overlapping an existing recent popup
+    for (const existing of popups) {
+      if (Math.abs(existing.x - safeX) < 120 && Math.abs(existing.y - safeY) < 30) {
+        safeY = Math.max(hudSafeY + 26, safeY - 30);
+      }
+    }
+    popups.push({
+      x: safeX,
+      y: safeY,
+      vy: -95 - Math.random() * 35,
+      text,
+      color,
+      size,
+      life: 1.05,
+      maxLife: 1.05,
+      scale: 1.35
+    });
+  }
+
+  function spawnParticles(x, y, color, count, speed = 260, shape = 'square') {
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = (0.3 + Math.random() * 0.95) * speed;
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd - 60,
+        size: 3 + Math.random() * 6,
+        color,
+        life: 0.35 + Math.random() * 0.45,
+        maxLife: 0.8,
+        gravity: 540,
+        shape
+      });
+    }
+  }
+
+  function addMcap(deltaB) {
+    mcap = Math.max(1800, mcap + deltaB);
+    elMcapValue.classList.remove('bump', 'dip');
+    void elMcapValue.offsetWidth;
+    elMcapValue.classList.add(deltaB >= 0 ? 'bump' : 'dip');
+    setTimeout(() => elMcapValue.classList.remove('bump', 'dip'), 170);
+  }
+
+  function updateLivesHUD() {
+    const nodes = elLivesIcons.children;
+    for (let i = 0; i < nodes.length; i++) {
+      nodes[i].classList.toggle('lost', i >= lives);
+      nodes[i].classList.toggle('shielded', player.shieldTimer > 0 && i < lives);
+    }
+  }
+
+  function updateHUD() {
+    // Smoothly roll displayed market cap
+    mcapDisplay += (mcap - mcapDisplay) * 0.22;
+    const tVal = (mcapDisplay / 1000).toFixed(2);
+    elMcapValue.textContent = `$${tVal}T`;
+    const pct = ((mcapDisplay - START_MCAP) / START_MCAP) * 100;
+    const sign = pct >= 0 ? '+' : '';
+    elMcapDelta.textContent = `${sign}${pct.toFixed(1)}%`;
+    elMcapDelta.style.color = pct >= 0 ? NV_BRIGHT : WS_RED;
+
+    // 11-Day Timeline (Nov 12 -> Nov 23)
+    const prog = gameState === 'attract'
+      ? (Math.sin(worldTime * 0.35) * 0.5 + 0.5)
+      : Math.min(1, elapsed / RUN_DURATION);
+    elTimelineFill.style.width = `${(prog * 100).toFixed(1)}%`;
+
+    const dayOffset = Math.min(11, Math.floor(prog * 11));
+    const novDate = 12 + dayOffset;
+    const dayNum = Math.min(11, dayOffset + 1);
+    elDayBadge.textContent = `NOV ${novDate} • DAY ${dayNum}/11`;
+
+    elMsExit.classList.toggle('active', novDate <= 16);
+    elMsXpost.classList.toggle('active', novDate >= 17 && novDate < 23);
+    elMsThrone.classList.toggle('active', novDate >= 23);
+
+    // Draw Mini Stock Chart
+    drawMiniChart();
+  }
+
+  function drawMiniChart() {
+    const w = miniCanvas.width;
+    const h = miniCanvas.height;
+    miniCtx.clearRect(0, 0, w, h);
+
+    // Subtle horizontal baseline
+    miniCtx.strokeStyle = 'rgba(0, 240, 255, 0.22)';
+    miniCtx.lineWidth = 1;
+    miniCtx.beginPath();
+    miniCtx.moveTo(0, h * 0.72);
+    miniCtx.lineTo(w, h * 0.72);
+    miniCtx.stroke();
+
+    if (chartHistory.length < 2) return;
+    let minV = 2400;
+    let maxV = 4200;
+    for (const v of chartHistory) {
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    const range = Math.max(400, maxV - minV);
+
+    const lastV = chartHistory[chartHistory.length - 1];
+    const isUp = lastV >= START_MCAP;
+    const lineCol = isUp ? NV_BRIGHT : WS_RED;
+
+    // Fill area
+    miniCtx.beginPath();
+    for (let i = 0; i < chartHistory.length; i++) {
+      const px = (i / (chartHistory.length - 1)) * (w - 4) + 2;
+      const py = h - 4 - ((chartHistory[i] - minV) / range) * (h - 8);
+      if (i === 0) miniCtx.moveTo(px, py);
+      else miniCtx.lineTo(px, py);
+    }
+    miniCtx.lineTo(w - 2, h);
+    miniCtx.lineTo(2, h);
+    miniCtx.closePath();
+    const grad = miniCtx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, isUp ? 'rgba(118, 185, 0, 0.48)' : 'rgba(255, 46, 76, 0.45)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    miniCtx.fillStyle = grad;
+    miniCtx.fill();
+
+    // Line
+    miniCtx.beginPath();
+    for (let i = 0; i < chartHistory.length; i++) {
+      const px = (i / (chartHistory.length - 1)) * (w - 4) + 2;
+      const py = h - 4 - ((chartHistory[i] - minV) / range) * (h - 8);
+      if (i === 0) miniCtx.moveTo(px, py);
+      else miniCtx.lineTo(px, py);
+    }
+    miniCtx.strokeStyle = lineCol;
+    miniCtx.lineWidth = 2;
+    miniCtx.stroke();
+
+    // Blinking live dot
+    const lastX = w - 3;
+    const lastY = h - 4 - ((lastV - minV) / range) * (h - 8);
+    miniCtx.fillStyle = '#ffffff';
+    miniCtx.beginPath();
+    miniCtx.arc(lastX, lastY, 2.3, 0, Math.PI * 2);
+    miniCtx.fill();
+  }
+
+  // =========================================================================
+  // 7. START / RESET / FINALE / GAME OVER
+  // =========================================================================
+  function resetCommon(mode) {
+    gameState = mode;
+    elapsed = 0;
+    mcap = START_MCAP;
+    mcapDisplay = START_MCAP;
+    lives = MAX_LIVES;
+    itemsCollected = 0;
+    fudCleared = 0;
+    chartHistory = [START_MCAP, START_MCAP + 10];
+    chartSampleTimer = 0;
+
+    obstacles = [];
+    collectibles = [];
+    coins = [];
+    particles = [];
+    popups = [];
+    shockwaves = [];
+    confetti = [];
+    finaleCandles = [];
+
+    xPostTriggered = false;
+    finalRallyTriggered = false;
+    bannerTimer = 0;
+    shakeTime = 0;
+    shakeMag = 0;
+    hitStop = 0;
+    flashAlpha = 0;
+
+    player.x = Math.min(260, VW * 0.25);
+    player.y = groundY;
+    player.vx = 0;
+    player.vy = 0;
+    player.onGround = true;
+    player.jumpsLeft = 2;
+    player.dashTimer = 0;
+    player.dashCooldown = 0;
+    player.turboTimer = 0;
+    player.shieldTimer = 0;
+    player.invulnTimer = 0;
+    player.expr = 'happy';
+    player.exprTimer = 0;
+    player.trail = [];
+
+    ceoChair.active = false;
+    ceoChair.seated = false;
+    ceoChair.celebrateTimer = 0;
+
+    nextObstacleTimer = 0.65;
+    nextCollectibleTimer = 0.75;
+
+    // Choreographed key beats across the 25-second 11-day saga so every run has peak comedy & action!
+    scheduledEvents = [
+      { t: 1.0,  done: false, fn: () => spawnCollectible('gpu') },
+      { t: 3.4,  done: false, fn: () => spawnCollectible('rocket') },
+      { t: 6.2,  done: false, fn: () => spawnCollectible('gpu') },
+      { t: 8.2,  done: false, fn: () => spawnCollectible('shield') },
+      { t: 11.4, done: false, fn: () => {
+        // NOV 17 X POST MILESTONE!
+        xPostTriggered = true;
+        showBanner('NOV 17: X POST VIRAL!', '180K PETITION INCOMING!', CYAN, 2.0);
+        addFlash(CYAN, 0.22);
+        // Spawn wave of red obstacles + the 180K Petition Megaphone right behind them!
+        spawnObstacle('fud', VW + 40, groundY - 58);
+        spawnObstacle('spark', VW + 170, groundY - 22);
+        spawnObstacle('candle', Math.min(VW - 120, player.x + 280));
+        spawnCollectible('petition', VW + 95, groundY - 115);
+      }},
+      { t: 14.5, done: false, fn: () => spawnCollectible('rocket') },
+      { t: 17.5, done: false, fn: () => {
+        finalRallyTriggered = true;
+        showBanner('FINAL RALLY TO NOV 23!', 'SURGE PAST $3.90T+!', NV_BRIGHT, 1.8);
+        spawnCollectible('shield');
+      }},
+      { t: 20.3, done: false, fn: () => spawnCollectible('petition') },
+      { t: 22.4, done: false, fn: () => spawnCollectible('rocket') },
+      { t: 23.6, done: false, fn: () => spawnCollectible('gpu') }
+    ];
+
+    updateLivesHUD();
+    updateHUD();
+  }
+
+  function startGame() {
+    audio.unlock();
+    resetCommon('playing');
+    elStartOverlay.classList.add('hidden');
+    elVictoryOverlay.classList.add('hidden');
+    elGameOverOverlay.classList.add('hidden');
+    elTouchControls.classList.add('active');
+    audio.intensity = 0;
+    audio.startMusic();
+    showBanner('NOV 12: THE COMEBACK BEGINS!', 'DODGE RED FUD • COLLECT GPUs', NV_BRIGHT, 1.8);
+    spawnParticles(player.x, player.y - 40, NV_BRIGHT, 18, 240);
+    audio.sfxDash();
+  }
+
+  function triggerFinale() {
+    gameState = 'finale';
+    audio.stopShieldHum();
+    elTouchControls.classList.remove('active');
+    addFlash(NV_BRIGHT, 0.45);
+    addShake(12, 0.4);
+    audio.sfxVictory();
+
+    // Burst all remaining obstacles into green celebration sparks
+    for (const ob of obstacles) {
+      spawnParticles(ob.x, ob.y, NV_BRIGHT, 14, 300);
+      fudCleared++;
+    }
+    obstacles = [];
+    collectibles = [];
+
+    // Ensure at least $3.90T+ feel if player had a wild run? Keep authentic score, plus +$250B CEO Throne Rebound Bonus!
+    addMcap(250);
+    spawnPopup(player.x, player.y - 110, 'CEO THRONE! +$250B', NV_BRIGHT, 30);
+
+    ceoChair.active = true;
+    ceoChair.x = VW + 160;
+    ceoChair.targetX = VW * 0.62;
+    ceoChair.y = groundY;
+    ceoChair.seated = false;
+    ceoChair.leapT = 0;
+    ceoChair.leapStartX = player.x;
+    ceoChair.leapStartY = player.y;
+    ceoChair.celebrateTimer = 0;
+
+    player.expr = 'boss';
+    player.vx = 0;
+    player.vy = 0;
+    showBanner('NOV 23: NVIDIA CEO CHAIR!', 'JENSEN RECLAIMS THE THRONE!', NV_BRIGHT, 2.2);
+  }
+
+  function showVictoryScreen() {
+    gameState = 'victory';
+    endLockTimer = 0.55;
+    audio.stopMusic();
+
+    const gainB = Math.max(1000, Math.round(mcap - START_MCAP));
+    const gainT = (gainB / 1000).toFixed(2);
+    elVictoryRebound.textContent = mcap >= 3800
+      ? `+$${gainT}T REBOUND (+$1 TRILLION COMEBACK!)`
+      : `+$1 TRILLION REBOUND`;
+    elVicMcap.textContent = `$${(mcap / 1000).toFixed(2)}T`;
+    elVicItems.textContent = String(itemsCollected);
+    elVicDodged.textContent = String(fudCleared);
+
+    elVictoryOverlay.classList.remove('hidden');
+  }
+
+  function triggerGameOver() {
+    gameState = 'gameover';
+    endLockTimer = 0.55;
+    audio.stopMusic();
+    audio.sfxGameOver();
+    elTouchControls.classList.remove('active');
+
+    const prog = Math.min(1, elapsed / RUN_DURATION);
+    const novDate = 12 + Math.min(10, Math.floor(prog * 11));
+    const quips = [
+      'ANALYSTS DOWNGRADED THE LEATHER JACKET!',
+      'SHORT SELLERS GOT LUCKY — BUY THE DIP!',
+      'TOO MUCH BOARD FUD ON THE CIRCUIT HIGHWAY!',
+      'NEED MORE RUBIN GPUs TO OUTRUN THE DIP!'
+    ];
+    elGoDayBadge.textContent = `STOPPED ON NOV ${novDate}`;
+    elGoQuip.textContent = quips[Math.floor(Math.random() * quips.length)];
+    elGoMcap.textContent = `$${(mcap / 1000).toFixed(2)}T`;
+    elGoDay.textContent = `NOV ${novDate}`;
+    elGoItems.textContent = String(itemsCollected);
+
+    elGameOverOverlay.classList.remove('hidden');
+  }
+
+  // =========================================================================
+  // 8. SPAWNERS (OBSTACLES & COLLECTIBLES)
+  // =========================================================================
+  function spawnObstacle(forcedType, fx, fy) {
+    const prog = gameState === 'attract' ? 0.5 : Math.min(1, elapsed / RUN_DURATION);
+    let type = forcedType;
+    if (!type) {
+      const r = Math.random();
+      if (r < 0.34) type = 'candle';
+      else if (r < 0.70) type = 'fud';
+      else type = 'spark';
+    }
+
+    const speedBoost = 1 + prog * 0.42 + (player.turboTimer > 0 ? 0.35 : 0);
+
+    if (type === 'candle') {
+      // Crashing Red Stock Candle ("-40%") telegraphs above then plunges!
+      const targetX = fx !== undefined
+        ? fx
+        : Math.max(90, Math.min(VW - 90, player.x + (Math.random() - 0.32) * 340));
+      obstacles.push({
+        type: 'candle',
+        label: '-40%',
+        x: targetX,
+        y: -90,
+        vx: -95 * speedBoost,
+        vy: 0,
+        w: 44,
+        h: 108,
+        warnTimer: 0.52,
+        crashed: false,
+        landTimer: 0,
+        passed: false
+      });
+    } else if (type === 'fud') {
+      // Spinning Red "BOARD FUD" or "RESIGNATION" warning block
+      const label = Math.random() < 0.54 ? 'BOARD FUD' : 'RESIGNATION';
+      const altitude = fy !== undefined
+        ? fy
+        : (Math.random() < 0.62 ? groundY - 56 : groundY - 148);
+      obstacles.push({
+        type: 'fud',
+        label,
+        x: fx !== undefined ? fx : VW + 70,
+        y: altitude,
+        baseY: altitude,
+        vx: -(370 + Math.random() * 115) * speedBoost,
+        vy: 0,
+        w: 58,
+        h: 58,
+        angle: 0,
+        rotSpeed: (Math.random() < 0.5 ? 1 : -1) * (3.2 + Math.random() * 2.2),
+        bobPhase: Math.random() * Math.PI * 2,
+        passed: false
+      });
+    } else {
+      // Red "WALL STREET PANIC" sparks zipping along the GPU highway floor
+      obstacles.push({
+        type: 'spark',
+        label: 'WALL STREET PANIC',
+        x: fx !== undefined ? fx : VW + 60,
+        y: fy !== undefined ? fy : groundY - 22,
+        vx: -(460 + Math.random() * 130) * speedBoost,
+        vy: 0,
+        w: 54,
+        h: 36,
+        phase: Math.random() * 10,
+        passed: false
+      });
+    }
+  }
+
+  function spawnCollectible(forcedType, fx, fy) {
+    let type = forcedType;
+    if (!type) {
+      const r = Math.random();
+      if (r < 0.52) type = 'gpu';
+      else if (r < 0.80) type = 'rocket';
+      else if (r < 0.91) type = 'petition';
+      else type = 'shield';
+    }
+
+    const baseSpeed = 300 + (player.turboTimer > 0 ? 110 : 0);
+    const yBands = [groundY - 58, groundY - 125, groundY - 185];
+    const y = fy !== undefined ? fy : yBands[Math.floor(Math.random() * yBands.length)];
+    const x = fx !== undefined ? fx : VW + 65;
+
+    const meta = {
+      gpu:      { label: 'RUBIN GPU', sub: '+$100B', w: 50, h: 50, color: NV_BRIGHT },
+      rocket:   { label: '+30% NVDA', sub: 'TURBO!', w: 66, h: 36, color: NV_BRIGHT },
+      petition: { label: '180K PETITION', sub: 'WIPE FUD!', w: 54, h: 48, color: CYAN },
+      shield:   { label: 'LEATHER JACKET SHIELD', sub: '5s INVINCIBLE', w: 54, h: 54, color: GOLD }
+    }[type];
+
+    collectibles.push({
+      type,
+      label: meta.label,
+      sub: meta.sub,
+      color: meta.color,
+      x,
+      y,
+      baseY: y,
+      vx: -baseSpeed * (type === 'rocket' ? 1.22 : 1),
+      w: meta.w,
+      h: meta.h,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+
+  // =========================================================================
+  // 9. PLAYER ACTIONS & INPUT HANDLING
+  // =========================================================================
+  function doJump() {
+    if (gameState !== 'playing') return;
+    if (player.jumpsLeft > 0) {
+      const isDouble = !player.onGround;
+      player.vy = isDouble ? -670 : -730;
+      player.onGround = false;
+      player.jumpsLeft--;
+      player.squashX = 0.78;
+      player.squashY = 1.26;
+      audio.sfxJump(isDouble);
+
+      if (isDouble) {
+        // Air-dash burst!
+        player.dashTimer = Math.max(player.dashTimer, 0.16);
+        const dir = keys.right ? 1 : keys.left ? -1 : player.facing;
+        player.vx += dir * 240;
+        spawnParticles(player.x, player.y - 30, CYAN, 12, 220);
+        spawnPopup(player.x, player.y - 88, 'AIR DASH!', CYAN, 17);
+      } else {
+        spawnParticles(player.x, groundY - 4, NV_BRIGHT, 9, 150);
+      }
+    }
+  }
+
+  function doDash() {
+    if (gameState !== 'playing') return;
+    if (player.dashCooldown > 0) return;
+    player.dashTimer = 0.22;
+    player.dashCooldown = 0.75;
+    const dir = keys.right ? 1 : keys.left ? -1 : 1;
+    player.facing = dir;
+    player.vx = dir * 820;
+    player.vy = Math.min(player.vy, -80);
+    player.squashX = 1.32;
+    player.squashY = 0.78;
+    audio.sfxDash();
+    addShake(4, 0.12);
+    spawnParticles(player.x - dir * 18, player.y - 42, CYAN, 14, 240);
+    spawnPopup(player.x, player.y - 95, 'TURBO DASH!', CYAN, 18);
+  }
+
+  function handleInstantStartFromInput() {
+    if (gameState === 'attract') {
+      startGame();
+      return true;
+    }
+    if ((gameState === 'victory' || gameState === 'gameover') && endLockTimer <= 0) {
+      startGame();
+      return true;
+    }
+    return false;
+  }
+
+  window.addEventListener('keydown', (e) => {
+    const code = e.code;
+    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) {
+      e.preventDefault();
+    }
+
+    if (code === 'KeyM') {
+      audio.unlock();
+      audio.toggleMute();
+      return;
+    }
+
+    if (gameState === 'attract' && ['Space', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'KeyA', 'KeyD', 'KeyW'].includes(code)) {
+      startGame();
+      return;
+    }
+
+    if ((gameState === 'victory' || gameState === 'gameover') && (code === 'Space' || code === 'Enter')) {
+      if (endLockTimer <= 0) startGame();
+      return;
+    }
+
+    if (code === 'ArrowLeft' || code === 'KeyA') keys.left = true;
+    if (code === 'ArrowRight' || code === 'KeyD') keys.right = true;
+    if ((code === 'Space' || code === 'ArrowUp' || code === 'KeyW') && !e.repeat) {
+      keys.up = true;
+      doJump();
+    }
+    if ((code === 'ShiftLeft' || code === 'ShiftRight' || code === 'KeyX' || code === 'KeyK') && !e.repeat) {
+      keys.dash = true;
+      doDash();
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    const code = e.code;
+    if (code === 'ArrowLeft' || code === 'KeyA') keys.left = false;
+    if (code === 'ArrowRight' || code === 'KeyD') keys.right = false;
+    if (code === 'Space' || code === 'ArrowUp' || code === 'KeyW') keys.up = false;
+    if (code === 'ShiftLeft' || code === 'ShiftRight' || code === 'KeyX' || code === 'KeyK') keys.dash = false;
+  });
+
+  // Buttons
+  elMuteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    audio.unlock();
+    audio.toggleMute();
+  });
+
+  elPlayBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startGame();
+  });
+
+  elStartOverlay.addEventListener('pointerdown', (e) => {
+    if (e.target === elMuteBtn || elMuteBtn.contains(e.target)) return;
+    startGame();
+  });
+
+  elPlayAgainVicBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startGame();
+  });
+
+  elPlayAgainGoBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startGame();
+  });
+
+  // Canvas pointer / touch drag + tap controls
+  canvas.addEventListener('pointerdown', (e) => {
+    if (handleInstantStartFromInput()) return;
+    if (gameState !== 'playing') return;
+
+    audio.unlock();
+    touchDragActive = true;
+    const vx = (e.clientX / cssW) * VW;
+    const vy = (e.clientY / cssH) * VH;
+    touchStartX = vx;
+    touchStartY = vy;
+    touchDragTargetX = vx;
+    touchStartTime = performance.now();
+    touchMovedDist = 0;
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!touchDragActive || gameState !== 'playing') return;
+    const vx = (e.clientX / cssW) * VW;
+    const vy = (e.clientY / cssH) * VH;
+    touchMovedDist += Math.hypot(vx - touchDragTargetX, vy - touchStartY);
+    touchDragTargetX = vx;
+    // Quick upward swipe also jumps!
+    if (touchStartY - vy > 52) {
+      doJump();
+      touchStartY = vy;
+    }
+  });
+
+  canvas.addEventListener('pointerup', () => {
+    if (!touchDragActive) return;
+    const dt = performance.now() - touchStartTime;
+    if (dt < 230 && touchMovedDist < 36) {
+      doJump();
+    }
+    touchDragActive = false;
+    touchDragTargetX = null;
+  });
+
+  canvas.addEventListener('pointercancel', () => {
+    touchDragActive = false;
+    touchDragTargetX = null;
+  });
+
+  // Mobile corner touch buttons
+  function bindTouchHold(btn, keyName) {
+    btn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      audio.unlock();
+      keys[keyName] = true;
+      btn.classList.add('pressed');
+    });
+    const up = (e) => {
+      e.stopPropagation();
+      keys[keyName] = false;
+      btn.classList.remove('pressed');
+    };
+    btn.addEventListener('pointerup', up);
+    btn.addEventListener('pointercancel', up);
+    btn.addEventListener('pointerleave', up);
+  }
+  bindTouchHold(btnTLeft, 'left');
+  bindTouchHold(btnTRight, 'right');
+
+  btnTJump.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    audio.unlock();
+    btnTJump.classList.add('pressed');
+    doJump();
+  });
+  btnTJump.addEventListener('pointerup', () => btnTJump.classList.remove('pressed'));
+  btnTJump.addEventListener('pointercancel', () => btnTJump.classList.remove('pressed'));
+
+  btnTDash.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    audio.unlock();
+    btnTDash.classList.add('pressed');
+    doDash();
+  });
+  btnTDash.addEventListener('pointerup', () => btnTDash.classList.remove('pressed'));
+  btnTDash.addEventListener('pointercancel', () => btnTDash.classList.remove('pressed'));
+
+  // =========================================================================
+  // 10. ATTRACT MODE AI PILOT (ENERGETIC FRAME-0 LIVE PREVIEW)
+  // =========================================================================
+  function updateAttractAI(dt) {
+    // AI Jensen gracefully dodges obstacles and snatches collectibles so the start screen looks electric!
+    let targetX = VW * 0.28 + Math.sin(worldTime * 0.9) * (VW * 0.14);
+
+    // Seek nearest collectible
+    let bestCol = null;
+    let bestDist = 380;
+    for (const c of collectibles) {
+      const d = c.x - player.x;
+      if (d > -30 && d < bestDist) {
+        bestDist = d;
+        bestCol = c;
+      }
+    }
+    if (bestCol) {
+      targetX = Math.max(90, Math.min(VW * 0.65, bestCol.x - 10));
+      if (bestCol.y < groundY - 85 && Math.abs(bestCol.x - player.x) < 120 && player.onGround) {
+        player.vy = -710;
+        player.onGround = false;
+        player.jumpsLeft = 1;
+        spawnParticles(player.x, groundY - 4, NV_BRIGHT, 7, 130);
+      }
+    }
+
+    // Evade nearby obstacles
+    for (const ob of obstacles) {
+      const dx = ob.x - player.x;
+      if (ob.type === 'candle' && Math.abs(dx) < 85 && ob.y < groundY - 20) {
+        targetX = dx >= 0 ? Math.max(80, ob.x - 125) : Math.min(VW * 0.72, ob.x + 125);
+      } else if ((ob.type === 'spark' || ob.type === 'fud') && dx > 0 && dx < 165) {
+        if (ob.y > groundY - 95 && player.onGround) {
+          player.vy = -720;
+          player.onGround = false;
+          player.jumpsLeft = 1;
+          spawnParticles(player.x, groundY - 4, CYAN, 7, 140);
+        }
+      }
+    }
+
+    const diff = targetX - player.x;
+    player.vx += (Math.max(-390, Math.min(390, diff * 4.2)) - player.vx) * Math.min(1, dt * 8);
+  }
+
+  // =========================================================================
+  // 11. MAIN SIMULATION UPDATE (60 FPS)
+  // =========================================================================
+  function update(dt) {
+    worldTime += dt;
+    if (endLockTimer > 0) endLockTimer = Math.max(0, endLockTimer - dt);
+
+    if (hitStop > 0) {
+      hitStop = Math.max(0, hitStop - dt);
+      return;
+    }
+
+    if (shakeTime > 0) {
+      shakeTime = Math.max(0, shakeTime - dt);
+      if (shakeTime === 0) shakeMag = 0;
+    }
+    if (flashAlpha > 0) flashAlpha = Math.max(0, flashAlpha - dt * 1.9);
+    if (bannerTimer > 0) bannerTimer = Math.max(0, bannerTimer - dt);
+
+    const activePlay = gameState === 'playing' || gameState === 'attract';
+    const prog = gameState === 'attract' ? 0.5 : Math.min(1, elapsed / RUN_DURATION);
+    const turboMult = player.turboTimer > 0 ? 1.55 : 1.0;
+    const worldSpeed = (gameState === 'finale' || gameState === 'victory' || gameState === 'gameover')
+      ? 140
+      : (430 + prog * 170) * turboMult;
+
+    // Update music intensity
+    audio.intensity = (player.turboTimer > 0 || prog > 0.55) ? 1 : 0;
+
+    // Scroll highway & background candlesticks
+    highwayOffset = (highwayOffset + worldSpeed * dt) % 96;
+    bgScroll += worldSpeed * 0.24 * dt;
+    tickerX -= (115 + (player.turboTimer > 0 ? 90 : 0)) * dt;
+
+    for (const c of bgCandles) {
+      c.x -= worldSpeed * 0.19 * c.layer * dt;
+      if (c.x < -60) {
+        let maxX = 0;
+        for (const other of bgCandles) if (other.x > maxX) maxX = other.x;
+        c.x = maxX + 48;
+        // Shift candlestick bias bullish as comeback progresses!
+        const bullChance = gameState === 'finale' || gameState === 'victory'
+          ? 0.94
+          : (0.34 + prog * 0.56 + (player.turboTimer > 0 ? 0.25 : 0));
+        c.bullish = Math.random() < bullChance;
+        const body = 26 + Math.random() * 88;
+        const mid = 120 + Math.random() * 210;
+        c.open = c.bullish ? mid + body * 0.5 : mid - body * 0.5;
+        c.close = c.bullish ? mid - body * 0.5 : mid + body * 0.5;
+        c.high = Math.min(c.open, c.close) - (14 + Math.random() * 34);
+        c.low = Math.max(c.open, c.close) + (14 + Math.random() * 34);
+      }
+    }
+
+    for (const sl of speedLines) {
+      sl.x -= sl.speed * (player.turboTimer > 0 ? 1.85 : 1) * dt;
+      if (sl.x + sl.len < 0) {
+        sl.x = VW + Math.random() * 240;
+        sl.y = 70 + Math.random() * (groundY - 90);
+      }
+    }
+
+    // Update timers on player
+    if (player.dashTimer > 0) player.dashTimer = Math.max(0, player.dashTimer - dt);
+    if (player.dashCooldown > 0) player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+    if (player.turboTimer > 0) player.turboTimer = Math.max(0, player.turboTimer - dt);
+    if (player.invulnTimer > 0) player.invulnTimer = Math.max(0, player.invulnTimer - dt);
+    if (player.exprTimer > 0) {
+      player.exprTimer = Math.max(0, player.exprTimer - dt);
+      if (player.exprTimer === 0 && gameState !== 'finale' && gameState !== 'victory') {
+        player.expr = player.shieldTimer > 0 ? 'boss' : 'happy';
+      }
+    }
+
+    if (player.shieldTimer > 0) {
+      player.shieldTimer = Math.max(0, player.shieldTimer - dt);
+      if (player.shieldTimer === 0) {
+        audio.stopShieldHum();
+        if (player.expr === 'boss' && gameState === 'playing') player.expr = 'happy';
+        updateLivesHUD();
+      }
+    }
+
+    // ================= PLAYING / ATTRACT SIMULATION =================
+    if (activePlay) {
+      if (gameState === 'playing') {
+        elapsed += dt;
+        // Organic market momentum while surviving
+        mcap += (16 + prog * 18 + (player.turboTimer > 0 ? 22 : 0)) * dt;
+
+        // Trigger choreographed timeline beats
+        for (const ev of scheduledEvents) {
+          if (!ev.done && elapsed >= ev.t) {
+            ev.done = true;
+            ev.fn();
+          }
+        }
+
+        // Check Day 11 (Nov 23) Victory Finale!
+        if (elapsed >= RUN_DURATION) {
+          triggerFinale();
+          return;
+        }
+      } else {
+        // Attract mode keeps market cap dancing entertainingly
+        mcap = 2950 + Math.sin(worldTime * 0.7) * 520 + Math.sin(worldTime * 2.1) * 140;
+      }
+
+      // Sample mini chart
+      chartSampleTimer += dt;
+      if (chartSampleTimer >= 0.22) {
+        chartSampleTimer = 0;
+        chartHistory.push(mcap);
+        if (chartHistory.length > 34) chartHistory.shift();
+      }
+
+      // Spawners
+      nextObstacleTimer -= dt;
+      if (nextObstacleTimer <= 0) {
+        spawnObstacle();
+        const minGap = gameState === 'attract' ? 0.95 : Math.max(0.56, 1.08 - prog * 0.44);
+        nextObstacleTimer = minGap + Math.random() * 0.42;
+      }
+
+      nextCollectibleTimer -= dt;
+      if (nextCollectibleTimer <= 0) {
+        spawnCollectible();
+        nextCollectibleTimer = 1.05 + Math.random() * 0.65;
+      }
+
+      // Player movement
+      if (gameState === 'attract') {
+        updateAttractAI(dt);
+      } else {
+        const moveAccel = 2600;
+        const maxSpeed = player.turboTimer > 0 ? 590 : 490;
+        let moveDir = 0;
+        if (keys.left) moveDir -= 1;
+        if (keys.right) moveDir += 1;
+
+        if (touchDragActive && touchDragTargetX !== null && moveDir === 0) {
+          const diff = touchDragTargetX - player.x;
+          if (Math.abs(diff) > 6) {
+            const desiredVx = Math.max(-maxSpeed * 1.15, Math.min(maxSpeed * 1.15, diff * 10));
+            player.vx += (desiredVx - player.vx) * Math.min(1, dt * 16);
+            player.facing = diff > 0 ? 1 : -1;
+          } else {
+            player.vx *= Math.pow(0.001, dt);
+          }
+        } else if (player.dashTimer <= 0) {
+          if (moveDir !== 0) {
+            player.vx += moveDir * moveAccel * dt;
+            player.vx = Math.max(-maxSpeed, Math.min(maxSpeed, player.vx));
+            player.facing = moveDir;
+          } else {
+            player.vx *= Math.pow(0.0005, dt);
+            if (Math.abs(player.vx) < 8) player.vx = 0;
+          }
+        }
+      }
+
+      // Gravity & physics
+      player.vy += 2050 * dt;
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+
+      // Clamp to screen bounds
+      const padX = 46;
+      if (player.x < padX) { player.x = padX; player.vx = Math.max(0, player.vx); }
+      if (player.x > VW - padX) { player.x = VW - padX; player.vx = Math.min(0, player.vx); }
+
+      // Ground collision
+      if (player.y >= groundY) {
+        if (!player.onGround) {
+          player.squashX = 1.22;
+          player.squashY = 0.8;
+          spawnParticles(player.x, groundY - 2, NV_GREEN, 6, 110);
+        }
+        player.y = groundY;
+        player.vy = 0;
+        player.onGround = true;
+        player.jumpsLeft = 2;
+      }
+
+      // Squash & stretch recovery + run animation
+      player.squashX += (1 - player.squashX) * Math.min(1, dt * 14);
+      player.squashY += (1 - player.squashY) * Math.min(1, dt * 14);
+      player.runCycle += dt * (14 + (player.turboTimer > 0 ? 8 : 0) + Math.abs(player.vx) * 0.014);
+
+      // Motion trails during turbo, dash, or shield
+      if (player.turboTimer > 0 || player.dashTimer > 0 || player.shieldTimer > 0) {
+        player.trail.push({
+          x: player.x,
+          y: player.y,
+          alpha: 0.65,
+          color: player.shieldTimer > 0 ? GOLD : (player.turboTimer > 0 ? NV_BRIGHT : CYAN)
+        });
+        if (player.trail.length > 9) player.trail.shift();
+      }
+      for (let i = player.trail.length - 1; i >= 0; i--) {
+        player.trail[i].alpha -= dt * 3.1;
+        player.trail[i].x -= worldSpeed * 0.25 * dt;
+        if (player.trail[i].alpha <= 0) player.trail.splice(i, 1);
+      }
+
+      // Update Obstacles & Collisions
+      const px1 = player.x - 20;
+      const py1 = player.y - 78;
+      const px2 = player.x + 20;
+      const py2 = player.y - 6;
+
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const ob = obstacles[i];
+        if (ob.type === 'candle') {
+          if (ob.warnTimer > 0) {
+            ob.warnTimer -= dt;
+            ob.x += ob.vx * 0.2 * dt;
+          } else if (!ob.crashed) {
+            ob.vy += 2600 * dt;
+            ob.y += ob.vy * dt;
+            ob.x += ob.vx * 0.55 * dt;
+            if (ob.y + ob.h * 0.5 >= groundY) {
+              ob.y = groundY - ob.h * 0.5;
+              ob.crashed = true;
+              ob.vy = 0;
+              addShake(4.5, 0.12);
+              spawnParticles(ob.x, groundY - 4, WS_RED, 12, 230);
+            }
+          } else {
+            ob.landTimer += dt;
+            ob.x -= worldSpeed * 0.85 * dt;
+          }
+        } else if (ob.type === 'fud') {
+          ob.x += ob.vx * dt;
+          ob.angle += ob.rotSpeed * dt;
+          ob.bobPhase += dt * 4.5;
+          ob.y = ob.baseY + Math.sin(ob.bobPhase) * 14;
+        } else if (ob.type === 'spark') {
+          ob.x += ob.vx * dt;
+          ob.phase += dt * 22;
+        }
+
+        // Check close-call dodge bonus!
+        if (!ob.passed && ob.x < player.x - 36) {
+          ob.passed = true;
+          fudCleared++;
+          if (gameState === 'playing' && Math.abs(ob.y - (player.y - 42)) < 115) {
+            addMcap(25);
+            spawnPopup(player.x, player.y - 104, 'DODGED! +$25B', CYAN, 17);
+          }
+        }
+
+        // Remove offscreen
+        if (ob.x < -140 || ob.landTimer > 1.8) {
+          obstacles.splice(i, 1);
+          continue;
+        }
+
+        // Skip collision while candle is still telegraphing above screen
+        if (ob.type === 'candle' && ob.warnTimer > 0) continue;
+
+        // Fair hitbox
+        const hw = ob.w * 0.4;
+        const hh = ob.h * 0.4;
+        const hit = px2 > ob.x - hw && px1 < ob.x + hw && py2 > ob.y - hh && py1 < ob.y + hh;
+
+        if (hit) {
+          if (player.shieldTimer > 0 || gameState === 'attract') {
+            // SMASH THROUGH RED FUD!
+            obstacles.splice(i, 1);
+            fudCleared++;
+            if (gameState === 'playing') {
+              addMcap(80);
+              audio.sfxSmash();
+              addShake(7, 0.16);
+              spawnPopup(ob.x, ob.y - 20, 'SMASHED FUD! +$80B', GOLD, 22);
+            }
+            spawnParticles(ob.x, ob.y, GOLD, 16, 300);
+            spawnParticles(ob.x, ob.y, NV_BRIGHT, 10, 240);
+          } else if (player.invulnTimer <= 0 && player.dashTimer <= 0) {
+            // Player takes a hit!
+            obstacles.splice(i, 1);
+            lives--;
+            updateLivesHUD();
+            addMcap(-180);
+            player.invulnTimer = 1.45;
+            player.expr = 'shock';
+            player.exprTimer = 0.85;
+            player.vy = -340;
+            hitStop = 0.065;
+            addShake(14, 0.3);
+            addFlash(WS_RED, 0.36);
+            audio.sfxHit();
+            spawnParticles(player.x, player.y - 45, WS_RED, 22, 320);
+            spawnPopup(player.x, player.y - 105, 'DIP! -$180B', WS_RED, 26);
+
+            if (lives <= 0) {
+              triggerGameOver();
+              return;
+            }
+          }
+        }
+      }
+
+      // Update Collectibles & Pickups
+      for (let i = collectibles.length - 1; i >= 0; i--) {
+        const c = collectibles[i];
+        c.phase += dt * 5.2;
+        c.x += c.vx * dt;
+        c.y = c.baseY + Math.sin(c.phase) * 14;
+
+        if (c.x < -120) {
+          collectibles.splice(i, 1);
+          continue;
+        }
+
+        // Generous pickup magnet radius
+        const dist = Math.hypot(c.x - player.x, c.y - (player.y - 46));
+        if (dist < 58) {
+          collectibles.splice(i, 1);
+          handlePickup(c);
+        }
+      }
+
+      // Update Homing Green Coins (from 180K Petition wipe!)
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const cn = coins[i];
+        cn.age += dt;
+        if (cn.age > 0.16) {
+          const dx = player.x - cn.x;
+          const dy = (player.y - 46) - cn.y;
+          const d = Math.max(1, Math.hypot(dx, dy));
+          const spd = 720 + cn.age * 450;
+          cn.vx += ((dx / d) * spd - cn.vx) * Math.min(1, dt * 12);
+          cn.vy += ((dy / d) * spd - cn.vy) * Math.min(1, dt * 12);
+        }
+        cn.x += cn.vx * dt;
+        cn.y += cn.vy * dt;
+
+        if (Math.hypot(cn.x - player.x, cn.y - (player.y - 46)) < 42 || cn.age > 2.2) {
+          coins.splice(i, 1);
+          if (gameState === 'playing') {
+            addMcap(60);
+            audio.sfxCoin();
+            spawnPopup(player.x + (Math.random() - 0.5) * 40, player.y - 95, '+$60B', NV_BRIGHT, 19);
+          }
+          spawnParticles(player.x, player.y - 45, NV_BRIGHT, 6, 170);
+        }
+      }
+    }
+
+    // ================= FINALE ANIMATION (CEO CHAIR LEAP!) =================
+    if (gameState === 'finale' || gameState === 'victory') {
+      // Slide CEO Chair onto stage
+      ceoChair.x += (ceoChair.targetX - ceoChair.x) * Math.min(1, dt * 4.5);
+      ceoChair.y = groundY;
+
+      if (!ceoChair.seated) {
+        ceoChair.leapT = Math.min(1, ceoChair.leapT + dt * 1.15);
+        const t = ceoChair.leapT;
+        const ease = 1 - Math.pow(1 - t, 3);
+        player.x = ceoChair.leapStartX + (ceoChair.x - ceoChair.leapStartX) * ease;
+        const arc = Math.sin(t * Math.PI) * 230;
+        player.y = ceoChair.leapStartY + ((groundY - 46) - ceoChair.leapStartY) * ease - arc;
+        player.trail.push({ x: player.x, y: player.y, alpha: 0.75, color: NV_BRIGHT });
+        if (player.trail.length > 12) player.trail.shift();
+
+        if (ceoChair.leapT >= 1) {
+          ceoChair.seated = true;
+          addShake(15, 0.38);
+          addFlash(NV_BRIGHT, 0.45);
+          spawnParticles(ceoChair.x, groundY - 60, NV_BRIGHT, 40, 420);
+          spawnParticles(ceoChair.x, groundY - 60, GOLD, 28, 380);
+          spawnPopup(ceoChair.x, groundY - 190, 'CEO THRONE!', GOLD, 34);
+
+          // Shoot giant celebratory green stock candles from bottom!
+          for (let i = 0; i < 16; i++) {
+            finaleCandles.push({
+              x: (i + 0.5) * (VW / 16),
+              h: 0,
+              targetH: 130 + Math.random() * 290,
+              speed: 450 + Math.random() * 350,
+              w: 24 + Math.random() * 14
+            });
+          }
+
+          // Confetti explosion!
+          spawnConfettiBurst(110);
+        }
+      } else {
+        player.x = ceoChair.x;
+        player.y = groundY - 46 + Math.sin(worldTime * 5) * 2.5;
+        ceoChair.celebrateTimer += dt;
+
+        // Grow celebratory green candles
+        for (const fc of finaleCandles) {
+          fc.h = Math.min(fc.targetH, fc.h + fc.speed * dt);
+        }
+
+        // Ongoing confetti trickle
+        if (Math.random() < 0.35) spawnConfettiBurst(3);
+
+        if (gameState === 'finale' && ceoChair.celebrateTimer >= 1.35) {
+          showVictoryScreen();
+        }
+      }
+
+      for (let i = player.trail.length - 1; i >= 0; i--) {
+        player.trail[i].alpha -= dt * 2.5;
+        if (player.trail[i].alpha <= 0) player.trail.splice(i, 1);
+      }
+    }
+
+    // ================= UPDATE SHARED FX =================
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.vy += p.gravity * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= dt;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    for (let i = popups.length - 1; i >= 0; i--) {
+      const pop = popups[i];
+      pop.y += pop.vy * dt;
+      pop.vy *= Math.pow(0.25, dt);
+      pop.scale += (1 - pop.scale) * Math.min(1, dt * 12);
+      pop.life -= dt;
+      if (pop.life <= 0) popups.splice(i, 1);
+    }
+
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+      const sw = shockwaves[i];
+      sw.r += sw.speed * dt;
+      sw.alpha -= dt * 1.45;
+      if (sw.alpha <= 0) shockwaves.splice(i, 1);
+    }
+
+    for (let i = confetti.length - 1; i >= 0; i--) {
+      const cf = confetti[i];
+      cf.vy += 320 * dt;
+      cf.x += cf.vx * dt;
+      cf.y += cf.vy * dt;
+      cf.rot += cf.rotSpd * dt;
+      cf.life -= dt;
+      if (cf.life <= 0 || cf.y > VH + 40) confetti.splice(i, 1);
+    }
+
+    updateHUD();
+  }
+
+  function spawnConfettiBurst(count) {
+    const colors = [NV_BRIGHT, NV_GREEN, CYAN, GOLD, '#ffffff'];
+    for (let i = 0; i < count; i++) {
+      confetti.push({
+        x: Math.random() * VW,
+        y: -20 - Math.random() * 140,
+        vx: (Math.random() - 0.5) * 260,
+        vy: 60 + Math.random() * 240,
+        w: 7 + Math.random() * 7,
+        h: 4 + Math.random() * 5,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        rot: Math.random() * Math.PI * 2,
+        rotSpd: (Math.random() - 0.5) * 12,
+        life: 3.5 + Math.random() * 2
+      });
+    }
+  }
+
+  function handlePickup(c) {
+    const isReal = gameState === 'playing';
+    if (isReal) itemsCollected++;
+
+    player.expr = 'hype';
+    player.exprTimer = 0.65;
+    player.squashX = 1.24;
+    player.squashY = 0.82;
+
+    if (c.type === 'gpu') {
+      if (isReal) {
+        addMcap(100);
+        audio.sfxPickupGpu();
+      }
+      spawnParticles(c.x, c.y, NV_BRIGHT, 16, 260, 'square');
+      spawnPopup(c.x, c.y - 16, 'RUBIN GPU! +$100B', NV_BRIGHT, 23);
+    } else if (c.type === 'rocket') {
+      player.turboTimer = 2.8;
+      if (isReal) {
+        addMcap(200);
+        audio.sfxRocket();
+        addShake(9, 0.24);
+        addFlash(NV_BRIGHT, 0.22);
+      }
+      shockwaves.push({ x: c.x, y: c.y, r: 16, speed: 680, alpha: 0.9, color: NV_BRIGHT });
+      spawnParticles(c.x, c.y, NV_BRIGHT, 26, 360);
+      spawnParticles(c.x, c.y, CYAN, 14, 290);
+      spawnPopup(c.x, c.y - 24, '+$200B! +30% NVDA!', NV_BRIGHT, 28);
+    } else if (c.type === 'petition') {
+      // WIPE ALL RED OBSTACLES INTO GREEN COINS!
+      if (isReal) {
+        addMcap(120);
+        audio.sfxPetition();
+        addShake(11, 0.28);
+        addFlash(CYAN, 0.28);
+        hitStop = 0.045;
+      }
+      shockwaves.push({ x: c.x, y: c.y, r: 22, speed: 1250, alpha: 1.0, color: CYAN });
+      shockwaves.push({ x: c.x, y: c.y, r: 10, speed: 950, alpha: 0.9, color: NV_BRIGHT });
+
+      let converted = 0;
+      for (const ob of obstacles) {
+        converted++;
+        fudCleared++;
+        spawnParticles(ob.x, ob.y, NV_BRIGHT, 12, 240);
+        for (let k = 0; k < 2; k++) {
+          coins.push({
+            x: ob.x + (Math.random() - 0.5) * 28,
+            y: ob.y + (Math.random() - 0.5) * 28,
+            vx: (Math.random() - 0.5) * 220,
+            vy: -160 - Math.random() * 140,
+            age: 0
+          });
+        }
+      }
+      obstacles = [];
+
+      // Always guarantee at least 4 green coins even if screen was clear!
+      const extra = Math.max(0, 4 - converted * 2);
+      for (let k = 0; k < extra; k++) {
+        const ang = (k / Math.max(1, extra)) * Math.PI * 2;
+        coins.push({
+          x: c.x + Math.cos(ang) * 40,
+          y: c.y + Math.sin(ang) * 40,
+          vx: Math.cos(ang) * 200,
+          vy: Math.sin(ang) * 160 - 120,
+          age: 0
+        });
+      }
+
+      spawnPopup(c.x, c.y - 28, '180K PETITION! FUD WIPED!', CYAN, 27);
+      if (isReal) showBanner('180K PETITION MEGAPHONE!', 'ALL RED FUD TURNED INTO GREEN COINS!', CYAN, 1.7);
+    } else if (c.type === 'shield') {
+      player.shieldTimer = 5.0;
+      player.expr = 'boss';
+      player.exprTimer = 5.0;
+      if (isReal) {
+        addMcap(150);
+        audio.sfxShieldStart();
+        addShake(8, 0.22);
+        addFlash(GOLD, 0.24);
+        updateLivesHUD();
+        showBanner('THE MORE YOU BUY, THE MORE YOU SAVE!', '5s LEATHER JACKET INVINCIBILITY!', GOLD, 2.3);
+      }
+      shockwaves.push({ x: c.x, y: c.y, r: 18, speed: 780, alpha: 0.95, color: GOLD });
+      spawnParticles(c.x, c.y, GOLD, 28, 340);
+      spawnPopup(c.x, c.y - 30, 'THE MORE YOU BUY, THE MORE YOU SAVE!', GOLD, 22);
+    }
+  }
+
+  // =========================================================================
+  // 12. RENDERING (CRISP HIGH-CONTRAST NEON ARCADE)
+  // =========================================================================
+  function render() {
+    ctx.save();
+    ctx.scale(dpr * scale, dpr * scale);
+
+    // Screen shake offset
+    if (shakeTime > 0) {
+      const sx = (Math.random() - 0.5) * 2 * shakeMag;
+      const sy = (Math.random() - 0.5) * 2 * shakeMag;
+      ctx.translate(sx, sy);
+    }
+
+    drawBackground();
+    drawGPUHighway();
+    drawFinaleCandles();
+    drawCEOChair();
+
+    // Shockwaves
+    for (const sw of shockwaves) {
+      ctx.save();
+      ctx.strokeStyle = sw.color;
+      ctx.globalAlpha = Math.max(0, sw.alpha);
+      ctx.lineWidth = 6;
+      ctx.shadowColor = sw.color;
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Collectibles
+    for (const c of collectibles) drawCollectible(c);
+
+    // Homing green coins
+    for (const cn of coins) drawGreenCoin(cn);
+
+    // Obstacles
+    for (const ob of obstacles) drawObstacle(ob);
+
+    // Player Trails & Jensen Huang!
+    for (const tr of player.trail) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, tr.alpha * 0.42);
+      drawJensenSilhouette(tr.x, tr.y, tr.color);
+      ctx.restore();
+    }
+    drawJensen(player);
+
+    // Particles
+    for (const p of particles) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 8;
+      if (p.shape === 'square') {
+        ctx.fillRect(p.x - p.size * 0.5, p.y - p.size * 0.5, p.size, p.size);
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // Confetti
+    for (const cf of confetti) {
+      ctx.save();
+      ctx.translate(cf.x, cf.y);
+      ctx.rotate(cf.rot);
+      ctx.fillStyle = cf.color;
+      ctx.fillRect(-cf.w * 0.5, -cf.h * 0.5, cf.w, cf.h);
+      ctx.restore();
+    }
+
+    // Comic Popups
+    for (const pop of popups) {
+      ctx.save();
+      const alpha = Math.min(1, pop.life * 2.2);
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.translate(pop.x, pop.y);
+      ctx.scale(pop.scale, pop.scale);
+      ctx.font = `900 ${pop.size}px ui-monospace, 'Cascadia Code', Consolas, monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = '#030508';
+      ctx.strokeText(pop.text, 0, 0);
+      ctx.fillStyle = pop.color;
+      ctx.shadowColor = pop.color;
+      ctx.shadowBlur = 14;
+      ctx.fillText(pop.text, 0, 0);
+      ctx.restore();
+    }
+
+    // In-game Milestone / Power-Up Banner
+    if (bannerTimer > 0 && gameState !== 'attract') {
+      drawComicBanner();
+    }
+
+    // Screen Hit/Boost Flash
+    if (flashAlpha > 0) {
+      ctx.fillStyle = flashColor;
+      ctx.globalAlpha = flashAlpha;
+      ctx.fillRect(-40, -40, VW + 80, VH + 80);
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+  }
+
+  // ---------------- BACKGROUND CANDLESTICK GRID ----------------
+  function drawBackground() {
+    // Pitch-black arcade backdrop with subtle cyber horizon glow
+    ctx.fillStyle = '#030508';
+    ctx.fillRect(0, 0, VW, VH);
+
+    const horizGrad = ctx.createLinearGradient(0, groundY - 260, 0, groundY);
+    horizGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    horizGrad.addColorStop(1, player.turboTimer > 0 ? 'rgba(118, 185, 0, 0.24)' : 'rgba(0, 240, 255, 0.11)');
+    ctx.fillStyle = horizGrad;
+    ctx.fillRect(0, groundY - 260, VW, 260);
+
+    // Subtle Wall Street neon price grid
+    const gridGap = 64;
+    const gxOff = -(bgScroll % gridGap);
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.065)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = gxOff; x < VW; x += gridGap) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, groundY);
+    }
+    for (let y = 80; y < groundY; y += gridGap) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(VW, y);
+    }
+    ctx.stroke();
+
+    // Background scrolling Wall Street candlesticks
+    const candleBaseOffset = isPortrait ? VH * 0.18 : 65;
+    for (const c of bgCandles) {
+      if (c.x < -40 || c.x > VW + 40) continue;
+      const col = c.bullish ? NV_GREEN : WS_RED;
+      const alpha = c.layer > 0.8 ? 0.34 : 0.17;
+      const cw = c.layer > 0.8 ? 18 : 12;
+      const oy = c.open + candleBaseOffset;
+      const cy = c.close + candleBaseOffset;
+      const hy = c.high + candleBaseOffset;
+      const ly = c.low + candleBaseOffset;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = col;
+      ctx.fillStyle = col;
+      ctx.lineWidth = 2;
+
+      // Wick
+      ctx.beginPath();
+      ctx.moveTo(c.x, hy);
+      ctx.lineTo(c.x, ly);
+      ctx.stroke();
+
+      // Body
+      const top = Math.min(oy, cy);
+      const bh = Math.max(8, Math.abs(cy - oy));
+      ctx.fillRect(c.x - cw * 0.5, top, cw, bh);
+      ctx.restore();
+    }
+
+    // Glowing moving average spline across candles
+    ctx.save();
+    ctx.beginPath();
+    let started = false;
+    const sorted = [...bgCandles].filter(c => c.layer > 0.8).sort((a, b) => a.x - b.x);
+    for (const c of sorted) {
+      const my = (c.open + c.close) * 0.5 + candleBaseOffset;
+      if (!started) { ctx.moveTo(c.x, my); started = true; }
+      else ctx.lineTo(c.x, my);
+    }
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = CYAN;
+    ctx.shadowBlur = 10;
+    ctx.stroke();
+    ctx.restore();
+
+    // Subtle ticker tape in background sky
+    const tickerY = hudSafeY + 14;
+    const tickerStr = 'NVDA +30.4% ▲   •   RUBIN GPU SOLD OUT   •   180K PETITION SIGNED   •   LEATHER JACKET INDEX: ALL-TIME HIGH   •   THE MORE YOU BUY, THE MORE YOU SAVE   •   CUDA MOAT ∞   •   ';
+    ctx.save();
+    ctx.font = '800 13px ui-monospace, Consolas, monospace';
+    ctx.fillStyle = 'rgba(118, 185, 0, 0.28)';
+    const tw = ctx.measureText(tickerStr).width;
+    const startX = ((tickerX % tw) + tw) % tw - tw;
+    for (let x = startX; x < VW + tw; x += tw) {
+      ctx.fillText(tickerStr, x, tickerY);
+    }
+    ctx.restore();
+
+    // Speed lines (intensified during Turbo Boost)
+    const slAlphaMult = player.turboTimer > 0 ? 1.8 : 0.45;
+    ctx.save();
+    for (const sl of speedLines) {
+      ctx.strokeStyle = player.turboTimer > 0 ? NV_BRIGHT : CYAN;
+      ctx.globalAlpha = Math.min(0.75, sl.alpha * slAlphaMult);
+      ctx.lineWidth = player.turboTimer > 0 ? 2.4 : 1.2;
+      ctx.beginPath();
+      ctx.moveTo(sl.x, sl.y);
+      ctx.lineTo(sl.x + sl.len, sl.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // ---------------- GLOWING NEON GPU CIRCUIT HIGHWAY ----------------
+  function drawGPUHighway() {
+    const h = VH - groundY;
+
+    // Dark emerald PCB deck gradient
+    const deckGrad = ctx.createLinearGradient(0, groundY, 0, VH);
+    deckGrad.addColorStop(0, '#071709');
+    deckGrad.addColorStop(0.35, '#040c0a');
+    deckGrad.addColorStop(1, '#020406');
+    ctx.fillStyle = deckGrad;
+    ctx.fillRect(0, groundY, VW, h);
+
+    // Perspective vertical PCB grid rails scrolling left
+    const step = 96;
+    const vanishX = VW * 0.5;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(118, 185, 0, 0.34)';
+    ctx.lineWidth = 2;
+    for (let x = -step * 2; x <= VW + step * 2; x += step) {
+      const topX = x - highwayOffset;
+      const botX = vanishX + (topX - vanishX) * 1.65;
+      ctx.beginPath();
+      ctx.moveTo(topX, groundY);
+      ctx.lineTo(botX, VH);
+      ctx.stroke();
+    }
+
+    // Horizontal circuit trace lanes
+    const rows = [0.16, 0.38, 0.65, 0.92];
+    rows.forEach((frac, idx) => {
+      const ry = groundY + h * frac;
+      ctx.strokeStyle = idx % 2 === 0 ? 'rgba(0, 240, 255, 0.25)' : 'rgba(118, 185, 0, 0.25)';
+      ctx.lineWidth = idx === 0 ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, ry);
+      ctx.lineTo(VW, ry);
+      ctx.stroke();
+    });
+
+    // Embedded glowing GPU Tensor Core nodes & gold solder pads along the highway
+    for (let x = -step; x <= VW + step * 2; x += step * 2) {
+      const cx = x - highwayOffset;
+      const cy = groundY + Math.min(48, h * 0.27);
+      // Glowing mini chip pad
+      ctx.fillStyle = 'rgba(118, 185, 0, 0.16)';
+      ctx.strokeStyle = 'rgba(118, 185, 0, 0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(cx - 18, cy - 9, 36, 18);
+      ctx.strokeRect(cx - 18, cy - 9, 36, 18);
+
+      // Gold PCB traces branching out
+      ctx.strokeStyle = 'rgba(255, 212, 59, 0.36)';
+      ctx.beginPath();
+      ctx.moveTo(cx + 18, cy);
+      ctx.lineTo(cx + 42, cy);
+      ctx.lineTo(cx + 56, cy + 16);
+      ctx.stroke();
+
+      ctx.fillStyle = GOLD;
+      ctx.beginPath();
+      ctx.arc(cx + 56, cy + 16, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Blazing Neon Highway Horizon Rail
+    ctx.shadowColor = NV_BRIGHT;
+    ctx.shadowBlur = 18;
+    ctx.strokeStyle = NV_BRIGHT;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(VW, groundY);
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(VW, groundY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---------------- CELEBRATION GREEN CANDLES & NVIDIA CEO CHAIR ----------------
+  function drawFinaleCandles() {
+    if (finaleCandles.length === 0) return;
+    ctx.save();
+    for (const fc of finaleCandles) {
+      const top = groundY - fc.h;
+      ctx.shadowColor = NV_BRIGHT;
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = 'rgba(118, 185, 0, 0.72)';
+      ctx.fillRect(fc.x - fc.w * 0.5, top, fc.w, fc.h);
+      ctx.fillStyle = NV_BRIGHT;
+      ctx.fillRect(fc.x - 2, top - 24, 4, 24);
+    }
+    ctx.restore();
+  }
+
+  function drawCEOChair() {
+    if (!ceoChair.active) return;
+    const x = ceoChair.x;
+    const y = ceoChair.y;
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Glowing emerald spotlight beam from above
+    const beamGrad = ctx.createLinearGradient(0, -360, 0, 0);
+    beamGrad.addColorStop(0, 'rgba(158, 255, 0, 0)');
+    beamGrad.addColorStop(1, 'rgba(118, 185, 0, 0.25)');
+    ctx.fillStyle = beamGrad;
+    ctx.beginPath();
+    ctx.moveTo(-45, -360);
+    ctx.lineTo(45, -360);
+    ctx.lineTo(120, 0);
+    ctx.lineTo(-120, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Glowing pedestal base
+    ctx.fillStyle = '#0d1510';
+    ctx.strokeStyle = NV_BRIGHT;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = NV_BRIGHT;
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.roundRect(-64, -18, 128, 18, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    // Hydraulic stem
+    ctx.fillStyle = '#4b5563';
+    ctx.fillRect(-10, -48, 20, 30);
+
+    // High-back Executive Cyber-Throne Backrest
+    ctx.fillStyle = '#11161d';
+    ctx.strokeStyle = NV_BRIGHT;
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(-48, -48);
+    ctx.lineTo(-56, -152);
+    ctx.lineTo(-32, -182);
+    ctx.lineTo(32, -182);
+    ctx.lineTo(56, -152);
+    ctx.lineTo(48, -48);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Inner glowing NVIDIA neon strips on backrest
+    ctx.strokeStyle = CYAN;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-34, -64);
+    ctx.lineTo(-40, -148);
+    ctx.lineTo(-22, -168);
+    ctx.moveTo(34, -64);
+    ctx.lineTo(40, -148);
+    ctx.lineTo(22, -168);
+    ctx.stroke();
+
+    // Seat cushion
+    ctx.fillStyle = '#192028';
+    ctx.strokeStyle = NV_GREEN;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(-56, -54, 112, 18, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    // GPU-heatsink armrests
+    ctx.fillStyle = '#1f2933';
+    ctx.strokeStyle = GOLD;
+    ctx.lineWidth = 2;
+    ctx.fillRect(-66, -86, 16, 36);
+    ctx.strokeRect(-66, -86, 16, 36);
+    ctx.fillRect(50, -86, 16, 36);
+    ctx.strokeRect(50, -86, 16, 36);
+
+    // Floating Neon Sign above chair: "NVIDIA CEO CHAIR"
+    ctx.shadowColor = NV_BRIGHT;
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = 'rgba(4, 14, 8, 0.9)';
+    ctx.strokeStyle = NV_BRIGHT;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(-92, -228, 184, 30, 8);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = NV_BRIGHT;
+    ctx.font = '900 14px ui-monospace, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('NVIDIA CEO CHAIR', 0, -213);
+
+    ctx.restore();
+  }
+
+  // ---------------- JENSEN HUANG CHARACTER RENDERER ----------------
+  function drawJensenSilhouette(x, y, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x - 20, y - 62, 40, 38, 10);
+    ctx.arc(x, y - 74, 18, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawJensen(p) {
+    // Invulnerability blink
+    if (p.invulnTimer > 0 && Math.floor(worldTime * 20) % 2 === 0) return;
+
+    // Ground shadow
+    const heightAbove = Math.max(0, groundY - p.y);
+    const shScale = Math.max(0.32, 1 - heightAbove / 320);
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.58)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, groundY + 4, 32 * shScale, 8 * shScale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+
+    // Turbo / Dash lean
+    const lean = ceoChair.seated
+      ? 0
+      : (p.vx * 0.00045 + (p.turboTimer > 0 ? 0.14 : 0.06));
+    ctx.rotate(lean);
+    ctx.scale(p.squashX, p.squashY);
+
+    const stride = ceoChair.seated ? 0 : Math.sin(p.runCycle);
+    const strideCos = ceoChair.seated ? 0 : Math.cos(p.runCycle);
+    const bob = ceoChair.seated ? 0 : (p.onGround ? Math.abs(strideCos) * -5 : -4);
+
+    // ---- Turbo Flame Exhaust behind Jensen ----
+    if (p.turboTimer > 0 || p.dashTimer > 0) {
+      ctx.save();
+      const fl = 38 + Math.random() * 26;
+      const fGrad = ctx.createLinearGradient(-16, -42, -16 - fl, -42);
+      fGrad.addColorStop(0, '#ffffff');
+      fGrad.addColorStop(0.35, NV_BRIGHT);
+      fGrad.addColorStop(1, 'rgba(0, 240, 255, 0)');
+      ctx.fillStyle = fGrad;
+      ctx.beginPath();
+      ctx.moveTo(-14, -56);
+      ctx.lineTo(-16 - fl, -42);
+      ctx.lineTo(-14, -26);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ---- Back Arm (black leather sleeve) ----
+    ctx.save();
+    ctx.translate(4, -56 + bob);
+    ctx.rotate(ceoChair.seated ? -2.3 : -stride * 0.72);
+    ctx.fillStyle = '#0e1116';
+    ctx.strokeStyle = '#384654';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(-6, 0, 13, 28, 6);
+    ctx.fill();
+    ctx.stroke();
+    // Hand
+    ctx.fillStyle = '#f2c29b';
+    ctx.beginPath();
+    ctx.arc(1, 29, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // ---- Legs & Sneakers ----
+    const drawLeg = (hipX, swing, isFront) => {
+      ctx.save();
+      ctx.translate(hipX, -28 + bob);
+      const ang = ceoChair.seated ? (isFront ? -0.45 : 0.35) : (p.onGround ? swing * 0.72 : (isFront ? -0.52 : 0.45));
+      ctx.rotate(ang);
+      // Dark jeans
+      ctx.fillStyle = isFront ? '#1c2430' : '#131922';
+      ctx.beginPath();
+      ctx.roundRect(-7, 0, 14, 24, 5);
+      ctx.fill();
+      // Sneaker (black + NVIDIA green sole!)
+      ctx.fillStyle = '#11151b';
+      ctx.beginPath();
+      ctx.roundRect(-7, 20, 22, 10, 4);
+      ctx.fill();
+      ctx.fillStyle = NV_BRIGHT;
+      ctx.fillRect(-7, 27, 22, 3.5);
+      ctx.restore();
+    };
+    drawLeg(-4, -stride, false);
+    drawLeg(5, stride, true);
+
+    // ---- ICONIC SHINY BLACK LEATHER JACKET TORSO ----
+    ctx.save();
+    ctx.translate(0, -64 + bob);
+
+    // Neon NVIDIA green rim-light around jacket
+    ctx.shadowColor = p.shieldTimer > 0 ? GOLD : NV_GREEN;
+    ctx.shadowBlur = p.shieldTimer > 0 ? 22 : 12;
+
+    // Jacket silhouette
+    ctx.fillStyle = '#101319';
+    ctx.strokeStyle = p.shieldTimer > 0 ? GOLD : NV_GREEN;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.roundRect(-21, 0, 42, 40, [11, 11, 6, 6]);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Black t-shirt v-neck peek
+    ctx.fillStyle = '#07090c';
+    ctx.beginPath();
+    ctx.moveTo(-8, 0);
+    ctx.lineTo(8, 0);
+    ctx.lineTo(2, 14);
+    ctx.closePath();
+    ctx.fill();
+
+    // Shiny leather lapels & specular highlights!
+    ctx.fillStyle = '#202631';
+    ctx.beginPath();
+    ctx.moveTo(-14, 2);
+    ctx.lineTo(-4, 15);
+    ctx.lineTo(-16, 17);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(15, 2);
+    ctx.lineTo(5, 15);
+    ctx.lineTo(17, 17);
+    ctx.closePath();
+    ctx.fill();
+
+    // Glossy leather shoulder & chest shine streaks
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-15, 6);
+    ctx.lineTo(-11, 13);
+    ctx.moveTo(11, 6);
+    ctx.lineTo(15, 12);
+    ctx.stroke();
+
+    // Iconic silver zipper & moto snap studs
+    ctx.strokeStyle = '#d5e1ec';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath();
+    ctx.moveTo(2, 13);
+    ctx.lineTo(2, 38);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Silver moto pockets / snaps
+    ctx.fillStyle = '#e5eef5';
+    ctx.beginPath();
+    ctx.arc(-11, 8, 1.8, 0, Math.PI * 2);
+    ctx.arc(12, 8, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tiny glowing green GPU pin on jacket chest
+    ctx.fillStyle = NV_BRIGHT;
+    ctx.fillRect(-14, 22, 7, 7);
+    ctx.restore();
+
+    // ---- Front Arm (shiny leather sleeve) ----
+    ctx.save();
+    ctx.translate(-5, -56 + bob);
+    ctx.rotate(ceoChair.seated ? -2.5 : stride * 0.78);
+    ctx.fillStyle = '#151a22';
+    ctx.strokeStyle = '#76B900';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(-7, 0, 14, 28, 6);
+    ctx.fill();
+    ctx.stroke();
+    // Shiny sleeve glint
+    ctx.strokeStyle = 'rgba(255,255,255,0.48)';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(-3, 5);
+    ctx.lineTo(-3, 19);
+    ctx.stroke();
+    // Hand (holds a mini glowing green GPU when seated on CEO Chair!)
+    ctx.fillStyle = '#f2c29b';
+    ctx.beginPath();
+    ctx.arc(0, 29, 5.8, 0, Math.PI * 2);
+    ctx.fill();
+    if (ceoChair.seated) {
+      ctx.fillStyle = NV_BRIGHT;
+      ctx.shadowColor = NV_BRIGHT;
+      ctx.shadowBlur = 12;
+      ctx.fillRect(-9, 32, 18, 14);
+      ctx.shadowBlur = 0;
+    }
+    ctx.restore();
+
+    // ---- HEAD: RECOGNIZABLE JENSEN HUANG (SILVER-WHITE HAIR + GLASSES!) ----
+    ctx.save();
+    ctx.translate(2, -82 + bob);
+
+    // Neck
+    ctx.fillStyle = '#e3ae85';
+    ctx.fillRect(-5, 11, 10, 8);
+
+    // Face oval
+    ctx.fillStyle = '#f5c69e';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 17.5, 19, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Ear
+    ctx.fillStyle = '#e6b289';
+    ctx.beginPath();
+    ctx.arc(-16.5, 1, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ICONIC SWEPT-BACK SILVER-WHITE HAIR
+    ctx.fillStyle = '#dce6ef';
+    ctx.beginPath();
+    ctx.moveTo(-18, -2);
+    ctx.quadraticCurveTo(-22, -16, -8, -22);
+    ctx.quadraticCurveTo(6, -26, 17, -15);
+    ctx.quadraticCurveTo(19, -9, 14, -7);
+    ctx.quadraticCurveTo(6, -13, -7, -11);
+    ctx.quadraticCurveTo(-13, -7, -14, 1);
+    ctx.closePath();
+    ctx.fill();
+
+    // Bright silver hair flow streaks (fluttering backward with speed!)
+    const hairFlutter = Math.sin(worldTime * 18) * 2.5;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-16, -10);
+    ctx.quadraticCurveTo(-25, -13 + hairFlutter, -28, -9 + hairFlutter);
+    ctx.moveTo(-10, -18);
+    ctx.quadraticCurveTo(2, -22, 13, -15);
+    ctx.moveTo(-6, -14);
+    ctx.quadraticCurveTo(3, -17, 11, -12);
+    ctx.stroke();
+
+    // ICONIC GLASSES (or neon boss shades when Shielded / On CEO Throne!)
+    const bossShades = p.shieldTimer > 0 || p.expr === 'boss';
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = bossShades ? NV_BRIGHT : '#1b222c';
+    ctx.fillStyle = bossShades ? 'rgba(10, 22, 12, 0.92)' : 'rgba(205, 245, 255, 0.34)';
+
+    // Left lens & right lens (3/4 front-right profile)
+    ctx.beginPath();
+    ctx.roundRect(-3, -6, 11, 8, 2);
+    ctx.roundRect(10, -6, 10, 8, 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Glasses bridge & temple arm
+    ctx.beginPath();
+    ctx.moveTo(8, -3);
+    ctx.lineTo(10, -3);
+    ctx.moveTo(-3, -3);
+    ctx.lineTo(-15, -2);
+    ctx.stroke();
+
+    // Eyes behind glasses (if not dark boss shades)
+    if (!bossShades) {
+      ctx.fillStyle = '#11161d';
+      ctx.beginPath();
+      ctx.arc(3.5, -2, 1.8, 0, Math.PI * 2);
+      ctx.arc(15.5, -2, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Cool diagonal lens glare!
+    ctx.strokeStyle = bossShades ? NV_BRIGHT : '#ffffff';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-1, -4);
+    ctx.lineTo(3, -1);
+    ctx.moveTo(12, -4);
+    ctx.lineTo(16, -1);
+    ctx.stroke();
+
+    // Expressive Mouth!
+    if (p.expr === 'shock') {
+      ctx.fillStyle = '#5a1622';
+      ctx.beginPath();
+      ctx.ellipse(9, 9, 4.5, 5.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.expr === 'hype' || ceoChair.seated) {
+      // Big hyped Jensen grin!
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(9, 6.5, 7, 0.08 * Math.PI, 0.92 * Math.PI);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#5a2e22';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    } else {
+      // Confident arcade smirk
+      ctx.strokeStyle = '#6b3828';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(8, 5, 6.5, 0.15 * Math.PI, 0.85 * Math.PI);
+      ctx.stroke();
+    }
+
+    ctx.restore(); // end head
+
+    // ---- GOLDEN LEATHER JACKET SHIELD AURA ----
+    if (p.shieldTimer > 0) {
+      ctx.save();
+      const pulse = 1 + Math.sin(worldTime * 16) * 0.05;
+      ctx.translate(0, -48);
+      ctx.scale(pulse, pulse);
+
+      // Translucent shield bubble
+      const sGrad = ctx.createRadialGradient(0, 0, 20, 0, 0, 66);
+      sGrad.addColorStop(0, 'rgba(118, 185, 0, 0.05)');
+      sGrad.addColorStop(0.75, 'rgba(158, 255, 0, 0.22)');
+      sGrad.addColorStop(1, 'rgba(255, 212, 59, 0.62)');
+      ctx.fillStyle = sGrad;
+      ctx.beginPath();
+      ctx.arc(0, 0, 64, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Countdown progress ring
+      const frac = Math.max(0, p.shieldTimer / 5.0);
+      ctx.strokeStyle = GOLD;
+      ctx.lineWidth = 4;
+      ctx.shadowColor = GOLD;
+      ctx.shadowBlur = 16;
+      ctx.beginPath();
+      ctx.arc(0, 0, 66, -Math.PI * 0.5, -Math.PI * 0.5 + Math.PI * 2 * frac);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  // ---------------- OBSTACLES (BOLD FLOATING LABELS) ----------------
+  function drawFloatingLabel(x, y, text, bg, border, textCol) {
+    ctx.save();
+    ctx.font = '900 13px ui-monospace, Consolas, monospace';
+    const w = ctx.measureText(text).width + 16;
+    const h = 22;
+    ctx.fillStyle = bg;
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.roundRect(x - w * 0.5, y - h * 0.5, w, h, 5);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = textCol;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y + 0.5);
+    ctx.restore();
+  }
+
+  function drawObstacle(ob) {
+    ctx.save();
+
+    if (ob.type === 'candle') {
+      if (ob.warnTimer > 0) {
+        // Flashing red crash lane warning!
+        const blink = Math.floor(worldTime * 18) % 2 === 0;
+        const beamTop = hudSafeY + 6;
+        ctx.fillStyle = blink ? 'rgba(255, 46, 76, 0.22)' : 'rgba(255, 46, 76, 0.08)';
+        ctx.fillRect(ob.x - 24, beamTop, 48, groundY - beamTop);
+        ctx.strokeStyle = WS_RED;
+        ctx.setLineDash([8, 6]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ob.x, beamTop + 12);
+        ctx.lineTo(ob.x, groundY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const warnY = bannerTimer > 0 ? hudSafeY + 98 : hudSafeY + 26;
+        drawFloatingLabel(ob.x, warnY, '▼ -40% CRASH!', 'rgba(40, 4, 12, 0.92)', WS_RED, '#ff9aa8');
+        ctx.restore();
+        return;
+      }
+
+      // Crashing Glowing Red Stock Candle
+      ctx.shadowColor = WS_RED;
+      ctx.shadowBlur = 18;
+      // Wicks
+      ctx.strokeStyle = '#ff7b8e';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(ob.x, ob.y - ob.h * 0.68);
+      ctx.lineTo(ob.x, ob.y + ob.h * 0.62);
+      ctx.stroke();
+      // Candle body
+      ctx.fillStyle = WS_RED;
+      ctx.strokeStyle = '#ffb3be';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(ob.x - ob.w * 0.5, ob.y - ob.h * 0.45, ob.w, ob.h * 0.9, 5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Bold "-40%" on body + floating pill
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '900 15px ui-monospace, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('-40%', ob.x, ob.y);
+      drawFloatingLabel(ob.x, ob.y - ob.h * 0.65 - 12, '-40%', 'rgba(30, 3, 10, 0.9)', WS_RED, '#ffffff');
+    } else if (ob.type === 'fud') {
+      // Spinning Red Warning Block ("BOARD FUD" / "RESIGNATION")
+      ctx.save();
+      ctx.translate(ob.x, ob.y);
+      ctx.rotate(ob.angle);
+      ctx.shadowColor = WS_RED;
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = '#330610';
+      ctx.strokeStyle = WS_RED;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.roundRect(-27, -27, 54, 54, 8);
+      ctx.fill();
+      ctx.stroke();
+
+      // Hazard diagonal stripes inside
+      ctx.strokeStyle = 'rgba(255, 46, 76, 0.72)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-18, -18); ctx.lineTo(18, 18);
+      ctx.moveTo(18, -18); ctx.lineTo(-18, 18);
+      ctx.stroke();
+
+      // Warning exclamation center
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '900 24px ui-monospace, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('!', 0, 1);
+      ctx.restore();
+
+      // Upright readable floating label above spinning block
+      drawFloatingLabel(ob.x, ob.y - 44, ob.label, 'rgba(36, 4, 12, 0.92)', WS_RED, '#ff9aa8');
+    } else if (ob.type === 'spark') {
+      // Red "WALL STREET PANIC" Crackling Sparks along highway
+      ctx.save();
+      ctx.translate(ob.x, ob.y);
+      ctx.shadowColor = WS_RED;
+      ctx.shadowBlur = 18;
+
+      // Spiky plasma star
+      ctx.fillStyle = WS_RED;
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      const spikes = 10;
+      for (let s = 0; s < spikes * 2; s++) {
+        const ang = (s / (spikes * 2)) * Math.PI * 2 + ob.phase * 0.35;
+        const rad = s % 2 === 0 ? 25 + Math.sin(ob.phase + s) * 4 : 11;
+        const sx = Math.cos(ang) * rad;
+        const sy = Math.sin(ang) * rad * 0.78;
+        if (s === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Hot core
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0, 0, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      drawFloatingLabel(ob.x, ob.y - 36, 'WALL STREET PANIC', 'rgba(36, 4, 12, 0.92)', WS_RED, '#ff9aa8');
+    }
+
+    ctx.restore();
+  }
+
+  // ---------------- COLLECTIBLES & POWER-UPS ----------------
+  function drawCollectible(c) {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+
+    // Outer radiant pulse ring
+    const ringR = 30 + Math.sin(c.phase * 1.4) * 4;
+    ctx.strokeStyle = c.color;
+    ctx.globalAlpha = 0.32;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    if (c.type === 'gpu') {
+      // Glowing RUBIN GPU Chip
+      ctx.shadowColor = NV_BRIGHT;
+      ctx.shadowBlur = 18;
+
+      // Gold pins around 4 edges
+      ctx.fillStyle = GOLD;
+      for (let i = -14; i <= 14; i += 7) {
+        ctx.fillRect(i - 1.5, -24, 3, 6);
+        ctx.fillRect(i - 1.5, 18, 3, 6);
+        ctx.fillRect(-24, i - 1.5, 6, 3);
+        ctx.fillRect(18, i - 1.5, 6, 3);
+      }
+      // PCB square
+      ctx.fillStyle = '#09220a';
+      ctx.strokeStyle = NV_BRIGHT;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.roundRect(-19, -19, 38, 38, 5);
+      ctx.fill();
+      ctx.stroke();
+      // Silicon die core
+      ctx.fillStyle = NV_GREEN;
+      ctx.fillRect(-10, -10, 20, 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '900 9px ui-monospace, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('GPU', 0, 0.5);
+    } else if (c.type === 'rocket') {
+      // Green Stock Rocket ("+30% NVDA") angled upward-left
+      ctx.rotate(-0.22);
+      ctx.shadowColor = NV_BRIGHT;
+      ctx.shadowBlur = 20;
+
+      // Thruster flame
+      ctx.fillStyle = CYAN;
+      ctx.beginPath();
+      ctx.moveTo(22, -6);
+      ctx.lineTo(38 + Math.random() * 10, 0);
+      ctx.lineTo(22, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      // Fins
+      ctx.fillStyle = NV_GREEN;
+      ctx.beginPath();
+      ctx.moveTo(14, -9); ctx.lineTo(25, -18); ctx.lineTo(22, -7);
+      ctx.moveTo(14, 9);  ctx.lineTo(25, 18);  ctx.lineTo(22, 7);
+      ctx.fill();
+
+      // Sleek body
+      ctx.fillStyle = NV_BRIGHT;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-26, 0);
+      ctx.quadraticCurveTo(-12, -13, 20, -10);
+      ctx.lineTo(23, 0);
+      ctx.lineTo(20, 10);
+      ctx.quadraticCurveTo(-12, 13, -26, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Rocket window
+      ctx.fillStyle = '#062010';
+      ctx.beginPath();
+      ctx.arc(-2, 0, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.rotate(0.22);
+    } else if (c.type === 'petition') {
+      // "180K PETITION" Glowing Cyan/Green Megaphone
+      ctx.shadowColor = CYAN;
+      ctx.shadowBlur = 20;
+
+      // Sound waves
+      ctx.strokeStyle = NV_BRIGHT;
+      ctx.lineWidth = 2.4;
+      const wPulse = (worldTime * 3) % 1;
+      ctx.beginPath();
+      ctx.arc(-22, -2, 10 + wPulse * 10, Math.PI * 0.72, Math.PI * 1.28);
+      ctx.stroke();
+
+      // Handle
+      ctx.fillStyle = '#1b2836';
+      ctx.fillRect(6, 6, 8, 16);
+      // Cone
+      ctx.fillStyle = CYAN;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(-20, -16);
+      ctx.lineTo(14, -7);
+      ctx.lineTo(14, 7);
+      ctx.lineTo(-20, 14);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#031218';
+      ctx.font = '900 10px ui-monospace, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('180K', -2, 0);
+    } else if (c.type === 'shield') {
+      // Golden "LEATHER JACKET SHIELD"
+      ctx.shadowColor = GOLD;
+      ctx.shadowBlur = 22;
+
+      // Golden starburst halo
+      ctx.fillStyle = 'rgba(255, 212, 59, 0.2)';
+      ctx.beginPath();
+      ctx.arc(0, 0, 26, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Mini iconic leather jacket with gold-neon trim!
+      ctx.fillStyle = '#12151c';
+      ctx.strokeStyle = GOLD;
+      ctx.lineWidth = 2.8;
+      ctx.beginPath();
+      ctx.moveTo(-12, -16);
+      ctx.lineTo(-5, -18);
+      ctx.lineTo(0, -10);
+      ctx.lineTo(5, -18);
+      ctx.lineTo(12, -16);
+      ctx.lineTo(22, -6);
+      ctx.lineTo(17, 17);
+      ctx.lineTo(10, 17);
+      ctx.lineTo(9, 2);
+      ctx.lineTo(9, 18);
+      ctx.lineTo(-9, 18);
+      ctx.lineTo(-9, 2);
+      ctx.lineTo(-10, 17);
+      ctx.lineTo(-17, 17);
+      ctx.lineTo(-22, -6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Gold zipper
+      ctx.strokeStyle = GOLD;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -10);
+      ctx.lineTo(0, 17);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    // Floating crisp green/cyan/gold label pill above collectible
+    drawFloatingLabel(
+      c.x,
+      c.y - 38,
+      c.label,
+      'rgba(4, 16, 10, 0.9)',
+      c.color,
+      c.color
+    );
+  }
+
+  function drawGreenCoin(cn) {
+    ctx.save();
+    ctx.translate(cn.x, cn.y);
+    ctx.shadowColor = NV_BRIGHT;
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = NV_BRIGHT;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 13, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#041a04';
+    ctx.font = '900 14px ui-monospace, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$', 0, 1);
+    ctx.restore();
+  }
+
+  function drawComicBanner() {
+    const fade = Math.min(1, bannerTimer * 2.5);
+    const y = hudSafeY + 42;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.font = `900 ${isPortrait ? 22 : 30}px ui-monospace, 'Cascadia Code', Consolas, monospace`;
+    const w = Math.max(320, ctx.measureText(bannerText).width + 46);
+    const h = bannerSub ? 64 : 44;
+
+    ctx.fillStyle = 'rgba(4, 10, 14, 0.84)';
+    ctx.strokeStyle = bannerColor;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = bannerColor;
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.roundRect(VW * 0.5 - w * 0.5, y - h * 0.5, w, h, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = bannerColor;
+    ctx.fillText(bannerText, VW * 0.5, bannerSub ? y - 10 : y + 1);
+
+    if (bannerSub) {
+      ctx.shadowBlur = 0;
+      ctx.font = `800 ${isPortrait ? 12 : 14}px ui-monospace, Consolas, monospace`;
+      ctx.fillStyle = '#eaf6ff';
+      ctx.fillText(bannerSub, VW * 0.5, y + 16);
+    }
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // 13. BOOT AT FRAME 0 & MAIN 60FPS LOOP
+  // =========================================================================
+  resetCommon('attract');
+  // Pre-seed live attract screen so Frame 0 immediately has GPUs, rockets, and candles in flight!
+  spawnCollectible('rocket', VW * 0.72, groundY - 125);
+  spawnCollectible('gpu', VW * 0.52, groundY - 70);
+  spawnObstacle('fud', VW * 0.86, groundY - 58);
+
+  let lastTime = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
+    lastTime = now;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
