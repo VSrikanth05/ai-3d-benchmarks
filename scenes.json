@@ -88,5 +88,11 @@
     "title": "Jensen Huang: The 11-Day Comeback",
     "file": "jensen-huang-11-day-comeback.html",
     "description": "Playable neon retro arcade game built one-shot with Gemini 4 Neon: dodge -40% red stock candles & Board FUD, grab +30% NVDA rockets, Rubin GPUs, 180K Petition shockwaves, and Leather Jacket Invincibility to reclaim the CEO throne."
+  },
+  {
+    "id": "taj-mahal-testnet",
+    "title": "The Taj Mahal Testnet — Physics & Simulation Stress Tests",
+    "file": "taj-mahal-testnet.html",
+    "description": "Single-file procedural semiconductor cleanroom simulation featuring a glowing gold Taj Mahal & PCB circuitry etched onto a thin-film iridescent silicon wafer, 3 IK robotic micro-probe arms, sweeping violet scan laser, live holographic consensus terminal, 16-node 3D validator network, 0-100% stress ramp (white-hot traces, FLIR thermal heatmap, EMI ripples, nanoscale FinFET zoom), live fault injection with self-healing trace rerouting, and procedural Web Audio soundscape."
   }
 ]
