@@ -94,5 +94,11 @@
     "title": "The Taj Mahal Testnet — Physics & Simulation Stress Tests",
     "file": "taj-mahal-testnet.html",
     "description": "Single-file procedural semiconductor cleanroom simulation featuring a glowing gold Taj Mahal & PCB circuitry etched onto a thin-film iridescent silicon wafer, 3 IK robotic micro-probe arms, sweeping violet scan laser, live holographic consensus terminal, 16-node 3D validator network, 0-100% stress ramp (white-hot traces, FLIR thermal heatmap, EMI ripples, nanoscale FinFET zoom), live fault injection with self-healing trace rerouting, and procedural Web Audio soundscape."
+  },
+  {
+    "id": "samsung-galaxy-z-trifold-unboxing",
+    "title": "Samsung Galaxy Z TriFold — Interactive 3D Unboxing",
+    "file": "samsung-galaxy-z-trifold-unboxing.html",
+    "description": "Single-file interactive 3D Samsung Galaxy Z TriFold unboxing with procedural Three.js geometry, Canvas textures, and Web Audio: lift the box lid, pull out the phone, peel the protective film, inspect the 200MP cameras, unfold both titanium hinges to 10.0\", and unlock live 3-panel One UI."
   }
 ]

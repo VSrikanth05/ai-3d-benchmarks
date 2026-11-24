@@ -1,0 +1,2758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <title>Samsung Galaxy Z TriFold — Interactive 3D Unboxing</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23181a20'/><rect x='6' y='7' width='5' height='18' rx='1.5' fill='%23e5e7eb'/><rect x='13.5' y='7' width='5' height='18' rx='1.5' fill='%239ca3af'/><rect x='21' y='7' width='5' height='18' rx='1.5' fill='%23e5e7eb'/></svg>" />
+
+  <!-- Three.js r128 from cdnjs (no external models, images, or audio files) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <style>
+    :root {
+      --bg-center: #cbc6bc;
+      --bg-edge: #938e83;
+      --ink: rgba(28, 26, 23, 0.86);
+      --ink-soft: rgba(28, 26, 23, 0.52);
+      --hairline: rgba(28, 26, 23, 0.16);
+      --glass: rgba(246, 244, 239, 0.66);
+      --glass-strong: rgba(248, 246, 241, 0.88);
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(ellipse 74% 68% at 50% 46%, var(--bg-center) 0%, #b5b0a5 54%, var(--bg-edge) 100%);
+      font-family: var(--font);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    #stage {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+    #stage.is-dragging { cursor: grabbing; }
+    #stage.is-pull { cursor: ns-resize; }
+    #stage.is-unfold { cursor: ew-resize; }
+    #stage.is-tap { cursor: pointer; }
+    #stage canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* Ultra-minimal studio corner icons (diegetic-first, zero visual clutter) */
+    .corner-tools {
+      position: fixed;
+      top: max(18px, env(safe-area-inset-top));
+      right: max(18px, env(safe-area-inset-right));
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-dot {
+      appearance: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1px solid var(--hairline);
+      background: var(--glass);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: transform 140ms ease, background 180ms ease, border-color 180ms ease, opacity 180ms ease;
+      opacity: 0.78;
+    }
+    .icon-dot:hover {
+      opacity: 1;
+      background: var(--glass-strong);
+      border-color: rgba(28, 26, 23, 0.34);
+    }
+    .icon-dot:active { transform: scale(0.92); }
+    .icon-dot svg { width: 14px; height: 14px; }
+
+    /* Bottom-right subtle (i) spec toggle matching reference aesthetic */
+    .info-corner {
+      position: fixed;
+      bottom: max(18px, env(safe-area-inset-bottom));
+      right: max(18px, env(safe-area-inset-right));
+      z-index: 20;
+    }
+
+    /* Whisper-quiet tabletop prompt centered near bottom edge */
+    .stage-prompt {
+      position: fixed;
+      left: 50%;
+      bottom: max(22px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      z-index: 15;
+      text-align: center;
+      pointer-events: none;
+      transition: opacity 380ms cubic-bezier(0.22, 1, 0.36, 1), transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .stage-prompt.is-fading {
+      opacity: 0;
+      transform: translate(-50%, 6px);
+    }
+    .prompt-main {
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      color: rgba(24, 22, 19, 0.84);
+      line-height: 1.3;
+    }
+    .prompt-sub {
+      font-size: 11px;
+      font-weight: 400;
+      color: rgba(24, 22, 19, 0.50);
+      margin-top: 2px;
+      letter-spacing: 0.005em;
+    }
+
+    /* Subtle clickable pill that only appears once phone is unfolded/interactive for fold presets */
+    .mini-fold-bar {
+      position: fixed;
+      left: 50%;
+      bottom: max(60px, calc(env(safe-area-inset-bottom) + 48px));
+      transform: translateX(-50%) translateY(8px);
+      z-index: 18;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      background: var(--glass);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--hairline);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 360ms ease, transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .mini-fold-bar.is-visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+    .mini-pill {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: rgba(24, 22, 19, 0.68);
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 5px 11px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 160ms ease, color 160ms ease;
+    }
+    .mini-pill:hover {
+      background: rgba(24, 22, 19, 0.07);
+      color: rgba(24, 22, 19, 0.92);
+    }
+    .mini-pill.is-active {
+      background: rgba(24, 22, 19, 0.86);
+      color: #f6f4ef;
+    }
+
+    /* Minimal frosted Spec Popover (hidden unless (i) is clicked) */
+    .info-popover {
+      position: fixed;
+      right: max(18px, env(safe-area-inset-right));
+      bottom: max(62px, calc(env(safe-area-inset-bottom) + 46px));
+      z-index: 30;
+      width: min(300px, calc(100vw - 36px));
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: var(--glass-strong);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      border: 1px solid rgba(28, 26, 23, 0.14);
+      box-shadow: 0 20px 50px rgba(32, 28, 22, 0.16);
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+      pointer-events: none;
+      transition: opacity 220ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .info-popover.is-open {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+    .info-kicker {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin-bottom: 4px;
+    }
+    .info-title {
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      margin: 0 0 10px;
+    }
+    .info-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 7px;
+      font-size: 11.5px;
+    }
+    .info-list li {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(28, 26, 23, 0.09);
+    }
+    .info-list span { color: var(--ink-soft); }
+    .info-list strong { font-weight: 500; text-align: right; }
+
+    /* Minimal Fade-In Loader */
+    .fade-veil {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: #beb9ae;
+      transition: opacity 220ms ease, visibility 220ms ease;
+      pointer-events: none;
+    }
+    .fade-veil.is-gone { opacity: 0; visibility: hidden; }
+  </style>
+</head>
+<body>
+  <div id="fade-veil" class="fade-veil"></div>
+  <div id="stage" aria-label="Samsung Galaxy Z TriFold Interactive 3D Unboxing"></div>
+
+  <!-- Minimal top-right sound & replay hairline icons -->
+  <div class="corner-tools">
+    <button id="btn-sound" class="icon-dot" type="button" title="Toggle procedural sound" aria-label="Toggle sound" aria-pressed="true">
+      <svg id="ico-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+      <svg id="ico-sound-off" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+    </button>
+    <button id="btn-replay" class="icon-dot" type="button" title="Replay unboxing" aria-label="Replay unboxing">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+    </button>
+  </div>
+
+  <!-- Post-unboxing ultra-minimal fold posture bar -->
+  <div id="mini-fold-bar" class="mini-fold-bar" role="group" aria-label="Galaxy Z TriFold postures">
+    <button class="mini-pill" data-posture="rear" type="button">Rear 200MP</button>
+    <button class="mini-pill" data-posture="cover" type="button">Cover 6.5"</button>
+    <button class="mini-pill" data-posture="half" type="button">Half Fold</button>
+    <button class="mini-pill is-active" data-posture="open" type="button">Open 10.0"</button>
+    <button class="mini-pill" data-posture="camera" type="button">Camera</button>
+  </div>
+
+  <!-- Whisper-quiet tabletop prompt -->
+  <div id="stage-prompt" class="stage-prompt" aria-live="polite">
+    <div id="prompt-main" class="prompt-main">Lift the lid</div>
+    <div id="prompt-sub" class="prompt-sub">drag it up to open the box</div>
+  </div>
+
+  <!-- Bottom-right (i) info circle -->
+  <div class="info-corner">
+    <button id="btn-info" class="icon-dot" type="button" title="Device specifications" aria-label="Device specifications" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+    </button>
+  </div>
+
+  <aside id="info-popover" class="info-popover" aria-hidden="true">
+    <div class="info-kicker">Crafted Black · Dual Titanium Hinge</div>
+    <h2 class="info-title">Samsung Galaxy Z TriFold</h2>
+    <ul class="info-list">
+      <li><span>Main Display</span><strong>10.0" Dynamic AMOLED 2X · 120Hz</strong></li>
+      <li><span>Cover Display</span><strong>6.5" AMOLED 2X · 2520×1080</strong></li>
+      <li><span>Thinness</span><strong>3.9 mm open · 12.9 mm closed</strong></li>
+      <li><span>Footprint</span><strong>159.2 × 214.1 mm open · 75 mm closed</strong></li>
+      <li><span>Cameras</span><strong>200 MP Wide · 3× Tele · 12 MP UW</strong></li>
+      <li><span>Chip &amp; Battery</span><strong>Snapdragon 8 Elite · 5,600 mAh</strong></li>
+    </ul>
+  </aside>
+
+  <script>
+  (() => {
+    'use strict';
+
+    /* ==========================================================================
+       1. PHYSICAL DIMENSIONS (1 unit = 10 mm) & ZERO-INTERPENETRATION KINEMATICS
+       Samsung Galaxy Z TriFold:
+         - Height: 159.2 mm  -> 15.92
+         - Open Width: 214.1 mm -> 21.41
+         - Closed Width: 75.0 mm -> 7.50
+         - Open Thickness: 3.9 mm -> 0.39
+         - Closed Thickness: 12.9 mm -> 1.29
+       ========================================================================== */
+    const DIM = Object.freeze({
+      H: 15.92,
+      T: 0.39,
+      HALF_T: 0.195,
+      W_C: 7.05,
+      W_R: 6.85,
+      W_L: 7.05,
+      GAP_R: 0.14,
+      GAP_L: 0.32,
+      PIVOT_RX: 7.05 / 2 + 0.14 / 2,   // +3.595
+      PIVOT_RZ: 0.225,
+      PIVOT_LX: -(7.05 / 2 + 0.32 / 2), // -3.685
+      PIVOT_LZ: 0.450,
+      DISP_X_MIN: -10.635,
+      DISP_X_MAX: 10.255,
+      DISP_W: 20.89,
+      DISP_H: 15.30
+    });
+
+    const DEG2RAD = Math.PI / 180;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const smoothstep = (e0, e1, x) => {
+      const t = clamp((x - e0) / (e1 - e0), 0, 1);
+      return t * t * (3 - 2 * t);
+    };
+
+    /* Critically damped harmonic spring (zeta = 1.0) for organic physical motion */
+    class Spring {
+      constructor(value, omega = 10) {
+        this.value = value;
+        this.velocity = 0;
+        this.omega = omega;
+      }
+      setImmediate(v) { this.value = v; this.velocity = 0; }
+      step(target, dt) {
+        const w = this.omega;
+        const exp = Math.exp(-w * dt);
+        const delta = this.value - target;
+        const temp = (this.velocity + w * delta) * dt;
+        this.velocity = (this.velocity - w * temp) * exp;
+        this.value = target + (delta + temp) * exp;
+        if (Math.abs(this.value - target) < 0.0004 && Math.abs(this.velocity) < 0.0004) {
+          this.value = target;
+          this.velocity = 0;
+        }
+        return this.value;
+      }
+    }
+
+    /* ==========================================================================
+       2. PROCEDURAL WEB AUDIO ENGINE ("every sound made in code")
+       Synthesizes: cardboard vacuum lid slide, air-release pop, tabletop thud,
+       paper/film peel crackle, Samsung Galaxy boot chime, titanium hinge click,
+       hinge air whoosh, One UI glass unlock chime, and camera shutter.
+       ========================================================================== */
+    const Sound = (() => {
+      let enabled = true;
+      let ctx = null;
+      let noiseBuf = null;
+      let slideGain = null, slideFilter = null;
+      let peelGain = null, peelFilter = null;
+      let lastCrackleAt = 0;
+
+      function init() {
+        if (!enabled) return false;
+        if (!ctx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return false;
+          ctx = new AC();
+          const len = Math.floor(ctx.sampleRate * 2.0);
+          noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+          const ch = noiseBuf.getChannelData(0);
+          let b0 = 0, b1 = 0, b2 = 0;
+          for (let i = 0; i < len; i++) {
+            const w = Math.random() * 2 - 1;
+            b0 = 0.996 * b0 + w * 0.03;
+            b1 = 0.980 * b1 + w * 0.04;
+            b2 = 0.920 * b2 + w * 0.06;
+            ch[i] = (b0 + b1 + b2 + w * 0.18) * 0.55;
+          }
+
+          // Continuous cardboard friction bed
+          const sSrc = ctx.createBufferSource();
+          sSrc.buffer = noiseBuf; sSrc.loop = true;
+          slideFilter = ctx.createBiquadFilter();
+          slideFilter.type = 'bandpass'; slideFilter.frequency.value = 340; slideFilter.Q.value = 1.2;
+          slideGain = ctx.createGain(); slideGain.gain.value = 0.0001;
+          sSrc.connect(slideFilter); slideFilter.connect(slideGain); slideGain.connect(ctx.destination);
+          sSrc.start();
+
+          // Continuous frosted film peel bed
+          const pSrc = ctx.createBufferSource();
+          pSrc.buffer = noiseBuf; pSrc.loop = true;
+          peelFilter = ctx.createBiquadFilter();
+          peelFilter.type = 'bandpass'; peelFilter.frequency.value = 3200; peelFilter.Q.value = 1.8;
+          peelGain = ctx.createGain(); peelGain.gain.value = 0.0001;
+          pSrc.connect(peelFilter); peelFilter.connect(peelGain); peelGain.connect(ctx.destination);
+          pSrc.start();
+        }
+        if (ctx.state === 'suspended') ctx.resume();
+        return true;
+      }
+
+      function setEnabled(v) {
+        enabled = v;
+        if (!v && ctx && slideGain && peelGain) {
+          const t = ctx.currentTime;
+          slideGain.gain.setTargetAtTime(0.0001, t, 0.03);
+          peelGain.gain.setTargetAtTime(0.0001, t, 0.03);
+        }
+      }
+
+      function updateCardboardSlide(speed) {
+        if (!init() || !slideGain) return;
+        const n = clamp(speed * 1.4, 0, 1);
+        const t = ctx.currentTime;
+        slideGain.gain.setTargetAtTime(n * 0.11, t, 0.03);
+        slideFilter.frequency.setTargetAtTime(240 + n * 420, t, 0.04);
+      }
+
+      function playLidPop() {
+        if (!init()) return;
+        const t = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(165, t);
+        osc.frequency.exponentialRampToValueAtTime(68, t + 0.14);
+        g.gain.setValueAtTime(0.14, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.17);
+      }
+
+      function playTableThump() {
+        if (!init()) return;
+        const t = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(92, t);
+        osc.frequency.exponentialRampToValueAtTime(38, t + 0.12);
+        g.gain.setValueAtTime(0.16, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.15);
+      }
+
+      function updatePeelSound(speed) {
+        if (!init() || !peelGain) return;
+        const n = clamp(speed * 1.8, 0, 1);
+        const t = ctx.currentTime;
+        peelGain.gain.setTargetAtTime(n * 0.085, t, 0.025);
+        peelFilter.frequency.setTargetAtTime(2400 + n * 2800, t, 0.03);
+        // Stochastic tactile adhesive micro-crackles
+        if (n > 0.18 && performance.now() - lastCrackleAt > 36 + Math.random() * 48) {
+          lastCrackleAt = performance.now();
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuf;
+          const hp = ctx.createBiquadFilter();
+          hp.type = 'highpass'; hp.frequency.value = 3400 + Math.random() * 2400;
+          const cg = ctx.createGain();
+          cg.gain.setValueAtTime(0.045 * n, t);
+          cg.gain.exponentialRampToValueAtTime(0.0001, t + 0.018);
+          src.connect(hp); hp.connect(cg); cg.connect(ctx.destination);
+          src.start(t, Math.random() * 1.2, 0.022);
+        }
+      }
+
+      function playPeelRelease() {
+        if (!init()) return;
+        const t = ctx.currentTime;
+        const src = ctx.createBufferSource();
+        src.buffer = noiseBuf;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.setValueAtTime(2600, t);
+        bp.frequency.exponentialRampToValueAtTime(900, t + 0.18);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.09, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+        src.connect(bp); bp.connect(g); g.connect(ctx.destination);
+        src.start(t, 0.1, 0.22);
+      }
+
+      function playBootChime() {
+        if (!init()) return;
+        const t = ctx.currentTime;
+        // Luminous crystalline Galaxy chime (E5 - B5 - F#6)
+        [659.25, 987.77, 1479.98].forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, t + i * 0.11);
+          g.gain.setValueAtTime(0.0001, t + i * 0.11);
+          g.gain.linearRampToValueAtTime(0.055 - i * 0.01, t + i * 0.11 + 0.04);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.11 + 1.15);
+          osc.connect(g); g.connect(ctx.destination);
+          osc.start(t + i * 0.11);
+          osc.stop(t + i * 0.11 + 1.2);
+        });
+      }
+
+      function playHingeSnap(isOpen = true) {
+        if (!init()) return;
+        const t = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(isOpen ? 560 : 380, t);
+        osc.frequency.exponentialRampToValueAtTime(isOpen ? 160 : 105, t + 0.065);
+        g.gain.setValueAtTime(0.095, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.075);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.08);
+
+        const src = ctx.createBufferSource();
+        src.buffer = noiseBuf;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.value = isOpen ? 2200 : 1400; bp.Q.value = 2.2;
+        const ng = ctx.createGain();
+        ng.gain.setValueAtTime(0.07, t);
+        ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+        src.connect(bp); bp.connect(ng); ng.connect(ctx.destination);
+        src.start(t, Math.random() * 0.8, 0.045);
+      }
+
+      function playUiGlass(pitch = 940) {
+        if (!init()) return;
+        const t = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(pitch, t);
+        osc.frequency.exponentialRampToValueAtTime(pitch * 1.28, t + 0.06);
+        g.gain.setValueAtTime(0.04, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.1);
+      }
+
+      function playShutter() {
+        if (!init()) return;
+        const t = ctx.currentTime;
+        [0, 0.055].forEach((off, i) => {
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuf;
+          const hp = ctx.createBiquadFilter();
+          hp.type = 'highpass'; hp.frequency.value = i === 0 ? 1900 : 1300;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(i === 0 ? 0.11 : 0.075, t + off);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + off + 0.04);
+          src.connect(hp); hp.connect(g); g.connect(ctx.destination);
+          src.start(t + off, 0.15 + i * 0.25, 0.045);
+        });
+      }
+
+      return {
+        init, setEnabled,
+        updateCardboardSlide, playLidPop, playTableThump,
+        updatePeelSound, playPeelRelease, playBootChime,
+        playHingeSnap, playUiGlass, playShutter
+      };
+    })();
+
+    /* ==========================================================================
+       3. PROCEDURAL CANVAS HELPERS, PBR TEXTURES & STUDIO ENVIRONMENT
+       ========================================================================== */
+    function roundRectPath(ctx, x, y, w, h, r) {
+      const rr = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
+    function createRoundedPanelGeo(w, h, d, rLeft, rRight, bevel = 0.042) {
+      const bw = w - bevel * 2;
+      const bh = h - bevel * 2;
+      const bd = Math.max(0.02, d - bevel * 2);
+      const x0 = -bw / 2, x1 = bw / 2;
+      const y0 = -bh / 2, y1 = bh / 2;
+      const rl = Math.min(rLeft, bw / 2, bh / 2);
+      const rr = Math.min(rRight, bw / 2, bh / 2);
+      const s = new THREE.Shape();
+      s.moveTo(x0 + rl, y0);
+      s.lineTo(x1 - rr, y0);
+      s.quadraticCurveTo(x1, y0, x1, y0 + rr);
+      s.lineTo(x1, y1 - rr);
+      s.quadraticCurveTo(x1, y1, x1 - rr, y1);
+      s.lineTo(x0 + rl, y1);
+      s.quadraticCurveTo(x0, y1, x0, y1 - rl);
+      s.lineTo(x0, y0 + rl);
+      s.quadraticCurveTo(x0, y0, x0 + rl, y0);
+      const geo = new THREE.ExtrudeGeometry(s, {
+        depth: bd,
+        bevelEnabled: true,
+        bevelThickness: bevel,
+        bevelSize: bevel,
+        bevelSegments: 3,
+        curveSegments: 12
+      });
+      geo.translate(0, 0, -bd / 2);
+      return geo;
+    }
+
+    function createStudioEnvMap(renderer) {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      pmrem.compileEquirectangularShader();
+      const envScene = new THREE.Scene();
+      envScene.background = new THREE.Color(0xc5c0b5);
+
+      const addSoftbox = (w, h, color, pos, rot) => {
+        const mesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(w, h),
+          new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide })
+        );
+        mesh.position.set(...pos);
+        mesh.rotation.set(...rot);
+        envScene.add(mesh);
+      };
+
+      // Bright overhead-left softbox (creates iconic bright metallic edge highlights)
+      addSoftbox(34, 24, 0xffffff, [-12, 26, 12], [Math.PI / 2.2, 0.25, 0]);
+      // Crisp vertical specular rim strips on both sides for titanium hinge glints
+      addSoftbox(10, 36, 0xfffaf2, [-26, 8, 8], [0, Math.PI / 2.2, 0]);
+      addSoftbox(10, 36, 0xf2f6ff, [26, 8, 6], [0, -Math.PI / 2.2, 0]);
+      // Warm tabletop bounce
+      addSoftbox(48, 48, 0xa8a296, [0, -18, 0], [-Math.PI / 2, 0, 0]);
+      // Soft back sweep
+      addSoftbox(38, 18, 0xe8e4dc, [0, 12, -26], [0, 0, 0]);
+
+      const rt = pmrem.fromScene(envScene, 0.03);
+      pmrem.dispose();
+      return rt.texture;
+    }
+
+    function createBrushedMetalMaps(baseHex, streakContrast) {
+      const size = 256;
+      const diffC = document.createElement('canvas');
+      const roughC = document.createElement('canvas');
+      diffC.width = roughC.width = size;
+      diffC.height = roughC.height = size;
+      const dCtx = diffC.getContext('2d');
+      const rCtx = roughC.getContext('2d');
+
+      dCtx.fillStyle = baseHex;
+      dCtx.fillRect(0, 0, size, size);
+      rCtx.fillStyle = '#565656';
+      rCtx.fillRect(0, 0, size, size);
+
+      for (let i = 0; i < 650; i++) {
+        const x = Math.random() * size;
+        const a = (Math.random() * 0.45 + 0.12) * streakContrast;
+        const b = Math.random() > 0.5 ? 255 : 0;
+        dCtx.fillStyle = `rgba(${b},${b},${b},${a.toFixed(3)})`;
+        dCtx.fillRect(x, 0, 1.1, size);
+        const rv = Math.floor(62 + Math.random() * 68);
+        rCtx.fillStyle = `rgb(${rv},${rv},${rv})`;
+        rCtx.fillRect(x, 0, 1, size);
+      }
+
+      const map = new THREE.CanvasTexture(diffC);
+      map.wrapS = map.wrapT = THREE.RepeatWrapping;
+      map.encoding = THREE.sRGBEncoding;
+      const roughnessMap = new THREE.CanvasTexture(roughC);
+      roughnessMap.wrapS = roughnessMap.wrapT = THREE.RepeatWrapping;
+      return { map, roughnessMap };
+    }
+
+    /* Matte archival cardboard grain + embossed Samsung Galaxy Z TriFold lid artwork */
+    function createBoxLidTopTexture() {
+      const W = 768, H = 1440;
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const ctx = c.getContext('2d');
+
+      // Architectural matte obsidian-charcoal Samsung Z flagship box finish
+      const bg = ctx.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, '#1e2026');
+      bg.addColorStop(0.5, '#17191e');
+      bg.addColorStop(1, '#1c1e24');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      // Subtle tactile matte paper grain
+      for (let i = 0; i < 3600; i++) {
+        const v = Math.random() > 0.5 ? 255 : 0;
+        ctx.fillStyle = `rgba(${v},${v},${v},0.018)`;
+        ctx.fillRect(Math.random() * W, Math.random() * H, 2, 2);
+      }
+
+      // Embossed sculptural 3-panel folded Galaxy Z TriFold silhouette graphic (silver-titanium foil)
+      ctx.save();
+      ctx.translate(W / 2, H * 0.46);
+      const drawWing = (pts, c1, c2) => {
+        ctx.beginPath();
+        pts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+        ctx.closePath();
+        const g = ctx.createLinearGradient(pts[0][0], pts[0][1], pts[2][0], pts[2][1]);
+        g.addColorStop(0, c1);
+        g.addColorStop(1, c2);
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(235, 240, 248, 0.34)';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      };
+
+      // Three stylized folded origami/Z panels in refined titanium foil
+      drawWing([[-225, -240], [-75, -185], [-75, 245], [-225, 190]], '#2b303b', '#1b1e26');
+      drawWing([[-75, -185], [75, -245], [75, 185], [-75, 245]], '#4a5263', '#232732');
+      drawWing([[75, -245], [225, -190], [225, 240], [75, 185]], '#6e7788', '#2b303c');
+
+      // Subtle golden-horizon reflection streak across the embossed center panel
+      const streak = ctx.createLinearGradient(-220, -40, 220, 60);
+      streak.addColorStop(0, 'rgba(255,255,255,0)');
+      streak.addColorStop(0.5, 'rgba(225, 215, 200, 0.22)');
+      streak.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = streak;
+      ctx.fillRect(-230, -250, 460, 500);
+      ctx.restore();
+
+      // Embossed silver typography: Galaxy Z TriFold
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(232, 235, 240, 0.84)';
+      ctx.font = '300 44px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText('Galaxy Z TriFold', W / 2, H * 0.80);
+
+      ctx.fillStyle = 'rgba(180, 186, 196, 0.48)';
+      ctx.font = '600 18px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText('S A M S U N G', W / 2, H * 0.845);
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.encoding = THREE.sRGBEncoding;
+      return tex;
+    }
+
+    function createBoxSideTexture() {
+      const c = document.createElement('canvas');
+      c.width = 768; c.height = 220;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#181a20';
+      ctx.fillRect(0, 0, 768, 220);
+      ctx.fillStyle = 'rgba(226, 230, 238, 0.72)';
+      ctx.font = '400 38px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Galaxy Z TriFold', 384, 110);
+      const tex = new THREE.CanvasTexture(c);
+      tex.encoding = THREE.sRGBEncoding;
+      return tex;
+    }
+
+    /* Recessed molded-pulp tray interior texture (circular cable & SIM tool recess) */
+    function createInnerTrayTexture() {
+      const W = 512, H = 960;
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#202229';
+      ctx.fillRect(0, 0, W, H);
+
+      // Molded inner perimeter bevel shadow
+      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      ctx.lineWidth = 18;
+      roundRectPath(ctx, 28, 28, W - 56, H - 56, 36);
+      ctx.stroke();
+
+      // Circular USB-C braided cable well in the center (echoing reference tray detail!)
+      ctx.save();
+      ctx.translate(W / 2, H * 0.5);
+      const rg = ctx.createRadialGradient(0, 0, 26, 0, 0, 142);
+      rg.addColorStop(0, '#17191f');
+      rg.addColorStop(0.65, '#14161b');
+      rg.addColorStop(0.88, '#282b34');
+      rg.addColorStop(1, '#202229');
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.arc(0, 0, 142, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Coiled dark braided cable rings
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 12;
+      ctx.beginPath();
+      ctx.arc(0, 0, 96, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,0,0,0.38)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, 88, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Center paper insert tab
+      roundRectPath(ctx, -44, -68, 88, 136, 18);
+      ctx.fillStyle = '#252830';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(210,215,225,0.32)';
+      ctx.font = '600 13px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('SAMSUNG', 0, 5);
+      ctx.restore();
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.encoding = THREE.sRGBEncoding;
+      return tex;
+    }
+
+    /* Translucent matte protective peel film texture with bottom pull-tab ^ */
+    function createProtectiveFilmTexture() {
+      const W = 512, H = 1080;
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const ctx = c.getContext('2d');
+
+      // Matte frosted paper/film body
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, 'rgba(246, 245, 241, 0.94)');
+      g.addColorStop(0.5, 'rgba(239, 237, 232, 0.91)');
+      g.addColorStop(1, 'rgba(244, 243, 238, 0.94)');
+      ctx.fillStyle = g;
+      roundRectPath(ctx, 8, 8, W - 16, H - 104, 46);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(180, 176, 168, 0.65)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Subtle Samsung care outline & triple-camera guide icons printed lightly on matte paper
+      ctx.strokeStyle = 'rgba(90, 88, 82, 0.22)';
+      ctx.lineWidth = 2.5;
+      roundRectPath(ctx, 52, 68, 128, 310, 62);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(72, 70, 65, 0.42)';
+      ctx.font = '500 19px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Galaxy Z TriFold', W / 2, H * 0.48);
+      ctx.font = '400 14px -apple-system, sans-serif';
+      ctx.fillStyle = 'rgba(72, 70, 65, 0.30)';
+      ctx.fillText('Unfold gently along dual titanium hinges', W / 2, H * 0.515);
+
+      // Iconic bottom pull-tab with upward chevron (^)
+      roundRectPath(ctx, W / 2 - 46, H - 96, 92, 86, 14);
+      ctx.fillStyle = 'rgba(252, 251, 248, 0.96)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(155, 150, 142, 0.65)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // Upward chevron ^
+      ctx.strokeStyle = 'rgba(52, 50, 46, 0.72)';
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(W / 2 - 15, H - 46);
+      ctx.lineTo(W / 2, H - 62);
+      ctx.lineTo(W / 2 + 15, H - 46);
+      ctx.stroke();
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.encoding = THREE.sRGBEncoding;
+      return tex;
+    }
+
+    function createRearBackTexture(withGlowLogo = false) {
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 1024;
+      const ctx = c.getContext('2d');
+      const g = ctx.createLinearGradient(0, 0, 512, 1024);
+      g.addColorStop(0, '#181a20');
+      g.addColorStop(0.5, '#111317');
+      g.addColorStop(1, '#1b1d24');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 512, 1024);
+
+      if (withGlowLogo) {
+        // Subtle glowing white-silver SAMSUNG emblem matching the rear reveal moment!
+        ctx.save();
+        ctx.translate(256, 540);
+        ctx.shadowColor = 'rgba(255, 255, 255, 0.55)';
+        ctx.shadowBlur = 18;
+        ctx.fillStyle = 'rgba(244, 246, 252, 0.88)';
+        ctx.font = '600 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('S A M S U N G', 0, 0);
+        ctx.restore();
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.encoding = THREE.sRGBEncoding;
+      return tex;
+    }
+
+    function createLensTexture(tintA, tintB, isPeriscope = false) {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 256;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#050608';
+      ctx.fillRect(0, 0, 256, 256);
+
+      for (let r = 118; r > 22; r -= 14) {
+        ctx.beginPath();
+        ctx.arc(128, 128, r, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(210, 218, 232, ${0.05 + (120 - r) * 0.001})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      const rg = ctx.createRadialGradient(104, 98, 6, 128, 128, 86);
+      rg.addColorStop(0, tintA);
+      rg.addColorStop(0.4, tintB);
+      rg.addColorStop(0.76, '#070a12');
+      rg.addColorStop(1, '#020305');
+      ctx.fillStyle = rg;
+      ctx.beginPath(); ctx.arc(128, 128, 84, 0, Math.PI * 2); ctx.fill();
+
+      ctx.fillStyle = '#02040a';
+      if (isPeriscope) {
+        roundRectPath(ctx, 98, 106, 60, 44, 10);
+        ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.arc(128, 128, 28, 0, Math.PI * 2); ctx.fill();
+      }
+
+      ctx.beginPath();
+      ctx.arc(104, 96, 22, Math.PI * 1.1, Math.PI * 1.85);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+      ctx.lineWidth = 4.5;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.encoding = THREE.sRGBEncoding;
+      return tex;
+    }
+
+    /* Soft tabletop contact shadow canvas texture */
+    function createSoftShadowTex() {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 256;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(128, 128, 22, 128, 128, 124);
+      g.addColorStop(0, 'rgba(32, 28, 22, 0.44)');
+      g.addColorStop(0.55, 'rgba(32, 28, 22, 0.18)');
+      g.addColorStop(1, 'rgba(32, 28, 22, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 256, 256);
+      return new THREE.CanvasTexture(c);
+    }
+
+    /* ==========================================================================
+       4. PROCEDURAL DESERT-DUNES & ONE UI CANVAS SCREEN RENDERERS
+       Echoes the warm mountain-dunes + "hello" aesthetic from the reference,
+       transitioning smoothly into live Samsung One UI (Home, Apps, Camera) on swipe!
+       ========================================================================== */
+    function drawAtmosphericWallpaper(ctx, W, H, wakeAlpha = 1) {
+      // Rich slate-blue sky fading to hazy warm stone horizon (calibrated for studio OLED contrast)
+      const sky = ctx.createLinearGradient(0, 0, 0, H);
+      sky.addColorStop(0.0, '#5a7ea0');
+      sky.addColorStop(0.28, '#8fa9c2');
+      sky.addColorStop(0.50, '#cfc6b8');
+      sky.addColorStop(0.74, '#cbbda8');
+      sky.addColorStop(1.0, '#9e9280');
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, W, H);
+
+      // Subtle golden-hour atmospheric horizon haze
+      const glow = ctx.createRadialGradient(W * 0.52, H * 0.48, 20, W * 0.52, H * 0.48, W * 0.62);
+      glow.addColorStop(0, 'rgba(255, 245, 228, 0.36)');
+      glow.addColorStop(1, 'rgba(255, 245, 228, 0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, W, H);
+
+      // Crisp sculpted charcoal-taupe mountain range silhouette (high contrast behind white "hello")
+      const baseH = H * 0.62;
+      ctx.beginPath();
+      ctx.moveTo(0, baseH);
+      const ridge = [
+        [0.00, 0.53], [0.08, 0.46], [0.16, 0.50], [0.25, 0.39],
+        [0.34, 0.44], [0.44, 0.32], [0.53, 0.38], [0.63, 0.33],
+        [0.73, 0.42], [0.83, 0.37], [0.92, 0.46], [1.00, 0.42]
+      ];
+      ridge.forEach(([rx, ry]) => ctx.lineTo(W * rx, H * ry));
+      ctx.lineTo(W, H * 0.72);
+      ctx.lineTo(0, H * 0.72);
+      ctx.closePath();
+      const mg = ctx.createLinearGradient(0, H * 0.30, 0, H * 0.66);
+      mg.addColorStop(0, '#46433e');
+      mg.addColorStop(0.52, '#645f57');
+      mg.addColorStop(1, '#928a7d');
+      ctx.fillStyle = mg;
+      ctx.fill();
+
+      // Deep shaded mountain facets for sculptural 3D depth
+      ctx.fillStyle = 'rgba(32, 29, 25, 0.36)';
+      ctx.beginPath();
+      ctx.moveTo(W * 0.25, H * 0.39);
+      ctx.lineTo(W * 0.31, H * 0.60);
+      ctx.lineTo(W * 0.44, H * 0.32);
+      ctx.lineTo(W * 0.50, H * 0.62);
+      ctx.lineTo(W * 0.63, H * 0.33);
+      ctx.lineTo(W * 0.71, H * 0.62);
+      ctx.lineTo(W * 0.83, H * 0.37);
+      ctx.lineTo(W * 0.90, H * 0.62);
+      ctx.lineTo(0, H * 0.66);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sweeping foreground sand dunes (warm stone & sunlit sand curves)
+      ctx.beginPath();
+      ctx.moveTo(0, H * 0.63);
+      ctx.bezierCurveTo(W * 0.28, H * 0.54, W * 0.62, H * 0.71, W, H * 0.59);
+      ctx.lineTo(W, H);
+      ctx.lineTo(0, H);
+      ctx.closePath();
+      const d1 = ctx.createLinearGradient(0, H * 0.55, 0, H);
+      d1.addColorStop(0, '#cfc2ad');
+      d1.addColorStop(0.5, '#b8a890');
+      d1.addColorStop(1, '#9a8c76');
+      ctx.fillStyle = d1;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(0, H * 0.76);
+      ctx.bezierCurveTo(W * 0.36, H * 0.67, W * 0.72, H * 0.84, W, H * 0.72);
+      ctx.lineTo(W, H);
+      ctx.lineTo(0, H);
+      ctx.closePath();
+      const d2 = ctx.createLinearGradient(0, H * 0.70, 0, H);
+      d2.addColorStop(0, '#ddd2be');
+      d2.addColorStop(1, '#b0a28b');
+      ctx.fillStyle = d2;
+      ctx.fill();
+
+      if (wakeAlpha < 0.999) {
+        ctx.fillStyle = `rgba(6, 7, 10, ${(1 - wakeAlpha).toFixed(3)})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    function drawCursiveHello(ctx, cx, cy, scale = 1) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(scale, scale);
+      ctx.shadowColor = 'rgba(35, 30, 24, 0.34)';
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'italic 300 108px "Brush Script MT", "Segoe Script", "Snell Roundhand", Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('hello', 0, 0);
+      ctx.restore();
+    }
+
+    /* 6.5-inch Cover Screen Canvas (540 x 1260) */
+    const CoverUI = (() => {
+      const W = 540, H = 1260;
+      const canvas = document.createElement('canvas');
+      canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext('2d');
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.encoding = THREE.sRGBEncoding;
+
+      let dirty = true;
+      function markDirty() { dirty = true; }
+
+      function render(wakeAlpha, unlocked) {
+        if (!dirty) return;
+        dirty = false;
+
+        if (wakeAlpha <= 0.01) {
+          ctx.fillStyle = '#060709';
+          ctx.fillRect(0, 0, W, H);
+          texture.needsUpdate = true;
+          return;
+        }
+
+        drawAtmosphericWallpaper(ctx, W, H, wakeAlpha);
+
+        // Top hole-punch selfie camera
+        ctx.fillStyle = '#08090c';
+        ctx.beginPath(); ctx.arc(W / 2, 44, 13, 0, Math.PI * 2); ctx.fill();
+
+        // Top subtle status bar
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.font = '600 20px -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${hh}:${mm}`, 34, 52);
+        ctx.textAlign = 'right';
+        ctx.fillText('5G · 96%', W - 34, 52);
+
+        if (!unlocked) {
+          // Reference-faithful welcome cover screen: cursive "hello" + "Galaxy Z TriFold" + "Swipe up to open"
+          drawCursiveHello(ctx, W / 2, H * 0.48, 0.92);
+          ctx.fillStyle = 'rgba(255,255,255,0.82)';
+          ctx.font = '400 20px -apple-system, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('Galaxy Z TriFold', W / 2, H * 0.56);
+
+          ctx.fillStyle = 'rgba(255,255,255,0.86)';
+          ctx.font = '500 18px -apple-system, sans-serif';
+          ctx.fillText('Swipe up or unfold to open', W / 2, H - 64);
+
+          // Tiny corner hairline icons matching reference
+          ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(W - 46, H - 46, 16, 0, Math.PI * 2); ctx.stroke();
+          ctx.fillStyle = 'rgba(255,255,255,0.88)';
+          ctx.font = '600 16px -apple-system, sans-serif';
+          ctx.fillText('i', W - 46, H - 40);
+        } else {
+          // Unlocked 6.5" One UI Cover Home Screen
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'center';
+          ctx.font = '200 110px -apple-system, sans-serif';
+          ctx.fillText(`${hh}:${mm}`, W / 2, 236);
+          ctx.font = '400 24px -apple-system, sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.86)';
+          ctx.fillText('22° Sunny · Galaxy Z TriFold', W / 2, 282);
+
+          // Glass quick-app grid on cover
+          const coverApps = [
+            { l: 'Phone', g: '☎', c: '#22c55e' },
+            { l: 'Messages', g: '◉', c: '#8b5cf6' },
+            { l: 'Camera', g: '◎', c: '#ef4444' },
+            { l: 'Gallery', g: '❖', c: '#ec4899' }
+          ];
+          roundRectPath(ctx, 36, H - 186, W - 72, 118, 34);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+          ctx.fill();
+          coverApps.forEach((a, i) => {
+            const ax = 68 + i * 108;
+            const ay = H - 160;
+            roundRectPath(ctx, ax, ay, 72, 72, 22);
+            ctx.fillStyle = a.c;
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.font = '700 32px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(a.g, ax + 36, ay + 47);
+          });
+        }
+
+        // Gesture pill
+        roundRectPath(ctx, W / 2 - 74, H - 26, 148, 6, 3);
+        ctx.fillStyle = 'rgba(255,255,255,0.78)';
+        ctx.fill();
+
+        texture.needsUpdate = true;
+      }
+
+      return { texture, render, markDirty };
+    })();
+
+    /* 10.0-inch Main Inner Display Canvas (1536 x 1126, proportional to 2160 x 1584) */
+    const MainUI = (() => {
+      const W = 1536, H = 1126;
+      const canvas = document.createElement('canvas');
+      canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext('2d');
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.encoding = THREE.sRGBEncoding;
+
+      let dirty = true;
+      let hitRegions = [];
+
+      function markDirty() { dirty = true; }
+
+      function render(uiState, timeSec = 0) {
+        if (!dirty) return;
+        dirty = false;
+        hitRegions = [];
+
+        if (uiState.wakeAlpha <= 0.01) {
+          ctx.fillStyle = '#060709';
+          ctx.fillRect(0, 0, W, H);
+          texture.needsUpdate = true;
+          return;
+        }
+
+        // Camera Demo mode on 10-inch canvas
+        if (uiState.cameraActive) {
+          renderCameraView(uiState);
+          texture.needsUpdate = true;
+          return;
+        }
+
+        drawAtmosphericWallpaper(ctx, W, H, uiState.wakeAlpha);
+
+        // Top Status Bar
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
+        ctx.font = '600 20px -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${hh}:${mm}`, 34, 34);
+        ctx.textAlign = 'right';
+        ctx.fillText('5G · Wi-Fi 7 · 96%', W - 34, 34);
+
+        // Inner top-right hole-punch selfie camera
+        ctx.fillStyle = '#07080b';
+        ctx.beginPath(); ctx.arc(W * 0.84, 28, 10, 0, Math.PI * 2); ctx.fill();
+
+        if (!uiState.mainUnlocked) {
+          // Reference-inspired breathtaking unfolded welcome screen!
+          drawCursiveHello(ctx, W / 2, H * 0.45, 1.38);
+
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.90)';
+          ctx.font = '400 26px -apple-system, BlinkMacSystemFont, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('Samsung Galaxy Z TriFold · 10.0"', W / 2, H * 0.56);
+
+          // Crisp horizontal light sheen along lower fold accent (echoing reference!)
+          const sheen = ctx.createLinearGradient(W * 0.34, 0, W, 0);
+          sheen.addColorStop(0, 'rgba(255,255,255,0.0)');
+          sheen.addColorStop(0.35, 'rgba(255,255,255,0.52)');
+          sheen.addColorStop(1, 'rgba(255,255,255,0.12)');
+          ctx.fillStyle = sheen;
+          ctx.fillRect(W * 0.34, H * 0.62, W * 0.66, 2);
+
+          // "Swipe up to open" pill
+          roundRectPath(ctx, W / 2 - 150, H - 102, 300, 48, 24);
+          ctx.fillStyle = 'rgba(24, 22, 20, 0.24)';
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '500 20px -apple-system, sans-serif';
+          ctx.fillText('Tap or swipe up to open One UI', W / 2, H - 72);
+
+          // Subtle corner icons matching reference
+          ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(W - 44, H - 44, 16, 0, Math.PI * 2); ctx.stroke();
+          ctx.font = '600 16px -apple-system, sans-serif';
+          ctx.fillText('i', W - 44, H - 38);
+
+          hitRegions.push({
+            x: 0, y: 0, w: W, h: H,
+            onTap: () => unlockOneUI()
+          });
+
+          texture.needsUpdate = true;
+          return;
+        }
+
+        // UNLOCKED: Crisp 3-Panel Samsung One UI Home + Live Apps over the warm studio wallpaper!
+        const panels = [
+          { x: 18, y: 58, w: 484, h: H - 156 },
+          { x: 526, y: 58, w: 484, h: H - 156 },
+          { x: 1034, y: 58, w: 484, h: H - 156 }
+        ];
+
+        // Panel 1: Authentic Samsung One UI Mobile Home Screen (Clock, Weather, Search, 12 Colorful App Icons)
+        {
+          const p = panels[0];
+          roundRectPath(ctx, p.x, p.y, p.w, p.h, 30);
+          ctx.fillStyle = 'rgba(22, 24, 30, 0.42)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.26)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Weather & Clock Hero Widget
+          const cx = p.x + 24, cy = p.y + 24, cw = p.w - 48;
+          roundRectPath(ctx, cx, cy, cw, 164, 24);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.20)';
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'left';
+          ctx.font = '200 72px -apple-system, sans-serif';
+          ctx.fillText(`${hh}:${mm}`, cx + 22, cy + 88);
+          const dateStr = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+          ctx.font = '400 20px -apple-system, sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.86)';
+          ctx.fillText(dateStr, cx + 24, cy + 128);
+
+          // Sun + 22°
+          ctx.fillStyle = '#fde047';
+          ctx.beginPath(); ctx.arc(cx + cw - 52, cy + 56, 20, 0, Math.PI * 2); ctx.fill();
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '500 34px -apple-system, sans-serif';
+          ctx.fillText('22°', cx + cw - 24, cy + 112);
+          ctx.font = '400 16px -apple-system, sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.8)';
+          ctx.fillText('Clear · Seoul', cx + cw - 24, cy + 138);
+
+          // Search Bar Pill
+          const srY = cy + 184;
+          roundRectPath(ctx, cx, srY, cw, 54, 27);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.86)';
+          ctx.fill();
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#2563eb';
+          ctx.font = '700 22px sans-serif';
+          ctx.fillText('G', cx + 24, srY + 35);
+          ctx.fillStyle = '#4b5563';
+          ctx.font = '400 18px -apple-system, sans-serif';
+          ctx.fillText('Search Galaxy & web...', cx + 56, srY + 34);
+
+          // 12 Vibrant Samsung One UI App Icons (3x4 grid)
+          const apps = [
+            { l: 'Phone', g: '☎', c1: '#22c55e', c2: '#15803d', app: 'notes' },
+            { l: 'Messages', g: '◉', c1: '#8b5cf6', c2: '#6d28d9', app: 'chat' },
+            { l: 'Camera', g: '◎', c1: '#ef4444', c2: '#b91c1c', camera: true },
+            { l: 'Gallery', g: '❖', c1: '#ec4899', c2: '#be185d', app: 'gallery' },
+            { l: 'Notes', g: '✎', c1: '#f59e0b', c2: '#d97706', app: 'notes' },
+            { l: 'Maps', g: '⌖', c1: '#10b981', c2: '#047857', app: 'map' },
+            { l: 'Video', g: '▶', c1: '#f43f5e', c2: '#be123c', app: 'video' },
+            { l: 'Calc', g: '±', c1: '#3b82f6', c2: '#1d4ed8', app: 'calc' },
+            { l: 'Calendar', g: '24', c1: '#0ea5e9', c2: '#0369a1', app: 'notes' },
+            { l: 'Music', g: '♪', c1: '#a855f7', c2: '#7e22ce', app: 'video' },
+            { l: 'Files', g: '▤', c1: '#f97316', c2: '#c2410c', app: 'gallery' },
+            { l: 'Settings', g: '⚙', c1: '#64748b', c2: '#334155', info: true }
+          ];
+          const gTop = srY + 80;
+          const cellW = cw / 3, cellH = 148, sz = 78;
+          apps.forEach((a, i) => {
+            const col = i % 3, row = Math.floor(i / 3);
+            const ix = cx + col * cellW + (cellW - sz) / 2;
+            const iy = gTop + row * cellH;
+            const ig = ctx.createLinearGradient(ix, iy, ix + sz, iy + sz);
+            ig.addColorStop(0, a.c1); ig.addColorStop(1, a.c2);
+            roundRectPath(ctx, ix, iy, sz, sz, 24);
+            ctx.fillStyle = ig; ctx.fill();
+            ctx.fillStyle = 'rgba(255,255,255,0.18)';
+            roundRectPath(ctx, ix + 5, iy + 5, sz - 10, sz * 0.42, 16);
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.font = '700 34px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(a.g, ix + sz / 2, iy + 51);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '500 16px -apple-system, sans-serif';
+            ctx.fillText(a.l, ix + sz / 2, iy + sz + 24);
+
+            hitRegions.push({
+              x: ix - 10, y: iy - 6, w: sz + 20, h: sz + 34,
+              onTap: () => {
+                Sound.playUiGlass(980);
+                if (a.camera) {
+                  setCameraDemo(true);
+                } else if (a.info) {
+                  toggleInfoPopover(true);
+                } else {
+                  uiState.rightApp = a.app;
+                  MainUI.markDirty();
+                }
+              }
+            });
+          });
+        }
+
+        // Panel 2 (Center): Live Vector Maps & Navigation
+        drawMapsWindow(panels[1], timeSec);
+
+        // Panel 3 (Right): Dynamic Live App (Gallery / Notes / Video / Calc / Chat)
+        drawRightPanelApp(panels[2], uiState);
+
+        // Floating One UI Taskbar Dock centered at bottom
+        const dockW = 700, dockH = 66, dockX = (W - dockW) / 2, dockY = H - 80;
+        roundRectPath(ctx, dockX, dockY, dockW, dockH, 26);
+        ctx.fillStyle = 'rgba(20, 22, 28, 0.64)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.24)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        const dockItems = [
+          { g: '❖', c: '#ec4899', tap: () => { uiState.rightApp = 'gallery'; MainUI.markDirty(); } },
+          { g: '✎', c: '#f59e0b', tap: () => { uiState.rightApp = 'notes'; MainUI.markDirty(); } },
+          { g: '▶', c: '#ef4444', tap: () => { uiState.rightApp = 'video'; MainUI.markDirty(); } },
+          { g: '±', c: '#3b82f6', tap: () => { uiState.rightApp = 'calc'; MainUI.markDirty(); } },
+          { g: '◉', c: '#8b5cf6', tap: () => { uiState.rightApp = 'chat'; MainUI.markDirty(); } },
+          { g: '◎', c: '#111827', tap: () => setCameraDemo(true) }
+        ];
+        dockItems.forEach((d, i) => {
+          const dx = dockX + 54 + i * 104, dy = dockY + 10;
+          roundRectPath(ctx, dx, dy, 46, 46, 15);
+          ctx.fillStyle = d.c; ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.font = '700 22px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(d.g, dx + 23, dy + 31);
+          hitRegions.push({
+            x: dx - 8, y: dockY, w: 62, h: dockH,
+            onTap: () => { Sound.playUiGlass(920 + i * 40); d.tap(); }
+          });
+        });
+
+        texture.needsUpdate = true;
+      }
+
+      function drawMapsWindow(p, timeSec) {
+        roundRectPath(ctx, p.x, p.y, p.w, p.h, 30);
+        ctx.fillStyle = 'rgba(18, 23, 34, 0.88)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.24)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        const cx = p.x + 20, cy = p.y + 62, cw = p.w - 40, ch = p.h - 82;
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'left';
+        ctx.font = '600 22px -apple-system, sans-serif';
+        ctx.fillText('Maps · Navigation', p.x + 24, p.y + 40);
+
+        ctx.save();
+        roundRectPath(ctx, cx, cy, cw, ch, 20);
+        ctx.clip();
+        ctx.fillStyle = '#11192a';
+        ctx.fillRect(cx, cy, cw, ch);
+
+        // River & Parks
+        ctx.strokeStyle = '#1e3f6e';
+        ctx.lineWidth = 48;
+        ctx.beginPath();
+        ctx.moveTo(cx - 20, cy + ch * 0.66);
+        ctx.bezierCurveTo(cx + cw * 0.35, cy + ch * 0.54, cx + cw * 0.65, cy + ch * 0.76, cx + cw + 20, cy + ch * 0.58);
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+        roundRectPath(ctx, cx + 32, cy + 120, 128, 170, 18); ctx.fill();
+        roundRectPath(ctx, cx + 270, cy + 560, 130, 150, 18); ctx.fill();
+
+        // City Grid
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.16)';
+        ctx.lineWidth = 3;
+        for (let gx = cx + 36; gx < cx + cw; gx += 68) { ctx.beginPath(); ctx.moveTo(gx, cy); ctx.lineTo(gx, cy + ch); ctx.stroke(); }
+        for (let gy = cy + 36; gy < cy + ch; gy += 68) { ctx.beginPath(); ctx.moveTo(cx, gy); ctx.lineTo(cx + cw, gy); ctx.stroke(); }
+
+        // Route
+        ctx.strokeStyle = '#60a5fa';
+        ctx.lineWidth = 8;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(cx + cw * 0.24, cy + ch * 0.78);
+        ctx.lineTo(cx + cw * 0.24, cy + ch * 0.44);
+        ctx.lineTo(cx + cw * 0.72, cy + ch * 0.44);
+        ctx.lineTo(cx + cw * 0.72, cy + ch * 0.24);
+        ctx.stroke();
+
+        ctx.fillStyle = '#60a5fa';
+        ctx.beginPath(); ctx.arc(cx + cw * 0.24, cy + ch * 0.78, 11, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
+
+        ctx.fillStyle = '#f87171';
+        ctx.beginPath(); ctx.arc(cx + cw * 0.72, cy + ch * 0.24, 11, 0, Math.PI * 2); ctx.fill();
+
+        // ETA Card
+        roundRectPath(ctx, cx + 18, cy + 18, cw - 36, 78, 18);
+        ctx.fillStyle = 'rgba(12, 16, 26, 0.86)';
+        ctx.fill();
+        ctx.fillStyle = '#34d399';
+        ctx.font = '700 22px -apple-system, sans-serif';
+        ctx.fillText('12 min · 4.2 km', cx + 36, cy + 50);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '400 16px -apple-system, sans-serif';
+        ctx.fillText('Samsung Digital City · Fastest', cx + 36, cy + 78);
+        ctx.restore();
+      }
+
+      function drawRightPanelApp(p, uiState) {
+        roundRectPath(ctx, p.x, p.y, p.w, p.h, 30);
+        ctx.fillStyle = 'rgba(20, 22, 30, 0.88)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.24)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        const cx = p.x + 22, cy = p.y + 64, cw = p.w - 44, ch = p.h - 86;
+        const app = uiState.rightApp;
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'left';
+        ctx.font = '600 22px -apple-system, sans-serif';
+        const titles = { gallery: 'Gallery · 200MP', notes: 'Samsung Notes', video: '4K HDR10+ Video', calc: 'Calculator', chat: 'Messages' };
+        ctx.fillText(titles[app] || 'Gallery', p.x + 24, p.y + 40);
+
+        if (app === 'gallery') {
+          const cards = [
+            ['Golden Dunes', '#d97706', '#27272a'],
+            ['Alpine Ridge', '#38bdf8', '#0f172a'],
+            ['Seoul Dusk', '#ec4899', '#1e1b4b'],
+            ['Titanium Craft', '#94a3b8', '#18181b'],
+            ['Aurora Sky', '#34d399', '#064e3b'],
+            ['Studio Light', '#a78bfa', '#1e293b']
+          ];
+          const tw = (cw - 14) / 2, th = 228;
+          cards.forEach(([t, c1, c2], i) => {
+            const tx = cx + (i % 2) * (tw + 14);
+            const ty = cy + Math.floor(i / 2) * (th + 14);
+            const g = ctx.createLinearGradient(tx, ty, tx + tw, ty + th);
+            g.addColorStop(0, c1); g.addColorStop(1, c2);
+            roundRectPath(ctx, tx, ty, tw, th, 18);
+            ctx.fillStyle = g; ctx.fill();
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.beginPath();
+            ctx.moveTo(tx, ty + th); ctx.lineTo(tx + tw * 0.45, ty + th * 0.56);
+            ctx.lineTo(tx + tw, ty + th * 0.72); ctx.lineTo(tx + tw, ty + th);
+            ctx.closePath(); ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.font = '600 16px -apple-system, sans-serif';
+            ctx.fillText(t, tx + 14, ty + th - 16);
+          });
+        } else if (app === 'video') {
+          const vh = 460;
+          roundRectPath(ctx, cx, cy, cw, vh, 20);
+          const vg = ctx.createLinearGradient(cx, cy, cx + cw, cy + vh);
+          vg.addColorStop(0, '#0f172a'); vg.addColorStop(0.5, '#1e3a8a'); vg.addColorStop(1, '#090d16');
+          ctx.fillStyle = vg; ctx.fill();
+          for (let k = 0; k < 3; k++) {
+            ctx.strokeStyle = k === 1 ? 'rgba(251, 191, 36, 0.55)' : 'rgba(96, 165, 250, 0.55)';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            for (let s = 0; s <= 24; s++) {
+              const t = s / 24;
+              const px = cx + t * cw;
+              const py = cy + vh * 0.5 + Math.sin(t * 5.2 + uiState.videoProg * 20 + k * 1.4) * 86;
+              if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+          }
+          ctx.fillStyle = '#fff';
+          ctx.font = '600 22px -apple-system, sans-serif';
+          ctx.fillText('Crafted Titanium Dual Hinge', cx, cy + vh + 56);
+          roundRectPath(ctx, cx, cy + vh + 82, cw, 10, 5);
+          ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.fill();
+          roundRectPath(ctx, cx, cy + vh + 82, cw * uiState.videoProg, 10, 5);
+          ctx.fillStyle = '#ef4444'; ctx.fill();
+        } else if (app === 'notes') {
+          const items = [
+            ['TriFold Industrial Review', '3.9 mm open · 12.9 mm closed'],
+            ['Dual Titanium Hinge Spec', 'Right panel tucks inside left wrap'],
+            ['200 MP Camera Shoot', '0.6× UW · 1× 200MP · 3× Telephoto'],
+            ['10.0" AMOLED 2X', '1,600 nits peak · 1–120 Hz LTPO']
+          ];
+          items.forEach(([h, b], i) => {
+            const ny = cy + i * 126;
+            roundRectPath(ctx, cx, ny, cw, 110, 18);
+            ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fill();
+            ctx.fillStyle = '#f59e0b'; ctx.fillRect(cx + 16, ny + 22, 4, 66);
+            ctx.fillStyle = '#fff'; ctx.font = '600 20px -apple-system, sans-serif';
+            ctx.fillText(h, cx + 34, ny + 48);
+            ctx.fillStyle = '#94a3b8'; ctx.font = '400 17px -apple-system, sans-serif';
+            ctx.fillText(b, cx + 34, ny + 82);
+          });
+        } else if (app === 'calc') {
+          roundRectPath(ctx, cx, cy, cw, 150, 20);
+          ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fill();
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#94a3b8'; ctx.font = '400 22px ui-monospace, monospace';
+          ctx.fillText('214.1 × 159.2', cx + cw - 20, cy + 54);
+          ctx.fillStyle = '#fff'; ctx.font = '300 54px -apple-system, sans-serif';
+          ctx.fillText(uiState.calcVal, cx + cw - 20, cy + 122);
+          const keys = [['C','⌫','%','÷'],['7','8','9','×'],['4','5','6','−'],['1','2','3','+'],['0','.','±','=']];
+          const kw = (cw - 30) / 4, kh = 104;
+          keys.forEach((row, r) => row.forEach((k, c) => {
+            const kx = cx + c * (kw + 10), ky = cy + 174 + r * (kh + 10);
+            const isOp = '÷×−+='.includes(k);
+            roundRectPath(ctx, kx, ky, kw, kh, 16);
+            ctx.fillStyle = k === '=' ? '#3b82f6' : isOp ? 'rgba(59,130,246,0.24)' : 'rgba(255,255,255,0.08)';
+            ctx.fill();
+            ctx.fillStyle = '#fff'; ctx.font = '600 26px -apple-system, sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText(k, kx + kw / 2, ky + 62);
+            hitRegions.push({
+              x: kx, y: ky, w: kw, h: kh,
+              onTap: () => {
+                Sound.playUiGlass(860);
+                if (k === 'C') uiState.calcVal = '0';
+                else if ('0123456789.'.includes(k)) uiState.calcVal = uiState.calcVal === '0' ? k : (uiState.calcVal + k).slice(0, 10);
+                MainUI.markDirty();
+              }
+            });
+          }));
+        } else {
+          const msgs = [
+            ['Maya', 'Just unboxed Galaxy Z TriFold!'],
+            ['You', 'The dual titanium hinge feels incredible.'],
+            ['Maya', 'Try the 200MP 3× optical camera demo.']
+          ];
+          msgs.forEach(([who, txt], i) => {
+            const me = who === 'You';
+            const bw = cw * 0.84, bx = me ? cx + cw - bw : cx, by = cy + i * 116;
+            roundRectPath(ctx, bx, by, bw, 94, 20);
+            ctx.fillStyle = me ? '#4f8cff' : 'rgba(255,255,255,0.10)'; ctx.fill();
+            ctx.textAlign = 'left';
+            ctx.fillStyle = me ? 'rgba(255,255,255,0.82)' : '#a78bfa';
+            ctx.font = '600 15px -apple-system, sans-serif';
+            ctx.fillText(who, bx + 18, by + 30);
+            ctx.fillStyle = '#fff'; ctx.font = '400 18px -apple-system, sans-serif';
+            ctx.fillText(txt, bx + 18, by + 64);
+          });
+        }
+      }
+
+      function renderCameraView(uiState) {
+        ctx.fillStyle = '#07080b';
+        ctx.fillRect(0, 0, W, H);
+        const vx = 96, vy = 76, vw = W - 192, vh = H - 236;
+        ctx.save();
+        roundRectPath(ctx, vx, vy, vw, vh, 26);
+        ctx.clip();
+        const cx = vx + vw / 2, cy = vy + vh / 2;
+        ctx.translate(cx, cy);
+        ctx.scale(uiState.camZoom, uiState.camZoom);
+        ctx.translate(-cx, -cy);
+        drawAtmosphericWallpaper(ctx, W, H, 1);
+        ctx.restore();
+
+        // Focus reticle & Pro HUD
+        ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 2.5;
+        ctx.strokeRect(W / 2 - 34, vy + vh / 2 - 34, 68, 68);
+        ctx.fillStyle = '#fff'; ctx.font = '600 22px -apple-system, sans-serif'; ctx.textAlign = 'left';
+        const lbl = uiState.camLens === 'uw' ? '12 MP ULTRA-WIDE · 0.6×' : uiState.camLens === '3x' ? '10 MP TELEPHOTO · 3×' : '200 MP WIDE · f/1.7 · OIS';
+        ctx.fillText(lbl, vx + 14, vy - 24);
+
+        // Lens pills
+        [['uw', '0.6×'], ['200mp', '200MP'], ['3x', '3×']].forEach(([id, txt], i) => {
+          const px = W / 2 - 156 + i * 108, py = vy + vh - 76;
+          roundRectPath(ctx, px, py, 96, 46, 23);
+          ctx.fillStyle = uiState.camLens === id ? '#ffffff' : 'rgba(10,12,16,0.68)'; ctx.fill();
+          ctx.fillStyle = uiState.camLens === id ? '#111' : '#fff';
+          ctx.font = '700 19px -apple-system, sans-serif'; ctx.textAlign = 'center';
+          ctx.fillText(txt, px + 48, py + 29);
+          hitRegions.push({
+            x: px, y: py, w: 96, h: 46,
+            onTap: () => {
+              Sound.playUiGlass(980 + i * 70);
+              uiState.camLens = id;
+              uiState.camTargetZoom = id === 'uw' ? 0.72 : id === '3x' ? 2.4 : 1.0;
+              MainUI.markDirty();
+            }
+          });
+        });
+
+        // Shutter button
+        const sy = vy + vh + 82;
+        ctx.beginPath(); ctx.arc(W / 2, sy, 46, 0, Math.PI * 2); ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.stroke();
+        ctx.beginPath(); ctx.arc(W / 2, sy, 36 - uiState.shutterFlash * 8, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+        hitRegions.push({
+          x: W / 2 - 54, y: sy - 54, w: 108, h: 108,
+          onTap: () => {
+            Sound.playShutter();
+            uiState.shutterFlash = 1.0;
+            MainUI.markDirty();
+          }
+        });
+
+        // Close button
+        roundRectPath(ctx, vx + vw - 110, vy - 54, 110, 40, 20);
+        ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.font = '600 18px -apple-system, sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('Done', vx + vw - 55, vy - 28);
+        hitRegions.push({ x: vx + vw - 110, y: vy - 54, w: 110, h: 40, onTap: () => setCameraDemo(false) });
+
+        if (uiState.shutterFlash > 0.01) {
+          ctx.fillStyle = `rgba(255,255,255,${uiState.shutterFlash * 0.88})`;
+          ctx.fillRect(vx, vy, vw, vh);
+        }
+      }
+
+      function handleTap(u, v) {
+        const px = u * W, py = (1 - v) * H;
+        for (let i = hitRegions.length - 1; i >= 0; i--) {
+          const r = hitRegions[i];
+          if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) {
+            r.onTap(px, py);
+            return true;
+          }
+        }
+        return false;
+      }
+
+      return { texture, render, markDirty, handleTap };
+    })();
+
+    /* ==========================================================================
+       5. THREE.JS STUDIO SCENE, RETAIL PACKAGING & GALAXY Z TRIFOLD RIG
+       ========================================================================== */
+    const stageEl = document.getElementById('stage');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    stageEl.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.environment = createStudioEnvMap(renderer);
+
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.2, 220);
+
+    // Warm overhead-left museum studio softbox lighting + soft floor shadows
+    const keyLight = new THREE.DirectionalLight(0xfffcf6, 1.45);
+    keyLight.position.set(-14, 34, 18);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.camera.near = 6;
+    keyLight.shadow.camera.far = 80;
+    keyLight.shadow.camera.left = -26;
+    keyLight.shadow.camera.right = 26;
+    keyLight.shadow.camera.top = 26;
+    keyLight.shadow.camera.bottom = -26;
+    keyLight.shadow.bias = -0.0005;
+    keyLight.shadow.radius = 4;
+    scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0xdce6f7, 0.55);
+    fillLight.position.set(24, 18, 12);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.72);
+    rimLight.position.set(4, 20, -24);
+    scene.add(rimLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xf6f3ec, 0x8b857a, 0.58);
+    scene.add(hemiLight);
+
+    // Shadow-receiving studio tabletop plane at y = 0
+    const floorMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(140, 140),
+      new THREE.ShadowMaterial({ opacity: 0.26 })
+    );
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.receiveShadow = true;
+    scene.add(floorMesh);
+
+    const softShadowTex = createSoftShadowTex();
+
+    /* --- A. SAMSUNG GALAXY Z TRIFOLD RETAIL BOX (BASE TRAY + TELESCOPING LID) --- */
+    const boxWorldGroup = new THREE.Group();
+    boxWorldGroup.position.set(0, 0, -1.6);
+    boxWorldGroup.rotation.y = -0.16;
+    scene.add(boxWorldGroup);
+
+    const boxBaseGroup = new THREE.Group();
+    boxWorldGroup.add(boxBaseGroup);
+
+    const boxMatDark = new THREE.MeshStandardMaterial({ color: 0x1a1c22, roughness: 0.78, metalness: 0.06 });
+    const boxSideMat = new THREE.MeshStandardMaterial({ map: createBoxSideTexture(), roughness: 0.76, metalness: 0.08 });
+    const boxLidTopMat = new THREE.MeshStandardMaterial({ map: createBoxLidTopTexture(), roughness: 0.68, metalness: 0.14 });
+    const trayMat = new THREE.MeshStandardMaterial({ map: createInnerTrayTexture(), roughness: 0.84, metalness: 0.04 });
+
+    // Base Box dimensions (W=9.4, H=3.15, D=18.0) resting flush on y=0 — tall enough to cradle the 12.9mm folded stack cleanly inside!
+    const BW = 9.4, BH = 3.15, BD = 18.0, WALL = 0.34;
+    const baseFloor = new THREE.Mesh(new THREE.BoxGeometry(BW, 1.35, BD), boxMatDark);
+    baseFloor.position.y = 0.675;
+    baseFloor.castShadow = true;
+    baseFloor.receiveShadow = true;
+    boxBaseGroup.add(baseFloor);
+
+    // Four raised perimeter walls of the open base box
+    const addBaseWall = (w, h, d, x, y, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), boxMatDark);
+      m.position.set(x, y, z);
+      m.castShadow = true; m.receiveShadow = true;
+      boxBaseGroup.add(m);
+    };
+    addBaseWall(BW, BH - 1.35, WALL, 0, 1.35 + (BH - 1.35) / 2, BD / 2 - WALL / 2);
+    addBaseWall(BW, BH - 1.35, WALL, 0, 1.35 + (BH - 1.35) / 2, -BD / 2 + WALL / 2);
+    addBaseWall(WALL, BH - 1.35, BD - WALL * 2, -BW / 2 + WALL / 2, 1.35 + (BH - 1.35) / 2, 0);
+    addBaseWall(WALL, BH - 1.35, BD - WALL * 2, BW / 2 - WALL / 2, 1.35 + (BH - 1.35) / 2, 0);
+
+    // Recessed molded inner tray surface (with circular USB-C cable recess)
+    const innerTrayPlane = new THREE.Mesh(new THREE.PlaneGeometry(BW - WALL * 2, BD - WALL * 2), trayMat);
+    innerTrayPlane.rotation.x = -Math.PI / 2;
+    innerTrayPlane.position.y = 1.36;
+    innerTrayPlane.receiveShadow = true;
+    boxBaseGroup.add(innerTrayPlane);
+
+    // Subtle grounded AO shadow under base box
+    const baseShadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(BW + 4.4, BD + 4.4),
+      new THREE.MeshBasicMaterial({ map: softShadowTex, transparent: true, opacity: 0.72, depthWrite: false })
+    );
+    baseShadow.rotation.x = -Math.PI / 2;
+    baseShadow.position.y = 0.015;
+    boxBaseGroup.add(baseShadow);
+
+    // Telescoping Lid (5-sided hollow cover that slides vertically off base!)
+    const lidGroup = new THREE.Group();
+    const LW = BW + 0.36, LH = BH + 0.28, LD = BD + 0.36, LT = 0.22;
+    const lidTop = new THREE.Mesh(new THREE.BoxGeometry(LW, LT, LD), [
+      boxMatDark, boxMatDark, boxLidTopMat, boxMatDark, boxMatDark, boxMatDark
+    ]);
+    lidTop.position.y = LH - LT / 2;
+    lidTop.castShadow = true; lidTop.receiveShadow = true;
+    lidGroup.add(lidTop);
+
+    const addLidWall = (w, h, d, x, y, z, mat = boxMatDark) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true; m.receiveShadow = true;
+      lidGroup.add(m);
+    };
+    addLidWall(LW, LH - LT, LT, 0, (LH - LT) / 2, LD / 2 - LT / 2, [boxMatDark, boxMatDark, boxMatDark, boxMatDark, boxSideMat, boxMatDark]);
+    addLidWall(LW, LH - LT, LT, 0, (LH - LT) / 2, -LD / 2 + LT / 2);
+    addLidWall(LT, LH - LT, LD - LT * 2, -LW / 2 + LT / 2, (LH - LT) / 2, 0);
+    addLidWall(LT, LH - LT, LD - LT * 2, LW / 2 - LT / 2, (LH - LT) / 2, 0);
+
+    // Lid clickable hitbox
+    const lidHitMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(LW + 0.6, LH + 0.8, LD + 0.6),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    lidHitMesh.position.y = LH / 2;
+    lidHitMesh.userData.role = 'lid';
+    lidGroup.add(lidHitMesh);
+
+    boxWorldGroup.add(lidGroup);
+
+    /* --- B. PROCEDURAL SAMSUNG GALAXY Z TRIFOLD 3D HIERARCHY --- */
+    const deviceAnchor = new THREE.Group();
+    deviceAnchor.rotation.order = 'YXZ';
+    scene.add(deviceAnchor);
+
+    const centerGroup = new THREE.Group();
+    deviceAnchor.add(centerGroup);
+
+    const rightHingePivot = new THREE.Group();
+    rightHingePivot.position.set(DIM.PIVOT_RX, 0, DIM.PIVOT_RZ);
+    centerGroup.add(rightHingePivot);
+
+    const rightPanelGroup = new THREE.Group();
+    rightPanelGroup.position.set(DIM.GAP_R / 2 + DIM.W_R / 2, 0, -DIM.PIVOT_RZ);
+    rightHingePivot.add(rightPanelGroup);
+
+    const leftHingePivot = new THREE.Group();
+    leftHingePivot.position.set(DIM.PIVOT_LX, 0, DIM.PIVOT_LZ);
+    centerGroup.add(leftHingePivot);
+
+    const leftPanelGroup = new THREE.Group();
+    leftPanelGroup.position.set(-DIM.GAP_L / 2 - DIM.W_L / 2, 0, -DIM.PIVOT_LZ);
+    leftHingePivot.add(leftPanelGroup);
+
+    const rightSpinePivot = new THREE.Group();
+    rightSpinePivot.position.set(DIM.PIVOT_RX, 0, -0.02);
+    centerGroup.add(rightSpinePivot);
+
+    const leftSpinePivot = new THREE.Group();
+    leftSpinePivot.position.set(DIM.PIVOT_LX, 0, 0.05);
+    centerGroup.add(leftSpinePivot);
+
+    // Studio-calibrated materials: bright silver-titanium edges & hinges + Crafted Black body
+    const armorMaps = createBrushedMetalMaps('#22252d', 0.16);
+    const titaniumMaps = createBrushedMetalMaps('#b8bec9', 0.24);
+
+    const armorMat = new THREE.MeshPhysicalMaterial({
+      color: 0x2a2e38,
+      map: armorMaps.map,
+      roughnessMap: armorMaps.roughnessMap,
+      metalness: 0.90,
+      roughness: 0.28,
+      clearcoat: 0.22,
+      clearcoatRoughness: 0.25,
+      envMapIntensity: 1.45
+    });
+
+    const titaniumMat = new THREE.MeshPhysicalMaterial({
+      color: 0xc8ced8,
+      map: titaniumMaps.map,
+      roughnessMap: titaniumMaps.roughnessMap,
+      metalness: 0.95,
+      roughness: 0.22,
+      clearcoat: 0.30,
+      clearcoatRoughness: 0.20,
+      envMapIntensity: 1.65
+    });
+
+    const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x16181f, metalness: 0.9, roughness: 0.34 });
+    const bezelMat = new THREE.MeshStandardMaterial({ color: 0x0a0b0e, roughness: 0.7, metalness: 0.08 });
+    const rearPlainMat = new THREE.MeshPhysicalMaterial({ map: createRearBackTexture(false), roughness: 0.38, metalness: 0.14, clearcoat: 0.28 });
+    const rearLogoMat = new THREE.MeshPhysicalMaterial({ map: createRearBackTexture(true), roughness: 0.36, metalness: 0.14, clearcoat: 0.32 });
+
+    const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    MainUI.texture.anisotropy = maxAniso;
+    CoverUI.texture.anisotropy = maxAniso;
+
+    const mainScreenMat = new THREE.MeshPhysicalMaterial({
+      color: 0x090a0d,
+      map: MainUI.texture,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: MainUI.texture,
+      emissiveIntensity: 0.94,
+      roughness: 0.08,
+      metalness: 0.02,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
+      envMapIntensity: 0.55
+    });
+
+    const coverScreenMat = new THREE.MeshPhysicalMaterial({
+      color: 0x090a0d,
+      map: CoverUI.texture,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: CoverUI.texture,
+      emissiveIntensity: 0.94,
+      roughness: 0.06,
+      metalness: 0.02,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.04,
+      envMapIntensity: 0.62
+    });
+
+    // Three Aluminum Panels
+    const centerFrame = new THREE.Mesh(createRoundedPanelGeo(DIM.W_C, DIM.H, DIM.T, 0.14, 0.14), armorMat);
+    centerFrame.castShadow = true;
+    centerGroup.add(centerFrame);
+
+    const rightFrame = new THREE.Mesh(createRoundedPanelGeo(DIM.W_R, DIM.H, DIM.T, 0.14, 0.68), armorMat);
+    rightFrame.castShadow = true;
+    rightPanelGroup.add(rightFrame);
+
+    const leftFrame = new THREE.Mesh(createRoundedPanelGeo(DIM.W_L, DIM.H, DIM.T, 0.68, 0.14), armorMat);
+    leftFrame.castShadow = true;
+    leftPanelGroup.add(leftFrame);
+
+    // Side buttons (volume + power) on right outer rail
+    const volKey = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.0, 0.15), titaniumMat);
+    volKey.position.set(DIM.W_R / 2 + 0.03, 3.2, 0);
+    rightPanelGroup.add(volKey);
+    const pwrKey = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.1, 0.15), titaniumMat);
+    pwrKey.position.set(DIM.W_R / 2 + 0.03, 1.05, 0);
+    rightPanelGroup.add(pwrKey);
+
+    // Slim dark rubber inner bezels strictly behind display Z
+    const addBezel = (p, w, h) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.14, h - 0.14), bezelMat);
+      m.position.z = DIM.HALF_T + 0.008;
+      p.add(m);
+    };
+    addBezel(centerGroup, DIM.W_C, DIM.H);
+    addBezel(rightPanelGroup, DIM.W_R, DIM.H);
+    addBezel(leftPanelGroup, DIM.W_L, DIM.H);
+
+    // Titanium Hinge Spines with visible barrels & micro-screws
+    function buildHingeSpine(sw, sd) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(createRoundedPanelGeo(sw, DIM.H - 0.18, sd, sw * 0.42, sw * 0.42, 0.03), titaniumMat);
+      body.castShadow = true;
+      g.add(body);
+      const bGeo = new THREE.CylinderGeometry(sw * 0.35, sw * 0.35, 2.3, 16);
+      [-4.8, 0, 4.8].forEach((y) => {
+        const b = new THREE.Mesh(bGeo, titaniumMat);
+        b.position.set(0, y, -sd * 0.16);
+        g.add(b);
+      });
+      const scGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.04, 12);
+      [-DIM.H / 2 + 0.4, -DIM.H / 2 + 1.5, DIM.H / 2 - 1.5, DIM.H / 2 - 0.4].forEach((sy) => {
+        const sc = new THREE.Mesh(scGeo, darkMetalMat);
+        sc.rotation.x = Math.PI / 2;
+        sc.position.set(0, sy, -sd / 2 - 0.01);
+        g.add(sc);
+      });
+      return g;
+    }
+    rightSpinePivot.add(buildHingeSpine(0.30, 0.34));
+    leftSpinePivot.add(buildHingeSpine(0.50, 0.36));
+
+    // Inner 10.0-inch AMOLED Display (3 UV-sliced planes + 2 flexible curving hinge bridges)
+    const dispZ = DIM.HALF_T + 0.022;
+    const toU = (wx) => (wx - DIM.DISP_X_MIN) / DIM.DISP_W;
+    function makeSlicedPlane(w, h, u0, u1) {
+      const geo = new THREE.PlaneGeometry(w, h, 1, 1);
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setX(i, u0 + uv.getX(i) * (u1 - u0));
+      uv.needsUpdate = true;
+      return geo;
+    }
+
+    const mainScreenMeshes = [];
+    const leftInnerRightX = -(DIM.W_C / 2 + DIM.GAP_L);
+    const leftDispW = leftInnerRightX - DIM.DISP_X_MIN;
+    const leftDispX = ((DIM.DISP_X_MIN + leftInnerRightX) / 2) - (DIM.PIVOT_LX - DIM.GAP_L / 2 - DIM.W_L / 2);
+    const leftDispMesh = new THREE.Mesh(makeSlicedPlane(leftDispW, DIM.DISP_H, toU(DIM.DISP_X_MIN), toU(leftInnerRightX)), mainScreenMat);
+    leftDispMesh.position.set(leftDispX, 0, dispZ);
+    leftDispMesh.userData = { role: 'main-screen', side: 'left' };
+    leftPanelGroup.add(leftDispMesh);
+    mainScreenMeshes.push(leftDispMesh);
+
+    const centerDispMesh = new THREE.Mesh(makeSlicedPlane(DIM.W_C, DIM.DISP_H, toU(-DIM.W_C / 2), toU(DIM.W_C / 2)), mainScreenMat);
+    centerDispMesh.position.set(0, 0, dispZ);
+    centerDispMesh.userData = { role: 'main-screen', side: 'center' };
+    centerGroup.add(centerDispMesh);
+    mainScreenMeshes.push(centerDispMesh);
+
+    const rightInnerLeftX = DIM.W_C / 2 + DIM.GAP_R;
+    const rightDispW = DIM.DISP_X_MAX - rightInnerLeftX;
+    const rightDispX = ((rightInnerLeftX + DIM.DISP_X_MAX) / 2) - (DIM.PIVOT_RX + DIM.GAP_R / 2 + DIM.W_R / 2);
+    const rightDispMesh = new THREE.Mesh(makeSlicedPlane(rightDispW, DIM.DISP_H, toU(rightInnerLeftX), toU(DIM.DISP_X_MAX)), mainScreenMat);
+    rightDispMesh.position.set(rightDispX, 0, dispZ);
+    rightDispMesh.userData = { role: 'main-screen', side: 'right' };
+    rightPanelGroup.add(rightDispMesh);
+    mainScreenMeshes.push(rightDispMesh);
+
+    // Curving AMOLED bridge strips across both creases
+    function makeBridge(u0, u1) {
+      const segs = 5;
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array((segs + 1) * 2 * 3);
+      const uvs = new Float32Array((segs + 1) * 2 * 2);
+      const idx = [];
+      for (let i = 0; i <= segs; i++) {
+        const u = u0 + (i / segs) * (u1 - u0);
+        uvs[i * 4] = u; uvs[i * 4 + 1] = 1; uvs[i * 4 + 2] = u; uvs[i * 4 + 3] = 0;
+        if (i < segs) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setIndex(idx);
+      const m = new THREE.Mesh(geo, mainScreenMat);
+      m.userData = { segs, hh: DIM.DISP_H / 2 };
+      return m;
+    }
+    const leftBridge = makeBridge(toU(leftInnerRightX), toU(-DIM.W_C / 2));
+    const rightBridge = makeBridge(toU(DIM.W_C / 2), toU(rightInnerLeftX));
+    centerGroup.add(leftBridge, rightBridge);
+
+    function updateBridge(mesh, p0x, p0z, p1x, p1z, cx, cz) {
+      const pos = mesh.geometry.attributes.position;
+      const { segs, hh } = mesh.userData;
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs, omt = 1 - t;
+        const x = omt * omt * p0x + 2 * omt * t * cx + t * t * p1x;
+        const z = omt * omt * p0z + 2 * omt * t * cz + t * t * p1z;
+        pos.setXYZ(i * 2, x, hh, z);
+        pos.setXYZ(i * 2 + 1, x, -hh, z);
+      }
+      pos.needsUpdate = true;
+      mesh.geometry.computeVertexNormals();
+    }
+
+    // 6.5-inch Cover Display on Center Panel Back (-Z)
+    const coverBezel = new THREE.Mesh(new THREE.PlaneGeometry(DIM.W_C - 0.14, DIM.H - 0.14), bezelMat);
+    coverBezel.rotation.y = Math.PI;
+    coverBezel.position.z = -DIM.HALF_T - 0.008;
+    centerGroup.add(coverBezel);
+
+    const coverMesh = new THREE.Mesh(new THREE.PlaneGeometry(6.52, 15.18), coverScreenMat);
+    coverMesh.rotation.y = Math.PI;
+    coverMesh.position.z = -DIM.HALF_T - 0.022;
+    coverMesh.userData = { role: 'cover-screen' };
+    centerGroup.add(coverMesh);
+
+    // Rear Panels + 200 MP Triple Camera Island on Left Panel Back (-Z local -> +Z when closed!)
+    const rightBack = new THREE.Mesh(new THREE.PlaneGeometry(DIM.W_R - 0.22, DIM.H - 0.22), rearPlainMat);
+    rightBack.rotation.y = Math.PI;
+    rightBack.position.z = -DIM.HALF_T - 0.009;
+    rightPanelGroup.add(rightBack);
+
+    const leftBack = new THREE.Mesh(new THREE.PlaneGeometry(DIM.W_L - 0.22, DIM.H - 0.22), rearLogoMat);
+    leftBack.rotation.y = Math.PI;
+    leftBack.position.z = -DIM.HALF_T - 0.009;
+    leftPanelGroup.add(leftBack);
+
+    const camIsland = new THREE.Group();
+    camIsland.position.set(1.65, 3.65, -DIM.HALF_T - 0.01);
+    camIsland.rotation.y = Math.PI;
+    leftPanelGroup.add(camIsland);
+
+    const islandBody = new THREE.Mesh(createRoundedPanelGeo(2.38, 6.22, 0.24, 1.12, 1.12, 0.03), armorMat);
+    islandBody.position.z = 0.12;
+    camIsland.add(islandBody);
+    const islandTrim = new THREE.Mesh(createRoundedPanelGeo(2.44, 6.28, 0.12, 1.14, 1.14, 0.02), titaniumMat);
+    islandTrim.position.z = 0.06;
+    camIsland.add(islandTrim);
+
+    [
+      { y:  1.90, r: 0.72, c1: '#2a5a9e', c2: '#16284a', peri: false },
+      { y:  0.00, r: 0.86, c1: '#1d7a6e', c2: '#1a2048', peri: false },
+      { y: -1.90, r: 0.74, c1: '#64389e', c2: '#152240', peri: true }
+    ].forEach((ls) => {
+      const lg = new THREE.Group();
+      lg.position.set(0, ls.y, 0.24);
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(ls.r, ls.r * 1.04, 0.17, 36), titaniumMat);
+      ring.rotation.x = Math.PI / 2; ring.position.z = 0.085;
+      lg.add(ring);
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(ls.r * 0.84, ls.r * 0.84, 0.18, 32), darkMetalMat);
+      barrel.rotation.x = Math.PI / 2; barrel.position.z = 0.09;
+      lg.add(barrel);
+      const glass = new THREE.Mesh(
+        new THREE.CircleGeometry(ls.r * 0.78, 32),
+        new THREE.MeshPhysicalMaterial({
+          map: createLensTexture(ls.c1, ls.c2, ls.peri),
+          roughness: 0.04, metalness: 0.08, clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 1.9
+        })
+      );
+      glass.position.z = 0.185;
+      lg.add(glass);
+      camIsland.add(lg);
+    });
+
+    const flash = new THREE.Mesh(
+      new THREE.CircleGeometry(0.24, 24),
+      new THREE.MeshPhysicalMaterial({ color: 0xfff3d4, emissive: 0x554422, emissiveIntensity: 0.3, roughness: 0.16, clearcoat: 1 })
+    );
+    flash.position.set(1.72, 1.4, 0.02);
+    camIsland.add(flash);
+
+    /* --- C. CURLING 3D PROTECTIVE MATTE PAPER FILM WRAP (WITH PULL TAB ^) --- */
+    const filmRows = 28;
+    const filmW = 7.75, filmH = 17.5;
+    const filmGeo = new THREE.PlaneGeometry(filmW, filmH, 2, filmRows);
+    const filmBasePos = filmGeo.attributes.position.array.slice();
+    const filmMat = new THREE.MeshStandardMaterial({
+      map: createProtectiveFilmTexture(),
+      transparent: true,
+      opacity: 1.0,
+      roughness: 0.86,
+      metalness: 0.02,
+      side: THREE.DoubleSide
+    });
+    const filmMesh = new THREE.Mesh(filmGeo, filmMat);
+    filmMesh.position.set(0, -0.55, 1.24); // wraps neatly over the closed stack (+Z side)
+    filmMesh.userData.role = 'film';
+    deviceAnchor.add(filmMesh);
+
+    function updateFilmCurl(peel) {
+      if (peel >= 1.25) { filmMesh.visible = false; return; }
+      filmMesh.visible = true;
+      const pos = filmGeo.attributes.position;
+      const p = clamp(peel, 0, 1.15);
+      const yBottom = -filmH / 2;
+      const peelLineY = yBottom + p * (filmH + 2.2);
+      const curlR = 0.92;
+
+      for (let i = 0; i < pos.count; i++) {
+        const bx = filmBasePos[i * 3];
+        const by = filmBasePos[i * 3 + 1];
+        if (by >= peelLineY) {
+          pos.setXYZ(i, bx, by, 0);
+        } else {
+          const dist = peelLineY - by;
+          // Roll smoothly around a tight cylinder forward (+Z) and upward (+Y)
+          const arc = dist / curlR;
+          if (arc < Math.PI) {
+            const ny = peelLineY - Math.sin(arc) * curlR;
+            const nz = (1 - Math.cos(arc)) * curlR;
+            pos.setXYZ(i, bx, ny, nz);
+          } else {
+            const tail = dist - Math.PI * curlR;
+            const ny = peelLineY + tail * 0.95;
+            const nz = 2 * curlR + tail * 0.34;
+            pos.setXYZ(i, bx, ny, nz);
+          }
+        }
+      }
+      pos.needsUpdate = true;
+      filmGeo.computeVertexNormals();
+      filmMat.opacity = peel > 0.82 ? clamp(1 - (peel - 0.82) / 0.32, 0, 1) : 1.0;
+    }
+
+    // Invisible phone lift hitbox when resting in tray
+    const phoneHitBox = new THREE.Mesh(
+      new THREE.BoxGeometry(8.2, 16.6, 2.2),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    phoneHitBox.userData.role = 'phone';
+    deviceAnchor.add(phoneHitBox);
+
+    /* ==========================================================================
+       6. UNBOXING STAGE MACHINE & SPRING-DRIVEN CHOREOGRAPHY
+       Stages:
+         0: BOX_CLOSED   -> drag lid upward to open box
+         1: BOX_OPEN     -> drag wrapped phone upward out of tray
+         2: WRAPPED      -> pull bottom tab ^ upward to peel protective film
+         3: REAR_REVEAL  -> brief pristine rear 200MP reveal -> auto-turn to 6.5" Cover
+         4: COVER_READY  -> drag to unfold panels (or swipe up on cover)
+         5: UNFOLDED     -> 10.0" Galaxy Z TriFold wide display ("hello" -> swipe up to One UI!)
+       ========================================================================== */
+    const state = {
+      stage: 'BOX_CLOSED',
+      lidLift: 0,           // 0..1 vertical lift while dragging
+      lidPlaced: false,
+      phoneLift: 0,         // 0..1 lift out of tray
+      peel: 0,              // 0..1.3 film peel progress
+      wakeAlpha: 0,
+      coverUnlocked: false,
+      mainUnlocked: false,
+      cameraActive: false,
+      camLens: '200mp',
+      camZoom: 1.0,
+      camTargetZoom: 1.0,
+      shutterFlash: 0,
+      rightApp: 'gallery',
+      videoProg: 0.32,
+      calcVal: '34084.7',
+      targetR: 180,
+      targetL: 180,
+      targetYaw: 0,
+      activePosture: 'open',
+      stageTimer: 0
+    };
+
+    // Springs for buttery-smooth physical interpolation
+    const spLidX = new Spring(0, 8.5);
+    const spLidY = new Spring(0, 10.5);
+    const spLidZ = new Spring(0, 8.5);
+    const spLidRotY = new Spring(0, 8.5);
+
+    const spDevX = new Spring(0, 9);
+    const spDevY = new Spring(1.62, 9);
+    const spDevZ = new Spring(-1.6, 9);
+    const spDevRotX = new Spring(-Math.PI / 2, 9);
+    const spDevRotY = new Spring(-0.16, 8.5);
+
+    const spPeel = new Spring(0, 14);
+    const spR = new Spring(180, 11);
+    const spL = new Spring(180, 11);
+    const spWake = new Spring(0, 5.5);
+
+    // Camera orbit springs (starts at elevated 3/4 tabletop studio angle!)
+    const camOrbit = {
+      theta: 0.0,
+      phi: 1.10,
+      radius: 37.5,
+      targetY: 3.2,
+      spTheta: new Spring(0.0, 8),
+      spPhi: new Spring(1.10, 8),
+      spRadius: new Spring(37.5, 8),
+      spTargetY: new Spring(3.2, 8)
+    };
+
+    const promptEl = document.getElementById('stage-prompt');
+    const promptMainEl = document.getElementById('prompt-main');
+    const promptSubEl = document.getElementById('prompt-sub');
+    const foldBarEl = document.getElementById('mini-fold-bar');
+    let promptSwapTimer = null;
+
+    function setPrompt(main, sub) {
+      promptEl.classList.add('is-fading');
+      clearTimeout(promptSwapTimer);
+      promptSwapTimer = setTimeout(() => {
+        promptMainEl.textContent = main;
+        promptSubEl.textContent = sub;
+        promptEl.classList.remove('is-fading');
+      }, 170);
+    }
+
+    function enterStage(next) {
+      state.stage = next;
+      state.stageTimer = 0;
+
+      if (next === 'BOX_CLOSED') {
+        state.lidLift = 0; state.lidPlaced = false;
+        state.phoneLift = 0; state.peel = 0;
+        state.wakeAlpha = 0; state.coverUnlocked = false; state.mainUnlocked = false;
+        state.cameraActive = false;
+        state.targetR = 180; state.targetL = 180; state.targetYaw = -0.16;
+        camOrbit.theta = 0.0; camOrbit.phi = 1.06; camOrbit.radius = 36.5; camOrbit.targetY = 2.6;
+        foldBarEl.classList.remove('is-visible');
+        setPrompt('Lift the lid', 'drag it up to open the box');
+      } else if (next === 'BOX_OPEN') {
+        state.lidPlaced = true;
+        Sound.playLidPop();
+        setTimeout(() => Sound.playTableThump(), 420);
+        camOrbit.theta = 0.02; camOrbit.phi = 1.04; camOrbit.radius = 36.0; camOrbit.targetY = 3.2;
+        setPrompt('Lift Galaxy Z TriFold', 'drag the phone up out of the tray');
+      } else if (next === 'WRAPPED') {
+        state.phoneLift = 1;
+        Sound.playUiGlass(720);
+        camOrbit.theta = 0.0; camOrbit.phi = 1.38; camOrbit.radius = 40.5; camOrbit.targetY = 9.0;
+        setPrompt('Peel the protective film', 'pull the bottom tab upward');
+      } else if (next === 'REAR_REVEAL') {
+        state.peel = 1.32;
+        Sound.playPeelRelease();
+        camOrbit.theta = -0.24; camOrbit.phi = 1.38; camOrbit.radius = 39.0; camOrbit.targetY = 9.2;
+        setPrompt('Crafted Black · 200 MP', 'turning to the 6.5" cover display...');
+      } else if (next === 'COVER_READY') {
+        state.targetYaw = Math.PI;
+        state.wakeAlpha = 1;
+        Sound.playBootChime();
+        camOrbit.theta = 0.0; camOrbit.phi = 1.39; camOrbit.radius = 40.5; camOrbit.targetY = 9.2;
+        foldBarEl.classList.add('is-visible');
+        updateFoldBarActive('cover');
+        setPrompt('Unfold Galaxy Z TriFold', 'drag horizontally to open both titanium hinges · or click Open 10.0"');
+      } else if (next === 'UNFOLDED') {
+        state.targetL = 0;
+        state.targetR = 0;
+        state.targetYaw = 0;
+        state.wakeAlpha = 1;
+        Sound.playHingeSnap(true);
+        camOrbit.theta = 0.0; camOrbit.phi = 1.39; camOrbit.radius = 44.5; camOrbit.targetY = 9.2;
+        foldBarEl.classList.add('is-visible');
+        updateFoldBarActive('open');
+        setPrompt('Galaxy Z TriFold · 10.0"', 'tap or swipe up on screen to open One UI · drag space to orbit');
+      }
+
+      CoverUI.markDirty();
+      MainUI.markDirty();
+    }
+
+    function unlockOneUI() {
+      if (!state.mainUnlocked) {
+        state.mainUnlocked = true;
+        Sound.playUiGlass(1080);
+        MainUI.markDirty();
+        setPrompt('One UI · 3-Panel Workspace', 'tap apps on screen · drag to orbit · switch postures below');
+      }
+    }
+
+    function setCameraDemo(on) {
+      state.cameraActive = on;
+      if (on) {
+        state.mainUnlocked = true;
+        state.targetL = 0; state.targetR = 0; state.targetYaw = 0;
+        camOrbit.theta = 0.0; camOrbit.phi = 1.40; camOrbit.radius = 43.0; camOrbit.targetY = 9.2;
+        updateFoldBarActive('camera');
+        setPrompt('200 MP Pro Camera', 'tap 0.6×, 200MP, 3× lenses and shutter right on the display');
+      } else {
+        updateFoldBarActive('open');
+        setPrompt('One UI · 3-Panel Workspace', 'tap apps on screen · drag to orbit · switch postures below');
+      }
+      MainUI.markDirty();
+    }
+
+    function updateFoldBarActive(id) {
+      state.activePosture = id;
+      document.querySelectorAll('.mini-pill').forEach((b) => {
+        b.classList.toggle('is-active', b.dataset.posture === id);
+      });
+    }
+
+    function applyPosture(id) {
+      Sound.init();
+      if (state.stage !== 'COVER_READY' && state.stage !== 'UNFOLDED') return;
+      if (id === 'camera') { setCameraDemo(!state.cameraActive); return; }
+      state.cameraActive = false;
+      updateFoldBarActive(id);
+
+      if (id === 'rear') {
+        state.targetR = 180; state.targetL = 180; state.targetYaw = 0;
+        camOrbit.theta = -0.34; camOrbit.phi = 1.38; camOrbit.radius = 39.0; camOrbit.targetY = 9.2;
+        Sound.playHingeSnap(false);
+        setPrompt('200 MP Triple Camera Island', 'Crafted Black · dual brushed titanium hinge spines');
+      } else if (id === 'cover') {
+        state.targetR = 180; state.targetL = 180; state.targetYaw = Math.PI;
+        camOrbit.theta = 0.0; camOrbit.phi = 1.39; camOrbit.radius = 40.5; camOrbit.targetY = 9.2;
+        Sound.playHingeSnap(false);
+        setPrompt('6.5" Cover Display', '12.9 mm folded profile · tap screen or unfold to 10.0"');
+      } else if (id === 'half') {
+        state.targetR = 128; state.targetL = 0; state.targetYaw = 0;
+        camOrbit.theta = -0.38; camOrbit.phi = 1.34; camOrbit.radius = 43.5; camOrbit.targetY = 9.2;
+        Sound.playHingeSnap(true);
+        setPrompt('Half-Open · Flex Stand', 'independent dual-radius titanium hinges');
+      } else if (id === 'open') {
+        state.stage = 'UNFOLDED';
+        state.targetR = 0; state.targetL = 0; state.targetYaw = 0;
+        camOrbit.theta = 0.0; camOrbit.phi = 1.39; camOrbit.radius = 44.5; camOrbit.targetY = 9.2;
+        Sound.playHingeSnap(true);
+        setPrompt(
+          state.mainUnlocked ? 'One UI · 3-Panel Workspace' : 'Galaxy Z TriFold · 10.0"',
+          state.mainUnlocked ? 'tap apps on screen · drag to orbit · switch postures below' : 'tap or swipe up on screen to open One UI'
+        );
+      }
+      MainUI.markDirty();
+      CoverUI.markDirty();
+    }
+
+    /* ==========================================================================
+       7. DIRECT TACTILE POINTER / TOUCH INTERACTIONS (DRAG LID, LIFT, PEEL, UNFOLD, ORBIT)
+       ========================================================================== */
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    let dragKind = null; // 'lid' | 'lift' | 'peel' | 'unfold' | 'orbit' | 'swipe-up'
+    let downX = 0, downY = 0, lastX = 0, lastY = 0, movedDist = 0;
+    let swipeStartY = 0;
+
+    function setNDC(clientX, clientY) {
+      const r = renderer.domElement.getBoundingClientRect();
+      ndc.x = ((clientX - r.left) / r.width) * 2 - 1;
+      ndc.y = -((clientY - r.top) / r.height) * 2 + 1;
+    }
+
+    stageEl.addEventListener('pointerdown', (e) => {
+      Sound.init();
+      stageEl.setPointerCapture(e.pointerId);
+      downX = lastX = e.clientX;
+      downY = lastY = e.clientY;
+      movedDist = 0;
+      setNDC(e.clientX, e.clientY);
+      raycaster.setFromCamera(ndc, camera);
+
+      if (state.stage === 'BOX_CLOSED') {
+        const hits = raycaster.intersectObject(lidHitMesh, false);
+        dragKind = hits.length ? 'lid' : 'orbit';
+      } else if (state.stage === 'BOX_OPEN') {
+        const hits = raycaster.intersectObject(phoneHitBox, false);
+        dragKind = hits.length ? 'lift' : 'orbit';
+      } else if (state.stage === 'WRAPPED') {
+        const hits = raycaster.intersectObjects([filmMesh, phoneHitBox], false);
+        dragKind = hits.length ? 'peel' : 'orbit';
+      } else if (state.stage === 'COVER_READY') {
+        const hits = raycaster.intersectObjects([coverMesh, phoneHitBox], false);
+        dragKind = hits.length ? 'unfold' : 'orbit';
+      } else if (state.stage === 'UNFOLDED') {
+        const scrHits = raycaster.intersectObjects(mainScreenMeshes, false);
+        if (scrHits.length && !state.mainUnlocked) {
+          dragKind = 'swipe-up';
+          swipeStartY = e.clientY;
+        } else {
+          dragKind = 'orbit';
+        }
+      } else {
+        dragKind = 'orbit';
+      }
+
+      stageEl.classList.add('is-dragging');
+    });
+
+    stageEl.addEventListener('pointermove', (e) => {
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      movedDist += Math.hypot(dx, dy);
+
+      if (!dragKind) {
+        // Subtle contextual cursor cues
+        setNDC(e.clientX, e.clientY);
+        raycaster.setFromCamera(ndc, camera);
+        stageEl.classList.remove('is-pull', 'is-unfold', 'is-tap');
+        if (state.stage === 'BOX_CLOSED' && raycaster.intersectObject(lidHitMesh, false).length) {
+          stageEl.classList.add('is-pull');
+        } else if (state.stage === 'BOX_OPEN' && raycaster.intersectObject(phoneHitBox, false).length) {
+          stageEl.classList.add('is-pull');
+        } else if (state.stage === 'WRAPPED' && raycaster.intersectObjects([filmMesh, phoneHitBox], false).length) {
+          stageEl.classList.add('is-pull');
+        } else if (state.stage === 'COVER_READY' && raycaster.intersectObjects([coverMesh, phoneHitBox], false).length) {
+          stageEl.classList.add('is-unfold');
+        } else if (state.stage === 'UNFOLDED' && raycaster.intersectObjects(mainScreenMeshes, false).length) {
+          stageEl.classList.add('is-tap');
+        }
+        return;
+      }
+
+      if (dragKind === 'lid') {
+        // Drag upward with tactile vacuum resistance
+        const deltaUp = -dy / 220;
+        state.lidLift = clamp(state.lidLift + deltaUp, 0, 1);
+        Sound.updateCardboardSlide(Math.abs(dy) / 14);
+        if (state.lidLift >= 0.62) {
+          Sound.updateCardboardSlide(0);
+          dragKind = null;
+          enterStage('BOX_OPEN');
+        }
+      } else if (dragKind === 'lift') {
+        const deltaUp = -dy / 200;
+        state.phoneLift = clamp(state.phoneLift + deltaUp, 0, 1);
+        Sound.updateCardboardSlide(Math.abs(dy) / 22);
+        if (state.phoneLift >= 0.56) {
+          Sound.updateCardboardSlide(0);
+          dragKind = null;
+          enterStage('WRAPPED');
+        }
+      } else if (dragKind === 'peel') {
+        const deltaUp = -dy / 230;
+        state.peel = clamp(state.peel + deltaUp, 0, 1.25);
+        Sound.updatePeelSound(Math.abs(dy) / 10);
+        if (state.peel >= 0.72) {
+          Sound.updatePeelSound(0);
+          dragKind = null;
+          enterStage('REAR_REVEAL');
+        }
+      } else if (dragKind === 'unfold') {
+        // Horizontal drag smoothly unfolds Left panel first (180 -> 0), then Right panel (180 -> 0)
+        // while rotating from Cover (PI) to Main 10.0" Display (0)
+        const totalDrag = Math.abs(e.clientX - downX) / 260;
+        const p = clamp(totalDrag, 0, 1);
+        state.targetL = lerp(180, 0, smoothstep(0.0, 0.55, p));
+        state.targetR = lerp(180, 0, smoothstep(0.35, 1.0, p));
+        state.targetYaw = lerp(Math.PI, 0, smoothstep(0.12, 0.88, p));
+        if (p >= 0.72) {
+          dragKind = null;
+          enterStage('UNFOLDED');
+        }
+      } else if (dragKind === 'swipe-up') {
+        if (swipeStartY - e.clientY > 44) {
+          dragKind = null;
+          unlockOneUI();
+        }
+      } else if (dragKind === 'orbit') {
+        camOrbit.theta -= dx * 0.0068;
+        camOrbit.phi = clamp(camOrbit.phi - dy * 0.0055, 0.45, Math.PI * 0.52);
+      }
+
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    function onPointerUp(e) {
+      stageEl.classList.remove('is-dragging');
+      Sound.updateCardboardSlide(0);
+      Sound.updatePeelSound(0);
+
+      // Gentle snap-back if partial drag didn't cross threshold, OR effortless click-to-advance!
+      if (movedDist < 8) {
+        setNDC(e.clientX, e.clientY);
+        raycaster.setFromCamera(ndc, camera);
+        if (state.stage === 'BOX_CLOSED' && raycaster.intersectObject(lidHitMesh, false).length) {
+          enterStage('BOX_OPEN');
+        } else if (state.stage === 'BOX_OPEN' && raycaster.intersectObject(phoneHitBox, false).length) {
+          enterStage('WRAPPED');
+        } else if (state.stage === 'WRAPPED' && raycaster.intersectObjects([filmMesh, phoneHitBox], false).length) {
+          enterStage('REAR_REVEAL');
+        } else if (state.stage === 'COVER_READY' && raycaster.intersectObjects([coverMesh, phoneHitBox], false).length) {
+          enterStage('UNFOLDED');
+        } else if (state.stage === 'UNFOLDED') {
+          const hits = raycaster.intersectObjects(mainScreenMeshes, false);
+          if (hits.length) {
+            MainUI.handleTap(hits[0].uv.x, hits[0].uv.y);
+          } else {
+            const cov = raycaster.intersectObject(coverMesh, false);
+            if (cov.length) {
+              state.coverUnlocked = !state.coverUnlocked;
+              Sound.playUiGlass(980);
+              CoverUI.markDirty();
+            }
+          }
+        }
+      } else {
+        if (dragKind === 'lid' && state.lidLift < 0.62) state.lidLift = 0;
+        if (dragKind === 'lift' && state.phoneLift < 0.56) state.phoneLift = 0;
+        if (dragKind === 'peel' && state.peel < 0.72) state.peel = 0;
+        if (dragKind === 'unfold') {
+          state.targetL = 180; state.targetR = 180; state.targetYaw = Math.PI;
+        }
+      }
+
+      dragKind = null;
+    }
+
+    stageEl.addEventListener('pointerup', onPointerUp);
+    stageEl.addEventListener('pointercancel', onPointerUp);
+    stageEl.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      camOrbit.radius = clamp(camOrbit.radius + e.deltaY * 0.016, 20, 52);
+    }, { passive: false });
+
+    /* ==========================================================================
+       8. MINIMAL CORNER BUTTONS & POSTURE CONTROLS
+       ========================================================================== */
+    const btnSound = document.getElementById('btn-sound');
+    let soundOn = true;
+    btnSound.addEventListener('click', () => {
+      soundOn = !soundOn;
+      Sound.setEnabled(soundOn);
+      btnSound.setAttribute('aria-pressed', String(soundOn));
+      document.getElementById('ico-sound-on').style.display = soundOn ? '' : 'none';
+      document.getElementById('ico-sound-off').style.display = soundOn ? 'none' : '';
+      if (soundOn) Sound.playUiGlass(980);
+    });
+
+    document.getElementById('btn-replay').addEventListener('click', () => {
+      Sound.init();
+      Sound.playUiGlass(720);
+      enterStage('BOX_CLOSED');
+    });
+
+    const btnInfo = document.getElementById('btn-info');
+    const infoPopover = document.getElementById('info-popover');
+    function toggleInfoPopover(force) {
+      const open = force !== undefined ? force : !infoPopover.classList.contains('is-open');
+      infoPopover.classList.toggle('is-open', open);
+      infoPopover.setAttribute('aria-hidden', String(!open));
+      btnInfo.setAttribute('aria-expanded', String(open));
+    }
+    btnInfo.addEventListener('click', () => { Sound.init(); Sound.playUiGlass(920); toggleInfoPopover(); });
+
+    document.querySelectorAll('.mini-pill').forEach((btn) => {
+      btn.addEventListener('click', () => applyPosture(btn.dataset.posture));
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') toggleInfoPopover(false);
+      if (e.key === 'r' || e.key === 'R') enterStage('BOX_CLOSED');
+    });
+
+    /* ==========================================================================
+       9. RESPONSIVE RESIZING & MAIN ANIMATION LOOP
+       ========================================================================== */
+    let resizeRaf = null;
+    function resize() {
+      const w = stageEl.clientWidth || window.innerWidth;
+      const h = stageEl.clientHeight || window.innerHeight;
+      if (w < 2 || h < 2) return;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(w, h, false);
+      const aspect = w / Math.max(1, h);
+      camera.aspect = aspect;
+      camera.fov = aspect < 1.1 ? clamp(36 / aspect, 34, 52) : 32;
+      camera.updateProjectionMatrix();
+    }
+    new ResizeObserver(() => {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(resize);
+    }).observe(stageEl);
+
+    function updateRig(rDeg, lDeg) {
+      const rRad = rDeg * DEG2RAD;
+      const lRad = lDeg * DEG2RAD;
+      rightHingePivot.rotation.y = -rRad;
+      leftHingePivot.rotation.y = lRad;
+
+      rightSpinePivot.rotation.y = -rRad * 0.5;
+      rightSpinePivot.position.z = -0.04 + Math.sin(rRad * 0.5) * 0.24;
+      leftSpinePivot.rotation.y = lRad * 0.5;
+      leftSpinePivot.position.z = -0.04 + Math.sin(lRad * 0.5) * 0.44;
+
+      const shiftX = (Math.cos(lRad) * 3.2 - Math.cos(rRad) * 3.1) * 0.35;
+      const shiftZ = -((rDeg / 180) * 0.22 + (lDeg / 180) * 0.34);
+      centerGroup.position.set(shiftX, 0, shiftZ);
+
+      // Update curving flexible display bridges
+      const rxLoc = DIM.GAP_R / 2, rzLoc = dispZ - DIM.PIVOT_RZ;
+      const rEdgeX = DIM.PIVOT_RX + rxLoc * Math.cos(rRad) - rzLoc * Math.sin(rRad);
+      const rEdgeZ = DIM.PIVOT_RZ + rxLoc * Math.sin(rRad) + rzLoc * Math.cos(rRad);
+      updateBridge(rightBridge, DIM.W_C / 2, dispZ, rEdgeX, rEdgeZ, DIM.PIVOT_RX + Math.sin(rRad * 0.5) * 0.06, dispZ - Math.sin(rRad * 0.5) * 0.05);
+
+      const lxLoc = -DIM.GAP_L / 2, lzLoc = dispZ - DIM.PIVOT_LZ;
+      const lEdgeX = DIM.PIVOT_LX + lxLoc * Math.cos(lRad) + lzLoc * Math.sin(lRad);
+      const lEdgeZ = DIM.PIVOT_LZ - lxLoc * Math.sin(lRad) + lzLoc * Math.cos(lRad);
+      updateBridge(leftBridge, lEdgeX, lEdgeZ, -DIM.W_C / 2, dispZ, DIM.PIVOT_LX - Math.sin(lRad * 0.5) * 0.18, dispZ + Math.sin(lRad * 0.5) * 0.22);
+    }
+
+    let lastTime = performance.now();
+    let videoTick = 0;
+
+    function animate(now) {
+      requestAnimationFrame(animate);
+      const dt = clamp((now - lastTime) / 1000, 0.0001, 0.12);
+      lastTime = now;
+      const tSec = now * 0.001;
+      state.stageTimer += dt;
+
+      // Auto-advance from pristine Rear 200MP reveal -> Cover Display wake after 1.35s
+      if (state.stage === 'REAR_REVEAL' && state.stageTimer > 1.35) {
+        enterStage('COVER_READY');
+      }
+
+      // 1. Box Lid Target Position (seated -> vertical lift -> gracefully resting off to left background)
+      let lidTx = 0, lidTy = 0.02, lidTz = 0, lidTrY = 0;
+      if (state.lidPlaced) {
+        lidTx = -12.8; lidTy = 0.02; lidTz = -1.8; lidTrY = 0.28;
+      } else {
+        lidTy = 0.02 + state.lidLift * 4.4;
+      }
+      lidGroup.position.set(
+        spLidX.step(lidTx, dt),
+        spLidY.step(lidTy, dt),
+        spLidZ.step(lidTz, dt)
+      );
+      lidGroup.rotation.y = spLidRotY.step(lidTrY, dt);
+
+      // 2. Device Position & Orientation (nestled flat inside tray -> hero upright standing above open tray!)
+      let devTx = 0, devTy = 1.62, devTz = -1.6, devRx = -Math.PI / 2, devRy = -0.16;
+      if (state.stage === 'BOX_CLOSED' || state.stage === 'BOX_OPEN') {
+        const lp = state.phoneLift;
+        devTy = lerp(1.62, 9.6, lp);
+        devTz = lerp(-1.6, 2.2, lp);
+        devRx = lerp(-Math.PI / 2, -Math.PI * 0.14, lp);
+        devRy = lerp(-0.16, 0, lp);
+      } else {
+        // Hero standing above the open retail tray (subtle organic hover breath)
+        devTx = 0;
+        devTy = 11.2 + Math.sin(tSec * 1.3) * 0.12;
+        devTz = 2.6;
+        devRx = 0;
+        devRy = state.targetYaw;
+      }
+      deviceAnchor.position.set(spDevX.step(devTx, dt), spDevY.step(devTy, dt), spDevZ.step(devTz, dt));
+      deviceAnchor.rotation.x = spDevRotX.step(devRx, dt);
+      deviceAnchor.rotation.y = spDevRotY.step(devRy, dt);
+
+      // 3. Protective Film Curl & Hinges
+      updateFilmCurl(spPeel.step(state.peel, dt));
+      const curR = spR.step(state.targetR, dt);
+      const curL = spL.step(state.targetL, dt);
+      updateRig(curR, curL);
+
+      // 4. Screen Wake & Live Canvas Animations
+      const prevWake = spWake.value;
+      const curWake = spWake.step(state.wakeAlpha, dt);
+      if (Math.abs(curWake - prevWake) > 0.002) {
+        CoverUI.markDirty();
+        MainUI.markDirty();
+      }
+
+      if (state.mainUnlocked && !state.cameraActive && state.rightApp === 'video') {
+        videoTick += dt;
+        if (videoTick > 0.14) {
+          state.videoProg = (state.videoProg + videoTick * 0.022) % 1;
+          videoTick = 0;
+          MainUI.markDirty();
+        }
+      }
+      if (state.cameraActive) {
+        let chg = false;
+        if (Math.abs(state.camZoom - state.camTargetZoom) > 0.002) {
+          state.camZoom += (state.camTargetZoom - state.camZoom) * Math.min(1, dt * 8);
+          chg = true;
+        }
+        if (state.shutterFlash > 0.005) {
+          state.shutterFlash = Math.max(0, state.shutterFlash - dt * 3.6);
+          chg = true;
+        }
+        if (chg) MainUI.markDirty();
+      }
+
+      CoverUI.render(curWake, state.coverUnlocked);
+      MainUI.render({ ...state, wakeAlpha: curWake }, tSec);
+
+      // 5. Studio Camera Orbit
+      const th = camOrbit.spTheta.step(camOrbit.theta, dt);
+      const ph = camOrbit.spPhi.step(camOrbit.phi, dt);
+      const rad = camOrbit.spRadius.step(camOrbit.radius, dt);
+      const ty = camOrbit.spTargetY.step(camOrbit.targetY, dt);
+      camera.position.set(
+        rad * Math.sin(ph) * Math.sin(th),
+        ty + rad * Math.cos(ph),
+        rad * Math.sin(ph) * Math.cos(th)
+      );
+      camera.lookAt(0, ty, 0);
+
+      renderer.render(scene, camera);
+    }
+
+    // Bootstrap
+    resize();
+    updateRig(180, 180);
+    updateFilmCurl(0);
+    CoverUI.render(0, false);
+    MainUI.render({ ...state, wakeAlpha: 0 }, 0);
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+    requestAnimationFrame(() => document.getElementById('fade-veil').classList.add('is-gone'));
+  })();
+  </script>
+</body>
+</html>
