@@ -1,0 +1,4501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Pocket World 3D — Monumental Equestrian Memorial</title>
+  <style>
+    :root {
+      --bg-top: #cfe493;
+      --bg-mid: #7ea353;
+      --bg-bot: #2e431f;
+      --glass-bg: rgba(20, 28, 18, 0.44);
+      --glass-bg-hover: rgba(28, 40, 24, 0.62);
+      --glass-border: rgba(255, 255, 240, 0.2);
+      --glass-text: #f7f5ec;
+      --glass-muted: rgba(244, 241, 228, 0.72);
+      --accent: #e8cfa0;
+      --accent-strong: #f6dca8;
+      --shadow-soft: 0 10px 32px rgba(10, 16, 8, 0.28);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--glass-text);
+      user-select: none;
+      -webkit-user-select: none;
+      background: var(--bg-bot);
+    }
+
+    /* Soft out-of-focus pale-lime to deep-olive green background */
+    #bg-gradient {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background:
+        radial-gradient(ellipse 85% 65% at 24% 16%, rgba(245, 255, 198, 0.55) 0%, transparent 62%),
+        radial-gradient(ellipse 70% 55% at 82% 84%, rgba(28, 45, 18, 0.65) 0%, transparent 70%),
+        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 48%, var(--bg-bot) 100%);
+      transition: background 0.35s ease;
+    }
+
+    /* Animated soft bokeh layer behind transparent WebGL canvas */
+    #bokeh-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* Three.js WebGL stage */
+    #webgl-container {
+      position: fixed;
+      inset: 0;
+      z-index: 2;
+      cursor: grab;
+      touch-action: none;
+    }
+
+    #webgl-container:active {
+      cursor: grabbing;
+    }
+
+    #webgl-container.pointer-hover {
+      cursor: pointer;
+    }
+
+    /* Subtle tilt-shift depth-of-field + soft vignette overlay */
+    #tilt-shift-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 3;
+      pointer-events: none;
+    }
+
+    #tilt-shift-overlay::before,
+    #tilt-shift-overlay::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      pointer-events: none;
+      backdrop-filter: blur(2.6px);
+      -webkit-backdrop-filter: blur(2.6px);
+    }
+
+    #tilt-shift-overlay::before {
+      top: 0;
+      height: 18vh;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0) 100%);
+      -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0) 100%);
+    }
+
+    #tilt-shift-overlay::after {
+      bottom: 0;
+      height: 18vh;
+      mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0) 100%);
+      -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0) 100%);
+    }
+
+    #vignette-layer {
+      position: fixed;
+      inset: 0;
+      z-index: 3;
+      pointer-events: none;
+      background: radial-gradient(ellipse 72% 72% at 50% 50%, transparent 56%, rgba(16, 26, 11, 0.34) 100%);
+    }
+
+    /* Leader line SVG for active monument info card */
+    #leader-svg {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 6;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    /* Floating hover label */
+    #hover-pill {
+      position: fixed;
+      z-index: 8;
+      pointer-events: none;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: rgba(18, 24, 16, 0.72);
+      border: 1px solid rgba(255, 250, 232, 0.24);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      font-size: 11.5px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      color: #f8f3e4;
+      white-space: nowrap;
+      opacity: 0;
+      transform: translate(-50%, -135%);
+      transition: opacity 0.16s ease;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+    }
+
+    #hover-pill.visible {
+      opacity: 1;
+    }
+
+    /* Floating Info Card */
+    #info-card {
+      position: fixed;
+      z-index: 9;
+      width: 268px;
+      max-width: calc(100vw - 28px);
+      padding: 15px 16px 14px;
+      border-radius: 14px;
+      background: rgba(18, 25, 16, 0.74);
+      border: 1px solid rgba(255, 248, 228, 0.24);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 14px 40px rgba(8, 14, 6, 0.38);
+      color: var(--glass-text);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(6px) scale(0.97);
+      transition: opacity 0.24s ease, transform 0.24s ease;
+    }
+
+    #info-card.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+    }
+
+    #info-card .info-tag {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--accent);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    #info-card .info-title {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 1.25;
+      margin-bottom: 7px;
+      padding-right: 22px;
+      color: #fffdf7;
+    }
+
+    #info-card .info-body {
+      font-size: 12.2px;
+      line-height: 1.52;
+      color: rgba(246, 243, 232, 0.86);
+      margin-bottom: 9px;
+    }
+
+    #info-card .info-meta {
+      font-size: 10.5px;
+      color: var(--glass-muted);
+      border-top: 1px solid rgba(255, 255, 240, 0.12);
+      padding-top: 7px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    #info-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 240, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      color: #f6f3e8;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      line-height: 1;
+      transition: background 0.15s ease;
+    }
+
+    #info-close:hover {
+      background: rgba(255, 255, 255, 0.22);
+    }
+
+    /* HUD container */
+    #ui-layer {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    #ui-layer.hidden {
+      opacity: 0;
+      pointer-events: none !important;
+    }
+
+    #ui-layer.hidden * {
+      pointer-events: none !important;
+    }
+
+    /* Minimal Title */
+    #title-block {
+      position: fixed;
+      top: 18px;
+      left: 22px;
+      pointer-events: auto;
+    }
+
+    #title-block h1 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 400;
+      font-size: 20px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(255, 253, 244, 0.96);
+      text-shadow: 0 2px 14px rgba(18, 28, 12, 0.32);
+    }
+
+    #title-block p {
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(248, 246, 234, 0.78);
+      margin-top: 3px;
+      text-shadow: 0 1px 8px rgba(18, 28, 12, 0.32);
+    }
+
+    /* Top-right quick actions */
+    #top-actions {
+      position: fixed;
+      top: 18px;
+      right: 20px;
+      display: flex;
+      gap: 8px;
+      pointer-events: auto;
+    }
+
+    .icon-btn {
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--glass-border);
+      background: var(--glass-bg);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      color: var(--glass-text);
+      font-size: 11.5px;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      box-shadow: var(--shadow-soft);
+      transition: background 0.18s ease, border-color 0.18s ease, transform 0.14s ease;
+    }
+
+    .icon-btn:hover {
+      background: var(--glass-bg-hover);
+      border-color: rgba(255, 250, 232, 0.36);
+    }
+
+    .icon-btn:active {
+      transform: scale(0.97);
+    }
+
+    .icon-btn svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* Restore UI pill when UI is hidden */
+    #restore-ui-btn {
+      position: fixed;
+      top: 18px;
+      right: 20px;
+      z-index: 12;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease, background 0.18s ease;
+    }
+
+    #restore-ui-btn.visible {
+      opacity: 0.85;
+      pointer-events: auto;
+    }
+
+    #restore-ui-btn.visible:hover {
+      opacity: 1;
+    }
+
+    /* Right Glass Control Panel */
+    #control-panel {
+      position: fixed;
+      top: 64px;
+      right: 20px;
+      width: 236px;
+      padding: 14px 14px 13px;
+      border-radius: 16px;
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: var(--shadow-soft);
+      pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 13px;
+    }
+
+    .panel-section {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .panel-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10.5px;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: var(--glass-muted);
+      font-weight: 600;
+    }
+
+    .panel-value {
+      font-variant-numeric: tabular-nums;
+      color: var(--accent-strong);
+      letter-spacing: 0.04em;
+      font-weight: 600;
+    }
+
+    /* Range Slider */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 5px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #f3a469 0%, #fff4c8 36%, #f4b25c 72%, #3a5078 100%);
+      outline: none;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: #fffdf5;
+      border: 2px solid rgba(35, 45, 28, 0.75);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+      transition: transform 0.14s ease;
+    }
+
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.12);
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: #fffdf5;
+      border: 2px solid rgba(35, 45, 28, 0.75);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+    }
+
+    /* Segmented Season Toggle */
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 3px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid rgba(255, 255, 240, 0.1);
+    }
+
+    .seg-btn {
+      border: none;
+      background: transparent;
+      color: var(--glass-muted);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 6px 4px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 0.18s ease, color 0.18s ease;
+    }
+
+    .seg-btn:hover {
+      color: #fff;
+    }
+
+    .seg-btn.active {
+      background: rgba(245, 235, 206, 0.22);
+      color: #fffdf5;
+      box-shadow: inset 0 0 0 1px rgba(255, 246, 220, 0.28);
+    }
+
+    /* Feature Toggle Buttons */
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+
+    .toggle-btn {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 7px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 240, 0.14);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--glass-text);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.18s ease, border-color 0.18s ease;
+    }
+
+    .toggle-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .toggle-btn.active {
+      background: rgba(232, 207, 160, 0.24);
+      border-color: rgba(246, 220, 168, 0.55);
+      color: #fffdf6;
+    }
+
+    .toggle-dot {
+      width: 26px;
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.34);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      position: relative;
+      transition: background 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .toggle-dot::after {
+      content: "";
+      position: absolute;
+      top: 1px;
+      left: 1px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 252, 242, 0.8);
+      transition: transform 0.2s ease, background 0.2s ease;
+    }
+
+    .toggle-btn.active .toggle-dot {
+      background: rgba(235, 202, 138, 0.72);
+    }
+
+    .toggle-btn.active .toggle-dot::after {
+      transform: translateX(12px);
+      background: #ffffff;
+    }
+
+    /* Camera Preset Chips Bar */
+    #preset-bar {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: calc(100vw - 28px);
+      padding: 6px;
+      border-radius: 999px;
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: var(--shadow-soft);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      pointer-events: auto;
+    }
+
+    #preset-bar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .preset-chip {
+      border: none;
+      background: transparent;
+      color: rgba(248, 245, 234, 0.82);
+      font-size: 11.5px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 999px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: background 0.18s ease, color 0.18s ease;
+    }
+
+    .preset-chip:hover {
+      background: rgba(255, 255, 255, 0.11);
+      color: #fff;
+    }
+
+    .preset-chip.active {
+      background: rgba(245, 233, 202, 0.25);
+      color: #fffdf5;
+      box-shadow: inset 0 0 0 1px rgba(255, 246, 220, 0.34);
+    }
+
+    /* Subtle interaction hint */
+    #hint-bar {
+      position: fixed;
+      bottom: 26px;
+      left: 22px;
+      font-size: 10.5px;
+      letter-spacing: 0.05em;
+      color: rgba(244, 242, 230, 0.68);
+      text-shadow: 0 1px 6px rgba(10, 18, 6, 0.4);
+      pointer-events: none;
+    }
+
+    /* Loading Ring Overlay */
+    #loader {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: radial-gradient(circle at 50% 45%, rgba(126, 163, 83, 0.92), rgba(40, 60, 26, 0.97));
+      transition: opacity 0.55s ease, visibility 0.55s ease;
+    }
+
+    #loader.done {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .loader-ring {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      border: 2.5px solid rgba(255, 250, 235, 0.2);
+      border-top-color: #f6e7c4;
+      animation: spin 0.9s linear infinite;
+    }
+
+    .loader-text {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(255, 252, 242, 0.88);
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Responsive Mobile Adjustments */
+    @media (max-width: 900px) {
+      #hint-bar {
+        display: none;
+      }
+    }
+
+    @media (max-width: 680px) {
+      #title-block {
+        top: 12px;
+        left: 14px;
+      }
+      #title-block h1 {
+        font-size: 15px;
+      }
+      #title-block p {
+        font-size: 9.5px;
+      }
+      #top-actions {
+        top: 12px;
+        right: 12px;
+        gap: 6px;
+      }
+      .icon-btn {
+        height: 31px;
+        padding: 0 9px;
+        font-size: 10.5px;
+      }
+      .icon-btn span.btn-label {
+        display: none;
+      }
+      #control-panel {
+        top: 52px;
+        right: 12px;
+        width: 196px;
+        padding: 11px;
+        gap: 10px;
+      }
+      #preset-bar {
+        bottom: 12px;
+        padding: 4px;
+      }
+      .preset-chip {
+        padding: 5px 10px;
+        font-size: 10.5px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Layered Green Bokeh Backdrop -->
+  <div id="bg-gradient"></div>
+  <canvas id="bokeh-canvas"></canvas>
+
+  <!-- Three.js WebGL Stage -->
+  <div id="webgl-container"></div>
+
+  <!-- Subtle Tilt-Shift Depth of Field & Vignette -->
+  <div id="tilt-shift-overlay"></div>
+  <div id="vignette-layer"></div>
+
+  <!-- Dynamic Leader Line for Selected Info Card -->
+  <svg id="leader-svg" aria-hidden="true">
+    <line id="leader-line" x1="0" y1="0" x2="0" y2="0" stroke="rgba(255, 246, 222, 0.85)" stroke-width="1.2" stroke-dasharray="3 3" visibility="hidden" />
+    <circle id="leader-dot" cx="0" cy="0" r="3.6" fill="#f7e2b5" stroke="rgba(26, 36, 20, 0.85)" stroke-width="1.4" visibility="hidden" />
+  </svg>
+
+  <!-- Hover Label -->
+  <div id="hover-pill"></div>
+
+  <!-- Floating Monument Info Card -->
+  <aside id="info-card" role="dialog" aria-live="polite">
+    <button id="info-close" title="Close" aria-label="Close info card">&times;</button>
+    <div class="info-tag" id="info-tag"></div>
+    <h2 class="info-title" id="info-title"></h2>
+    <p class="info-body" id="info-body"></p>
+    <div class="info-meta">
+      <span id="info-material"></span>
+      <span id="info-scale"></span>
+    </div>
+  </aside>
+
+  <!-- Minimal HUD -->
+  <div id="ui-layer">
+    <header id="title-block">
+      <h1 id="header-title">Pocket World 3D</h1>
+      <p>Monumental Equestrian Memorial</p>
+    </header>
+
+    <div id="top-actions">
+      <button class="icon-btn" id="screenshot-btn" title="Save Screenshot PNG">
+        <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <span class="btn-label">Screenshot</span>
+      </button>
+      <button class="icon-btn" id="hide-ui-btn" title="Hide Interface">
+        <svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        <span class="btn-label">Hide UI</span>
+      </button>
+    </div>
+
+    <aside id="control-panel">
+      <div class="panel-section">
+        <div class="panel-label-row">
+          <span>Time of Day</span>
+          <span class="panel-value" id="time-readout">10:30 AM</span>
+        </div>
+        <input id="time-slider" type="range" min="0" max="100" step="0.5" value="28" aria-label="Time of Day" />
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-label-row">
+          <span>Season</span>
+          <span class="panel-value" id="season-readout">Spring</span>
+        </div>
+        <div class="segmented" role="group" aria-label="Season">
+          <button class="seg-btn active" data-season="spring">Spring</button>
+          <button class="seg-btn" data-season="autumn">Autumn</button>
+          <button class="seg-btn" data-season="winter">Snow</button>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-label-row">
+          <span>Architectural View</span>
+        </div>
+        <div class="toggle-grid">
+          <button class="toggle-btn" id="toggle-section" aria-pressed="false">
+            <span>Cross-Section</span>
+            <span class="toggle-dot"></span>
+          </button>
+          <button class="toggle-btn" id="toggle-explode" aria-pressed="false">
+            <span>Explode Layers</span>
+            <span class="toggle-dot"></span>
+          </button>
+          <button class="toggle-btn" id="toggle-wireframe" aria-pressed="false">
+            <span>Wireframe</span>
+            <span class="toggle-dot"></span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <nav id="preset-bar" aria-label="Camera Presets">
+      <button class="preset-chip active" data-preset="overview">Overview</button>
+      <button class="preset-chip" data-preset="equestrian">Equestrian Statue</button>
+      <button class="preset-chip" data-preset="pedestal">Pedestal Plaques</button>
+      <button class="preset-chip" data-preset="colonnade">Colonnade</button>
+      <button class="preset-chip" data-preset="stairs">Front Stairs</button>
+      <button class="preset-chip" data-preset="animals">Animal Statues</button>
+      <button class="preset-chip" data-preset="topdown">Top-Down Plan</button>
+    </nav>
+
+    <div id="hint-bar">Drag to orbit &middot; Scroll to zoom &middot; Click parts to inspect &middot; Double-click to reset</div>
+  </div>
+
+  <!-- Restore UI Button -->
+  <button class="icon-btn" id="restore-ui-btn" title="Show Interface">
+    <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+    <span>Show UI</span>
+  </button>
+
+  <!-- Loading Overlay -->
+  <div id="loader">
+    <div class="loader-ring"></div>
+    <div class="loader-text">Sculpting Miniature</div>
+  </div>
+
+  <!-- Three.js r128 & GSAP from cdnjs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+
+  <script>
+    (function () {
+      "use strict";
+
+      /* =========================================================================
+         1. EDITABLE CONFIGURATION & CONTENT DATA
+         ========================================================================= */
+
+      // Change this constant to rename the miniature's nameplate and title.
+      const PLAQUE_TEXT = "Pocket World 3D";
+
+      // Editable info-card content for clickable monument elements.
+      const MONUMENT_INFO = {
+        equestrian: {
+          tag: "Crowning Sculpture",
+          title: "Monumental Equestrian Statue",
+          body: "Cast in deep bluish-grey bronze with subtle green verdigris nestled in the drapery and recessed folds. The steed lifts one foreleg in mid-stride while the commander extends a guiding hand across the plaza.",
+          material: "Patinated Bronze",
+          scale: "Height 11.9m (scale)"
+        },
+        pedestal: {
+          tag: "Central Core",
+          title: "Tiered Pedestal & Bronze Plaques",
+          body: "Rising from a stepped octagonal base, the cream limestone tower pairs four corner bronze-capitalled columns with engraved commemorative plaques, classical bas-reliefs, standing allegorical figures, and a ribbed oxidised-copper dome.",
+          material: "Limestone & Copper",
+          scale: "Hollow Vaulted Core"
+        },
+        colonnade: {
+          tag: "Sweeping Peristyle",
+          title: "Asymmetrical Curved Colonnade",
+          body: "A graceful semi-circular screen of slender stone columns supporting a continuous entablature and hundreds of turned roof balusters. Its right arm curves tighter forward and inward for dramatic compositional asymmetry.",
+          material: "Warm Cream Stone",
+          scale: "360+ Turned Balusters"
+        },
+        pavilions: {
+          tag: "Architectural Anchors",
+          title: "Corner & End Pavilions",
+          body: "Four square pavilions punctuate the colonnade at varied radii from the centre. Each features paired pilasters, a projecting cornice, a domed pyramidal roof with bronze finial, and an arched niche housing a standing statue.",
+          material: "Ashlar Stone & Bronze",
+          scale: "4 Asymmetric Nodes"
+        },
+        plaza: {
+          tag: "Ceremonial Forecourt",
+          title: "Radial Patterned Plaza",
+          body: "Paved in alternating cream, sand, and soft-grey stone tiles arranged in concentric rings, checkerboard fields, and radiating sightlines around the memorial, bounded along the front lip by a low balustraded terrace rail.",
+          material: "Cut Stone Pavers",
+          scale: "Elevated Terrace"
+        },
+        stairs: {
+          tag: "Grand Approach",
+          title: "Front Steps & Bronze Lions",
+          body: "A broad, shallow flight of stone steps descends to the lower landing, guarded by four crouching bronze lions set upon square pedestals and softened with terracotta planters and classical bronze lanterns.",
+          material: "Limestone & Bronze",
+          scale: "4 Guardian Beasts"
+        }
+      };
+
+      // Camera preset definitions (spherical coordinates around target).
+      const CAMERA_PRESETS = {
+        overview:   { theta: 0.42,  phi: 1.06, radius: 37.5, target: [-0.3, 3.2, 0.2] },
+        equestrian: { theta: 0.58,  phi: 1.24, radius: 7.8,  target: [0.0, 10.0, -0.25] },
+        pedestal:   { theta: 0.30,  phi: 1.32, radius: 11.2, target: [0.0, 4.4, 0.0] },
+        colonnade:  { theta: -0.68, phi: 1.12, radius: 22.0, target: [1.4, 3.3, -1.6] },
+        stairs:     { theta: 0.22,  phi: 1.24, radius: 13.0, target: [0.0, 1.3, 6.2] },
+        animals:    { theta: -0.48, phi: 1.28, radius: 8.8,  target: [2.8, 1.35, 6.3] },
+        topdown:    { theta: 0.02,  phi: 0.16, radius: 34.5, target: [0.0, 1.0, 0.5] }
+      };
+
+      document.getElementById("header-title").textContent = PLAQUE_TEXT;
+      document.title = PLAQUE_TEXT + " — Monumental Equestrian Memorial";
+
+      /* =========================================================================
+         2. RESOURCE TRACKER & DISPOSAL
+         ========================================================================= */
+
+      const trackedGeometries = new Set();
+      const trackedMaterials = new Set();
+      const trackedTextures = new Set();
+
+      function trackGeo(g) { trackedGeometries.add(g); return g; }
+      function trackMat(m) { trackedMaterials.add(m); return m; }
+      function trackTex(t) { trackedTextures.add(t); return t; }
+
+      function disposeAllResources() {
+        trackedGeometries.forEach(function (g) { if (g && g.dispose) g.dispose(); });
+        trackedMaterials.forEach(function (m) { if (m && m.dispose) m.dispose(); });
+        trackedTextures.forEach(function (t) { if (t && t.dispose) t.dispose(); });
+        trackedGeometries.clear();
+        trackedMaterials.clear();
+        trackedTextures.clear();
+        if (renderer) renderer.dispose();
+      }
+
+      /* =========================================================================
+         3. ANIMATED BOKEH BACKGROUND (2D CANVAS BEHIND WEBGL)
+         ========================================================================= */
+
+      const bokehCanvas = document.getElementById("bokeh-canvas");
+      const bokehCtx = bokehCanvas.getContext("2d");
+      const bokehBlobs = [];
+      let bokehPalette = {
+        top: [207, 228, 147],
+        mid: [126, 163, 83],
+        bot: [46, 67, 31],
+        glowA: "rgba(246, 255, 206, 0.24)",
+        glowB: "rgba(204, 232, 134, 0.17)",
+        glowC: "rgba(255, 250, 214, 0.19)"
+      };
+
+      for (let i = 0; i < 24; i++) {
+        bokehBlobs.push({
+          x: Math.random(),
+          y: Math.random(),
+          r: 0.045 + Math.random() * 0.115,
+          vx: (Math.random() - 0.5) * 0.008,
+          vy: (Math.random() - 0.5) * 0.006,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.35 + Math.random() * 0.55,
+          tone: i % 3
+        });
+      }
+
+      function resizeBokeh() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        bokehCanvas.width = Math.floor(window.innerWidth * dpr);
+        bokehCanvas.height = Math.floor(window.innerHeight * dpr);
+      }
+      resizeBokeh();
+
+      function drawBokehToContext(ctx, w, h, elapsed, includeBaseGradient) {
+        if (includeBaseGradient) {
+          const grad = ctx.createLinearGradient(0, 0, 0, h);
+          grad.addColorStop(0, "rgb(" + bokehPalette.top.join(",") + ")");
+          grad.addColorStop(0.5, "rgb(" + bokehPalette.mid.join(",") + ")");
+          grad.addColorStop(1, "rgb(" + bokehPalette.bot.join(",") + ")");
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, w, h);
+
+          const sunGlow = ctx.createRadialGradient(w * 0.24, h * 0.16, 0, w * 0.24, h * 0.16, Math.max(w, h) * 0.65);
+          sunGlow.addColorStop(0, "rgba(245, 255, 202, 0.42)");
+          sunGlow.addColorStop(1, "rgba(245, 255, 202, 0)");
+          ctx.fillStyle = sunGlow;
+          ctx.fillRect(0, 0, w, h);
+        } else {
+          ctx.clearRect(0, 0, w, h);
+        }
+
+        const minDim = Math.min(w, h);
+        for (let i = 0; i < bokehBlobs.length; i++) {
+          const b = bokehBlobs[i];
+          const px = ((b.x + Math.sin(elapsed * 0.12 + b.phase) * 0.035 + elapsed * b.vx) % 1.2 + 1.2) % 1.2 - 0.1;
+          const py = ((b.y + Math.cos(elapsed * 0.1 + b.phase) * 0.03 + elapsed * b.vy) % 1.2 + 1.2) % 1.2 - 0.1;
+          const pulse = 0.78 + 0.22 * Math.sin(elapsed * b.speed + b.phase);
+          const rad = b.r * minDim * pulse;
+          const cx = px * w;
+          const cy = py * h;
+          const color = b.tone === 0 ? bokehPalette.glowA : (b.tone === 1 ? bokehPalette.glowB : bokehPalette.glowC);
+
+          const g = ctx.createRadialGradient(cx, cy, rad * 0.08, cx, cy, rad);
+          g.addColorStop(0, color);
+          g.addColorStop(0.62, color.replace(/[\d.]+\)$/, "0.06)"));
+          g.addColorStop(1, "rgba(255,255,255,0)");
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      /* =========================================================================
+         4. PROCEDURAL CANVAS TEXTURES (NO EXTERNAL ASSETS)
+         ========================================================================= */
+
+      function createSeededRandom(seed) {
+        let s = seed >>> 0;
+        return function () {
+          s = (s * 1664525 + 1013904223) >>> 0;
+          return s / 4294967296;
+        };
+      }
+
+      // Warm matte clay-like architectural stone with mortar joints & subtle AO
+      function createStoneTextures(baseColor, mortarColor, seed) {
+        const size = 512;
+        const colorCanvas = document.createElement("canvas");
+        colorCanvas.width = size;
+        colorCanvas.height = size;
+        const ctx = colorCanvas.getContext("2d");
+
+        const bumpCanvas = document.createElement("canvas");
+        bumpCanvas.width = size;
+        bumpCanvas.height = size;
+        const bctx = bumpCanvas.getContext("2d");
+
+        const rand = createSeededRandom(seed || 101);
+
+        ctx.fillStyle = baseColor;
+        ctx.fillRect(0, 0, size, size);
+        bctx.fillStyle = "#c8c8c8";
+        bctx.fillRect(0, 0, size, size);
+
+        // Soft vertical AO gradient for clay architectural model warmth
+        const aoGrad = ctx.createLinearGradient(0, 0, 0, size);
+        aoGrad.addColorStop(0, "rgba(255, 252, 244, 0.08)");
+        aoGrad.addColorStop(0.55, "rgba(195, 180, 155, 0.0)");
+        aoGrad.addColorStop(1, "rgba(110, 96, 76, 0.14)");
+        ctx.fillStyle = aoGrad;
+        ctx.fillRect(0, 0, size, size);
+
+        // Subtle ashlar stone block grid with thin dark joint shadows
+        const rows = 8;
+        const rowH = size / rows;
+        for (let r = 0; r < rows; r++) {
+          const y = r * rowH;
+          const cols = 4;
+          const colW = size / cols;
+          const offset = (r % 2) * (colW * 0.5);
+          for (let c = -1; c <= cols; c++) {
+            const x = c * colW + offset;
+            const toneShift = (rand() - 0.5) * 14;
+            ctx.fillStyle = toneShift > 0
+              ? "rgba(255, 250, 238, " + (toneShift * 0.006).toFixed(3) + ")"
+              : "rgba(128, 112, 88, " + (-toneShift * 0.006).toFixed(3) + ")";
+            ctx.fillRect(x + 1, y + 1, colW - 2, rowH - 2);
+
+            ctx.strokeStyle = mortarColor;
+            ctx.lineWidth = 1.6;
+            ctx.strokeRect(x, y, colW, rowH);
+
+            bctx.strokeStyle = "#626262";
+            bctx.lineWidth = 2.2;
+            bctx.strokeRect(x, y, colW, rowH);
+          }
+        }
+
+        // Fine clay-like mineral grain for subtle roughness variation
+        for (let i = 0; i < 4800; i++) {
+          const x = rand() * size;
+          const y = rand() * size;
+          const v = rand();
+          ctx.fillStyle = v > 0.5 ? "rgba(255,253,246,0.12)" : "rgba(120,106,86,0.09)";
+          ctx.fillRect(x, y, 1.5, 1.5);
+          const bv = Math.floor(175 + (v - 0.5) * 55);
+          bctx.fillStyle = "rgb(" + bv + "," + bv + "," + bv + ")";
+          bctx.fillRect(x, y, 2, 2);
+        }
+
+        const map = trackTex(new THREE.CanvasTexture(colorCanvas));
+        map.wrapS = map.wrapT = THREE.RepeatWrapping;
+        map.encoding = THREE.sRGBEncoding;
+
+        const bump = trackTex(new THREE.CanvasTexture(bumpCanvas));
+        bump.wrapS = bump.wrapT = THREE.RepeatWrapping;
+
+        return { map: map, bump: bump };
+      }
+
+      // Plaza concentric rings + radiating lines + cream/beige/grey checkerboard
+      function createPlazaTextures() {
+        const size = 1024;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+
+        const bumpCanvas = document.createElement("canvas");
+        bumpCanvas.width = size;
+        bumpCanvas.height = size;
+        const bctx = bumpCanvas.getContext("2d");
+
+        const rand = createSeededRandom(303);
+
+        ctx.fillStyle = "#e8dfd0";
+        ctx.fillRect(0, 0, size, size);
+        bctx.fillStyle = "#d2d2d2";
+        bctx.fillRect(0, 0, size, size);
+
+        // Subtle checkerboard paving field
+        const grid = 32;
+        const cell = size / grid;
+        const palette = ["#eee7d8", "#e1d6c1", "#d4cec2", "#e8decb"];
+        for (let gx = 0; gx < grid; gx++) {
+          for (let gy = 0; gy < grid; gy++) {
+            const idx = (gx + gy) % 2 === 0 ? (rand() > 0.35 ? 0 : 3) : (rand() > 0.45 ? 1 : 2);
+            ctx.fillStyle = palette[idx];
+            ctx.fillRect(gx * cell, gy * cell, cell, cell);
+            ctx.strokeStyle = "rgba(116, 106, 90, 0.28)";
+            ctx.lineWidth = 1.2;
+            ctx.strokeRect(gx * cell, gy * cell, cell, cell);
+
+            bctx.strokeStyle = "#7a7a7a";
+            bctx.lineWidth = 1.6;
+            bctx.strokeRect(gx * cell, gy * cell, cell, cell);
+          }
+        }
+
+        // Center of monument in plaza UV space (u=0.5, v=0.52 -> cy = 0.48)
+        const cx = size * 0.5;
+        const cy = size * 0.48;
+
+        // Concentric rings around central memorial base
+        const rings = [145, 195, 250, 315, 385, 455];
+        rings.forEach(function (r, idx) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.strokeStyle = idx % 2 === 0 ? "#c8bfb0" : "#f3ede0";
+          ctx.lineWidth = idx % 2 === 0 ? 12 : 7;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(cx, cy, r + 6, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(95, 86, 72, 0.34)";
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+
+          bctx.beginPath();
+          bctx.arc(cx, cy, r + 6, 0, Math.PI * 2);
+          bctx.strokeStyle = "#686868";
+          bctx.lineWidth = 2;
+          bctx.stroke();
+        });
+
+        // Radiating sightlines around the octagonal base
+        const rays = 16;
+        for (let i = 0; i < rays; i++) {
+          const ang = (i / rays) * Math.PI * 2;
+          const x1 = cx + Math.cos(ang) * 140;
+          const y1 = cy + Math.sin(ang) * 140;
+          const x2 = cx + Math.cos(ang) * 465;
+          const y2 = cy + Math.sin(ang) * 465;
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.strokeStyle = i % 2 === 0 ? "#c6bcae" : "rgba(130, 120, 104, 0.45)";
+          ctx.lineWidth = i % 2 === 0 ? 7 : 2.5;
+          ctx.stroke();
+
+          bctx.beginPath();
+          bctx.moveTo(x1, y1);
+          bctx.lineTo(x2, y2);
+          bctx.strokeStyle = "#767676";
+          bctx.lineWidth = 2.4;
+          bctx.stroke();
+        }
+
+        // Subtle baked ambient-occlusion around central pedestal base
+        const aoCenter = ctx.createRadialGradient(cx, cy, 95, cx, cy, 240);
+        aoCenter.addColorStop(0, "rgba(92, 82, 68, 0.24)");
+        aoCenter.addColorStop(0.55, "rgba(92, 82, 68, 0.08)");
+        aoCenter.addColorStop(1, "rgba(92, 82, 68, 0)");
+        ctx.fillStyle = aoCenter;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 240, 0, Math.PI * 2);
+        ctx.fill();
+
+        const map = trackTex(new THREE.CanvasTexture(canvas));
+        map.encoding = THREE.sRGBEncoding;
+        const bump = trackTex(new THREE.CanvasTexture(bumpCanvas));
+        return { map: map, bump: bump };
+      }
+
+      // Patinated bronze with subtle green verdigris in recesses
+      function createBronzeTextures(baseRgb, patinaRgb, seed) {
+        const size = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+
+        const roughCanvas = document.createElement("canvas");
+        roughCanvas.width = size;
+        roughCanvas.height = size;
+        const rctx = roughCanvas.getContext("2d");
+
+        const rand = createSeededRandom(seed || 505);
+
+        ctx.fillStyle = "rgb(" + baseRgb.join(",") + ")";
+        ctx.fillRect(0, 0, size, size);
+        rctx.fillStyle = "#888888";
+        rctx.fillRect(0, 0, size, size);
+
+        // Mottled verdigris patina clouds
+        for (let i = 0; i < 160; i++) {
+          const x = rand() * size;
+          const y = rand() * size;
+          const rad = 8 + rand() * 34;
+          const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+          const alpha = 0.08 + rand() * 0.24;
+          g.addColorStop(0, "rgba(" + patinaRgb.join(",") + "," + alpha.toFixed(2) + ")");
+          g.addColorStop(1, "rgba(" + patinaRgb.join(",") + ",0)");
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(x, y, rad, 0, Math.PI * 2);
+          ctx.fill();
+
+          const rg = rctx.createRadialGradient(x, y, 0, x, y, rad);
+          rg.addColorStop(0, "rgba(210,210,210,0.45)");
+          rg.addColorStop(1, "rgba(136,136,136,0)");
+          rctx.fillStyle = rg;
+          rctx.beginPath();
+          rctx.arc(x, y, rad, 0, Math.PI * 2);
+          rctx.fill();
+        }
+
+        // Subtle metallic directional sheen grain
+        for (let i = 0; i < 800; i++) {
+          const x = rand() * size;
+          const y = rand() * size;
+          ctx.fillStyle = rand() > 0.5 ? "rgba(220,235,235,0.06)" : "rgba(12,18,22,0.09)";
+          ctx.fillRect(x, y, 2, 1 + rand() * 4);
+        }
+
+        const map = trackTex(new THREE.CanvasTexture(canvas));
+        map.wrapS = map.wrapT = THREE.RepeatWrapping;
+        map.encoding = THREE.sRGBEncoding;
+
+        const rough = trackTex(new THREE.CanvasTexture(roughCanvas));
+        rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
+
+        return { map: map, rough: rough };
+      }
+
+      // Blue-green oxidised copper dome roof with soft mottled patina
+      function createOxidisedCopperTexture() {
+        const size = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const rand = createSeededRandom(707);
+
+        const grad = ctx.createLinearGradient(0, 0, 0, size);
+        grad.addColorStop(0, "#6eb5a8");
+        grad.addColorStop(0.5, "#509689");
+        grad.addColorStop(1, "#3b746b");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+
+        for (let i = 0; i < 140; i++) {
+          const x = rand() * size;
+          const y = rand() * size;
+          const rad = 8 + rand() * 26;
+          const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+          g.addColorStop(0, rand() > 0.45 ? "rgba(155, 220, 206, 0.14)" : "rgba(32, 66, 60, 0.14)");
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(x, y, rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const tex = trackTex(new THREE.CanvasTexture(canvas));
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.encoding = THREE.sRGBEncoding;
+        return tex;
+      }
+
+      // Dark bronze engraved inscription plaque for pedestal front & rear
+      function createBronzePlaqueTextures() {
+        const w = 512, h = 384;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+
+        const bump = document.createElement("canvas");
+        bump.width = w;
+        bump.height = h;
+        const bctx = bump.getContext("2d");
+
+        const bg = ctx.createLinearGradient(0, 0, w, h);
+        bg.addColorStop(0, "#2f2c26");
+        bg.addColorStop(0.5, "#23211d");
+        bg.addColorStop(1, "#332e26");
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, w, h);
+
+        bctx.fillStyle = "#909090";
+        bctx.fillRect(0, 0, w, h);
+
+        ctx.strokeStyle = "#8a7856";
+        ctx.lineWidth = 6;
+        ctx.strokeRect(18, 18, w - 36, h - 36);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(30, 30, w - 60, h - 60);
+
+        bctx.strokeStyle = "#eaeaea";
+        bctx.lineWidth = 6;
+        bctx.strokeRect(18, 18, w - 36, h - 36);
+
+        [[46, 46], [w - 46, 46], [46, h - 46], [w - 46, h - 46]].forEach(function (pt) {
+          ctx.fillStyle = "#9a855e";
+          ctx.beginPath();
+          ctx.arc(pt[0], pt[1], 7, 0, Math.PI * 2);
+          ctx.fill();
+          bctx.fillStyle = "#ffffff";
+          bctx.beginPath();
+          bctx.arc(pt[0], pt[1], 7, 0, Math.PI * 2);
+          bctx.fill();
+        });
+
+        const lines = [
+          "MEMORIAE AETERNAE",
+          "PATRIAE · HONOR · VIRTUS",
+          "ANNO DOMINI MDCCCXCVIII",
+          "ARCHITECTURA ET SCULPTURA",
+          "MONUMENTUM EQUESTRE",
+          "POPULUS GRATUS POSUIT"
+        ];
+        ctx.textAlign = "center";
+        bctx.textAlign = "center";
+        lines.forEach(function (line, i) {
+          const y = 96 + i * 42;
+          const fontSize = i === 0 ? 25 : (i === 2 ? 19 : 16);
+          ctx.font = "600 " + fontSize + "px Georgia, serif";
+          ctx.fillStyle = i === 0 ? "#c8b182" : "#a5926b";
+          ctx.fillText(line, w * 0.5, y);
+
+          bctx.font = ctx.font;
+          bctx.fillStyle = "#dcdcdc";
+          bctx.fillText(line, w * 0.5, y);
+
+          if (i === 0 || i === 4) {
+            ctx.fillStyle = "rgba(180, 158, 114, 0.55)";
+            ctx.fillRect(w * 0.28, y + 14, w * 0.44, 1.5);
+          }
+        });
+
+        const mapTex = trackTex(new THREE.CanvasTexture(canvas));
+        mapTex.encoding = THREE.sRGBEncoding;
+        const bumpTex = trackTex(new THREE.CanvasTexture(bump));
+        return { map: mapTex, bump: bumpTex };
+      }
+
+      // Carved stone bas-relief texture for pedestal sides
+      function createCarvedReliefTextures() {
+        const w = 512, h = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+
+        const bump = document.createElement("canvas");
+        bump.width = w;
+        bump.height = h;
+        const bctx = bump.getContext("2d");
+
+        ctx.fillStyle = "#dfd4be";
+        ctx.fillRect(0, 0, w, h);
+        bctx.fillStyle = "#7a7a7a";
+        bctx.fillRect(0, 0, w, h);
+
+        ctx.strokeStyle = "#b8aa90";
+        ctx.lineWidth = 14;
+        ctx.strokeRect(14, 14, w - 28, h - 28);
+        bctx.strokeStyle = "#d8d8d8";
+        bctx.lineWidth = 14;
+        bctx.strokeRect(14, 14, w - 28, h - 28);
+
+        ctx.strokeStyle = "#efe6d4";
+        ctx.lineWidth = 10;
+        bctx.strokeStyle = "#f2f2f2";
+        bctx.lineWidth = 10;
+
+        for (let s = 0; s < 3; s++) {
+          const sx = 96 + s * 160;
+          ctx.beginPath();
+          ctx.arc(sx, 110, 56, 0.15 * Math.PI, 0.85 * Math.PI);
+          ctx.stroke();
+          bctx.beginPath();
+          bctx.arc(sx, 110, 56, 0.15 * Math.PI, 0.85 * Math.PI);
+          bctx.stroke();
+
+          ctx.fillStyle = "#f2eadb";
+          ctx.beginPath();
+          ctx.arc(sx, 108, 22, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#bfb096";
+          ctx.lineWidth = 3;
+          ctx.stroke();
+
+          bctx.fillStyle = "#ffffff";
+          bctx.beginPath();
+          bctx.arc(sx, 108, 22, 0, Math.PI * 2);
+          bctx.fill();
+        }
+
+        const mapTex = trackTex(new THREE.CanvasTexture(canvas));
+        mapTex.encoding = THREE.sRGBEncoding;
+        const bumpTex = trackTex(new THREE.CanvasTexture(bump));
+        return { map: mapTex, bump: bumpTex };
+      }
+
+      // Dark rectangular corner nameplate driven by PLAQUE_TEXT
+      function createNameplateTexture(labelText) {
+        const w = 1024, h = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+
+        const grad = ctx.createLinearGradient(0, 0, w, h);
+        grad.addColorStop(0, "#24282b");
+        grad.addColorStop(0.5, "#1b1e21");
+        grad.addColorStop(1, "#272b2f");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        for (let y = 0; y < h; y += 3) {
+          ctx.fillStyle = y % 6 === 0 ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.04)";
+          ctx.fillRect(0, y, w, 1.5);
+        }
+
+        ctx.strokeStyle = "rgba(222, 206, 174, 0.55)";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(20, 20, w - 40, h - 40);
+
+        [[38, 38], [w - 38, 38], [38, h - 38], [w - 38, h - 38]].forEach(function (p) {
+          ctx.fillStyle = "#c8b896";
+          ctx.beginPath();
+          ctx.arc(p[0], p[1], 5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        let fontSize = 86;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        do {
+          ctx.font = "500 " + fontSize + "px Georgia, 'Times New Roman', serif";
+          fontSize -= 4;
+        } while (ctx.measureText(labelText).width > w - 130 && fontSize > 28);
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+        ctx.fillText(labelText, w * 0.5 + 2, h * 0.52 + 3);
+        ctx.fillStyle = "#f2e8d4";
+        ctx.fillText(labelText, w * 0.5, h * 0.52);
+
+        const tex = trackTex(new THREE.CanvasTexture(canvas));
+        tex.encoding = THREE.sRGBEncoding;
+        tex.anisotropy = 4;
+        return tex;
+      }
+
+      // Soft pale-grey display slab texture
+      function createSlabTexture() {
+        const size = 512;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const rand = createSeededRandom(909);
+
+        ctx.fillStyle = "#d9dcdb";
+        ctx.fillRect(0, 0, size, size);
+
+        const g = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.15, size * 0.5, size * 0.5, size * 0.72);
+        g.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+        g.addColorStop(1, "rgba(120, 128, 126, 0.14)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+
+        for (let i = 0; i < 3600; i++) {
+          ctx.fillStyle = rand() > 0.5 ? "rgba(255,255,255,0.09)" : "rgba(110,115,115,0.07)";
+          ctx.fillRect(rand() * size, rand() * size, 2, 2);
+        }
+
+        const tex = trackTex(new THREE.CanvasTexture(canvas));
+        tex.encoding = THREE.sRGBEncoding;
+        return tex;
+      }
+
+      // Soft circular particle sprite for floating dust motes
+      function createDustTexture() {
+        const size = 64;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const g = ctx.createRadialGradient(32, 32, 1, 32, 32, 30);
+        g.addColorStop(0, "rgba(255, 250, 224, 0.95)");
+        g.addColorStop(0.4, "rgba(255, 245, 200, 0.45)");
+        g.addColorStop(1, "rgba(255, 245, 200, 0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+        const tex = trackTex(new THREE.CanvasTexture(canvas));
+        tex.encoding = THREE.sRGBEncoding;
+        return tex;
+      }
+
+      /* =========================================================================
+         5. THREE.JS SCENE, RENDERER, LIGHTS & SEASON/CLIPPING SHADER
+         ========================================================================= */
+
+      const container = document.getElementById("webgl-container");
+      const scene = new THREE.Scene();
+
+      const camera = new THREE.PerspectiveCamera(36, window.innerWidth / window.innerHeight, 0.25, 160);
+
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        powerPreference: "high-performance",
+        preserveDrawingBuffer: false
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.06;
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.localClippingEnabled = true;
+      container.appendChild(renderer.domElement);
+
+      // Lighting setup: warm upper-left key, cool right fill, gentle hemisphere + subtle rim
+      const hemiLight = new THREE.HemisphereLight(0xf6f9e4, 0x626b48, 0.66);
+      scene.add(hemiLight);
+
+      const keyLight = new THREE.DirectionalLight(0xfff1d6, 1.82);
+      keyLight.position.set(-16, 24, 15);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.width = 2048;
+      keyLight.shadow.mapSize.height = 2048;
+      keyLight.shadow.camera.near = 4;
+      keyLight.shadow.camera.far = 65;
+      const dShadow = 17.5;
+      keyLight.shadow.camera.left = -dShadow;
+      keyLight.shadow.camera.right = dShadow;
+      keyLight.shadow.camera.top = dShadow;
+      keyLight.shadow.camera.bottom = -dShadow;
+      keyLight.shadow.bias = -0.0005;
+      keyLight.shadow.normalBias = 0.032;
+      scene.add(keyLight);
+
+      const fillLight = new THREE.DirectionalLight(0xbcd8ff, 0.58);
+      fillLight.position.set(18, 12, 8);
+      scene.add(fillLight);
+
+      const rimLight = new THREE.DirectionalLight(0xffe6bd, 0.32);
+      rimLight.position.set(4, 14, -18);
+      scene.add(rimLight);
+
+      // Shared Cross-Section clipping plane (slices along X = 0 when active)
+      const sectionClipPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 22);
+
+      // Shared Season Shader Uniforms (Snow cover & Autumn warmth on upward-facing stone)
+      const seasonUniforms = {
+        uSnowAmount: { value: 0.0 },
+        uAutumnAmount: { value: 0.0 }
+      };
+
+      function applySeasonShader(material) {
+        material.customProgramCacheKey = function () {
+          return "pocket-world-season-v1";
+        };
+        material.onBeforeCompile = function (shader) {
+          shader.uniforms.uSnowAmount = seasonUniforms.uSnowAmount;
+          shader.uniforms.uAutumnAmount = seasonUniforms.uAutumnAmount;
+
+          shader.vertexShader = shader.vertexShader
+            .replace(
+              "#include <common>",
+              "#include <common>\nvarying vec3 vWorldNormalPW;\nvarying vec3 vWorldPosPW;"
+            )
+            .replace(
+              "#include <worldpos_vertex>",
+              "#include <worldpos_vertex>\n" +
+              "vec3 pwObjNorm = objectNormal;\n" +
+              "#ifdef USE_INSTANCING\n" +
+              "  pwObjNorm = mat3(instanceMatrix) * pwObjNorm;\n" +
+              "#endif\n" +
+              "vWorldNormalPW = normalize(mat3(modelMatrix) * pwObjNorm);\n" +
+              "vec4 pwWorldP = vec4(transformed, 1.0);\n" +
+              "#ifdef USE_INSTANCING\n" +
+              "  pwWorldP = instanceMatrix * pwWorldP;\n" +
+              "#endif\n" +
+              "pwWorldP = modelMatrix * pwWorldP;\n" +
+              "vWorldPosPW = pwWorldP.xyz;"
+            );
+
+          shader.fragmentShader = shader.fragmentShader
+            .replace(
+              "#include <common>",
+              "#include <common>\n" +
+              "uniform float uSnowAmount;\n" +
+              "uniform float uAutumnAmount;\n" +
+              "varying vec3 vWorldNormalPW;\n" +
+              "varying vec3 vWorldPosPW;"
+            )
+            .replace(
+              "#include <color_fragment>",
+              "#include <color_fragment>\n" +
+              "if (uAutumnAmount > 0.001) {\n" +
+              "  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.06, 0.98, 0.88), uAutumnAmount * 0.42);\n" +
+              "}\n" +
+              "if (uSnowAmount > 0.001) {\n" +
+              "  float sn1 = sin(vWorldPosPW.x * 2.4 + vWorldPosPW.z * 1.8) * 0.5 + 0.5;\n" +
+              "  float sn2 = cos(vWorldPosPW.x * 5.7 - vWorldPosPW.z * 4.9) * 0.5 + 0.5;\n" +
+              "  float snNoise = sn1 * 0.65 + sn2 * 0.35;\n" +
+              "  float upSlope = smoothstep(0.46 - uSnowAmount * 0.18 + (snNoise - 0.5) * 0.2, 0.78, vWorldNormalPW.y);\n" +
+              "  float aboveSlab = smoothstep(-0.15, 0.12, vWorldPosPW.y);\n" +
+              "  float snowMask = clamp(upSlope * aboveSlab * uSnowAmount * 0.94, 0.0, 0.94);\n" +
+              "  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.95, 0.97, 1.0), snowMask);\n" +
+              "}"
+            )
+            .replace(
+              "#include <roughnessmap_fragment>",
+              "#include <roughnessmap_fragment>\n" +
+              "if (uSnowAmount > 0.001) {\n" +
+              "  float upR = smoothstep(0.45, 0.78, vWorldNormalPW.y) * smoothstep(-0.15, 0.12, vWorldPosPW.y);\n" +
+              "  roughnessFactor = mix(roughnessFactor, 0.90, clamp(upR * uSnowAmount, 0.0, 1.0));\n" +
+              "}"
+            );
+        };
+        return material;
+      }
+
+      /* =========================================================================
+         6. MATERIALS PALETTE (PER-PART CLONES FOR CLEAN HOVER HIGHLIGHTS)
+         ========================================================================= */
+
+      const stoneTexCream = createStoneTextures("#ede4d3", "rgba(122, 108, 86, 0.34)", 101);
+      const stoneTexSand  = createStoneTextures("#dfd2ba", "rgba(110, 96, 76, 0.38)", 202);
+      const plazaTex      = createPlazaTextures();
+      const darkBronzeTex = createBronzeTextures([42, 54, 62], [78, 128, 114], 404);
+      const patinaFigTex  = createBronzeTextures([76, 104, 96], [116, 162, 144], 505);
+      const darkCapTex    = createBronzeTextures([44, 41, 36], [70, 96, 86], 606);
+      const copperRoofTex = createOxidisedCopperTexture();
+      const plaqueTex     = createBronzePlaqueTextures();
+      const reliefTex     = createCarvedReliefTextures();
+      const slabTex       = createSlabTexture();
+      const nameplateTex  = createNameplateTexture(PLAQUE_TEXT);
+
+      const allWireframeMaterials = [];
+      const foliageMaterials = [];
+      const lampBulbMaterials = [];
+      const nightPointLights = [];
+      const partMaterialsMap = {
+        equestrian: [],
+        pedestal: [],
+        colonnade: [],
+        pavilions: [],
+        plaza: [],
+        stairs: []
+      };
+
+      function makeStandardMat(opts, partKey, allowSeason, allowClip) {
+        const cfg = Object.assign({
+          roughness: 0.85,
+          metalness: 0.03
+        }, opts);
+        if (allowClip !== false) {
+          cfg.clippingPlanes = [sectionClipPlane];
+          cfg.clipShadows = true;
+        }
+        const m = trackMat(new THREE.MeshStandardMaterial(cfg));
+        if (allowSeason !== false) {
+          applySeasonShader(m);
+        }
+        allWireframeMaterials.push(m);
+        if (partKey && partMaterialsMap[partKey]) {
+          partMaterialsMap[partKey].push(m);
+        }
+        return m;
+      }
+
+      function makeStoneMat(partKey, sandTone, doubleSided) {
+        const tex = sandTone ? stoneTexSand : stoneTexCream;
+        return makeStandardMat({
+          color: sandTone ? 0xe5d8c2 : 0xf2eadb,
+          map: tex.map,
+          bumpMap: tex.bump,
+          bumpScale: 0.025,
+          roughness: 0.86,
+          metalness: 0.02,
+          side: doubleSided ? THREE.DoubleSide : THREE.FrontSide
+        }, partKey, true, true);
+      }
+
+      // Dedicated per-part material sets so hovering only lights up the hovered element
+      const matSlab = makeStandardMat({
+        color: 0xdcdfde,
+        map: slabTex,
+        roughness: 0.82,
+        metalness: 0.02
+      }, null, true, false);
+
+      const matNameplateFrame = makeStandardMat({
+        color: 0x262a2d,
+        roughness: 0.48,
+        metalness: 0.35
+      }, null, false, false);
+
+      const matNameplateFace = makeStandardMat({
+        color: 0xffffff,
+        map: nameplateTex,
+        roughness: 0.42,
+        metalness: 0.25
+      }, null, false, false);
+
+      const matPlazaFloor = makeStandardMat({
+        color: 0xf6f0e4,
+        map: plazaTex.map,
+        bumpMap: plazaTex.bump,
+        bumpScale: 0.02,
+        roughness: 0.88,
+        metalness: 0.01
+      }, "plaza", true, true);
+
+      const matPlazaTileInstanced = makeStandardMat({
+        color: 0xffffff,
+        roughness: 0.86,
+        metalness: 0.02
+      }, "plaza", true, true);
+
+      const matPlazaStone     = makeStoneMat("plaza", false, false);
+      const matStairsStone    = makeStoneMat("stairs", false, false);
+      const matStairsSand     = makeStoneMat("stairs", true, false);
+      const matPedestalStone  = makeStoneMat("pedestal", false, true);
+      const matPedestalSand   = makeStoneMat("pedestal", true, true);
+      const matColonnadeStone = makeStoneMat("colonnade", false, true);
+      const matColonnadeSand  = makeStoneMat("colonnade", true, true);
+      const matPavilionStone  = makeStoneMat("pavilions", false, true);
+      const matPavilionSand   = makeStoneMat("pavilions", true, true);
+
+      const matInteriorStone = makeStandardMat({
+        color: 0xcabaa0,
+        map: stoneTexSand.map,
+        bumpMap: stoneTexSand.bump,
+        bumpScale: 0.03,
+        roughness: 0.9,
+        metalness: 0.02,
+        side: THREE.DoubleSide
+      }, "pedestal", false, true);
+
+      const matSectionAccent = makeStandardMat({
+        color: 0xb6725a,
+        roughness: 0.78,
+        metalness: 0.05,
+        side: THREE.DoubleSide
+      }, null, false, true);
+
+      const matEquestrianBronze = makeStandardMat({
+        color: 0x5c7280,
+        map: darkBronzeTex.map,
+        roughnessMap: darkBronzeTex.rough,
+        roughness: 0.39,
+        metalness: 0.56
+      }, "equestrian", true, true);
+
+      const matPedestalBronzeDark = makeStandardMat({
+        color: 0x62584a,
+        map: darkCapTex.map,
+        roughnessMap: darkCapTex.rough,
+        roughness: 0.42,
+        metalness: 0.56
+      }, "pedestal", true, true);
+
+      const matAllegoricalPatina = makeStandardMat({
+        color: 0x7da295,
+        map: patinaFigTex.map,
+        roughnessMap: patinaFigTex.rough,
+        roughness: 0.48,
+        metalness: 0.42
+      }, "pedestal", true, true);
+
+      const matPavilionPatina = makeStandardMat({
+        color: 0x789c90,
+        map: patinaFigTex.map,
+        roughnessMap: patinaFigTex.rough,
+        roughness: 0.48,
+        metalness: 0.42
+      }, "pavilions", true, true);
+
+      const matLionBronze = makeStandardMat({
+        color: 0x5b6a70,
+        map: darkBronzeTex.map,
+        roughnessMap: darkBronzeTex.rough,
+        roughness: 0.42,
+        metalness: 0.54
+      }, "stairs", true, true);
+
+      const matCopperDome = makeStandardMat({
+        color: 0x6ab4a5,
+        map: copperRoofTex,
+        roughness: 0.56,
+        metalness: 0.34,
+        side: THREE.DoubleSide
+      }, "pedestal", true, true);
+
+      const matPavilionRoof = makeStandardMat({
+        color: 0x87998f,
+        map: copperRoofTex,
+        roughness: 0.68,
+        metalness: 0.22,
+        side: THREE.DoubleSide
+      }, "pavilions", true, true);
+
+      const matBronzePlaque = makeStandardMat({
+        color: 0xffffff,
+        map: plaqueTex.map,
+        bumpMap: plaqueTex.bump,
+        bumpScale: 0.03,
+        roughness: 0.42,
+        metalness: 0.58
+      }, "pedestal", false, true);
+
+      const matCarvedRelief = makeStandardMat({
+        color: 0xf1e8d6,
+        map: reliefTex.map,
+        bumpMap: reliefTex.bump,
+        bumpScale: 0.045,
+        roughness: 0.84,
+        metalness: 0.02
+      }, "pedestal", true, true);
+
+      const matTerracotta = makeStandardMat({
+        color: 0xc26e49,
+        roughness: 0.84,
+        metalness: 0.02
+      }, "stairs", true, true);
+
+      const matLanternMetal = makeStandardMat({
+        color: 0x2e302c,
+        roughness: 0.5,
+        metalness: 0.65
+      }, "colonnade", false, true);
+
+      function createFoliageMaterial(baseHex) {
+        const m = makeStandardMat({
+          color: baseHex,
+          roughness: 0.82,
+          metalness: 0.02
+        }, null, true, true);
+        m.userData.springColor = new THREE.Color(baseHex);
+        m.userData.autumnColor = new THREE.Color(baseHex).offsetHSL(-0.22, 0.14, 0.04);
+        m.userData.winterColor = new THREE.Color(0x6d8072);
+        foliageMaterials.push(m);
+        return m;
+      }
+
+      const matFoliageA = createFoliageMaterial(0x528041);
+      const matFoliageB = createFoliageMaterial(0x6b9a4d);
+      const matFoliageC = createFoliageMaterial(0x3f6b36);
+
+      /* =========================================================================
+         7. SCENE HIERARCHY & LAYER GROUPS (FOR FLOAT, EXPLODE & RAYCAST)
+         ========================================================================= */
+
+      // Root floating miniature container (slightly tilted like a collectible model)
+      const dioramaRoot = new THREE.Group();
+      dioramaRoot.rotation.set(0.018, 0, -0.02);
+      scene.add(dioramaRoot);
+
+      const slabGroup      = new THREE.Group();
+      const layerPlaza     = new THREE.Group();
+      const layerBase      = new THREE.Group();
+      const layerColonnade = new THREE.Group();
+      const layerPavilions = new THREE.Group();
+      const layerPedestal  = new THREE.Group();
+      const layerDomeCap   = new THREE.Group();
+      const layerStatue    = new THREE.Group();
+      const layerLiving    = new THREE.Group();
+
+      dioramaRoot.add(
+        slabGroup,
+        layerPlaza,
+        layerBase,
+        layerColonnade,
+        layerPavilions,
+        layerPedestal,
+        layerDomeCap,
+        layerStatue,
+        layerLiving
+      );
+
+      // Anchor objects inside layers so info-card leader lines follow Explode & float
+      const partAnchors = {};
+      function registerAnchor(key, parent, x, y, z) {
+        const obj = new THREE.Object3D();
+        obj.position.set(x, y, z);
+        parent.add(obj);
+        partAnchors[key] = obj;
+      }
+
+      const selectableMeshes = [];
+      function tagSelectable(object, partKey) {
+        object.traverse(function (child) {
+          if (child.isMesh) {
+            child.userData.partKey = partKey;
+            selectableMeshes.push(child);
+          }
+        });
+      }
+
+      function enableShadows(object, cast, receive) {
+        object.traverse(function (child) {
+          if (child.isMesh) {
+            if (cast !== undefined) child.castShadow = cast;
+            if (receive !== undefined) child.receiveShadow = receive;
+          }
+        });
+      }
+
+      /* =========================================================================
+         8. PROCEDURAL GEOMETRY HELPERS
+         ========================================================================= */
+
+      function createRoundedRectShape(width, height, radius) {
+        const s = new THREE.Shape();
+        const x = -width * 0.5;
+        const y = -height * 0.5;
+        const r = Math.min(radius, width * 0.5, height * 0.5);
+        s.moveTo(x + r, y);
+        s.lineTo(x + width - r, y);
+        s.quadraticCurveTo(x + width, y, x + width, y + r);
+        s.lineTo(x + width, y + height - r);
+        s.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+        s.lineTo(x + r, y + height);
+        s.quadraticCurveTo(x, y + height, x, y + height - r);
+        s.lineTo(x, y + r);
+        s.quadraticCurveTo(x, y, x + r, y);
+        return s;
+      }
+
+      // Sweep a closed CCW 2D cross-section [(u, y), ...] along a 2D curve in XZ from tStart to tEnd.
+      function createSweptProfileGeometry(curve2D, profile, segments, tStart, tEnd) {
+        const u0 = tStart !== undefined ? tStart : 0;
+        const u1 = tEnd !== undefined ? tEnd : 1;
+        const pts = [];
+        for (let i = 0; i <= segments; i++) {
+          const t = u0 + (i / segments) * (u1 - u0);
+          pts.push(curve2D.getPointAt(t));
+        }
+
+        const normals = [];
+        for (let i = 0; i <= segments; i++) {
+          const prev = pts[Math.max(0, i - 1)];
+          const next = pts[Math.min(segments, i + 1)];
+          const tx = next.x - prev.x;
+          const tz = next.y - prev.y;
+          const len = Math.hypot(tx, tz) || 1;
+          // Outward normal N = (tz, -tx) points away from plaza center
+          normals.push({ x: tz / len, z: -tx / len, tx: tx / len, tz: tz / len });
+        }
+
+        const positions = [];
+        const uvs = [];
+        const indices = [];
+        let vertOffset = 0;
+
+        const m = profile.length;
+        // Separate vertex strip per profile segment preserves sharp architectural edges
+        for (let e = 0; e < m; e++) {
+          const p0 = profile[e];
+          const p1 = profile[(e + 1) % m];
+          const base = vertOffset;
+
+          for (let i = 0; i <= segments; i++) {
+            const c = pts[i];
+            const n = normals[i];
+            const uCoord = (i / segments) * 6;
+
+            positions.push(c.x + n.x * p0[0], p0[1], c.y + n.z * p0[0]);
+            uvs.push(uCoord, 0);
+
+            positions.push(c.x + n.x * p1[0], p1[1], c.y + n.z * p1[0]);
+            uvs.push(uCoord, 1);
+
+            vertOffset += 2;
+          }
+
+          for (let i = 0; i < segments; i++) {
+            const a = base + i * 2;
+            const d = a + 1;
+            const b = a + 2;
+            const c = a + 3;
+            indices.push(a, d, c, a, c, b);
+          }
+        }
+
+        // Cap both ends cleanly using ShapeUtils triangulation
+        const contour = profile.map(function (p) { return new THREE.Vector2(p[0], p[1]); });
+        const capTris = THREE.ShapeUtils.triangulateShape(contour, []);
+
+        const startBase = vertOffset;
+        for (let j = 0; j < m; j++) {
+          positions.push(
+            pts[0].x + normals[0].x * profile[j][0],
+            profile[j][1],
+            pts[0].y + normals[0].z * profile[j][0]
+          );
+          uvs.push(profile[j][0] * 0.5, profile[j][1] * 0.5);
+          vertOffset++;
+        }
+        for (let t = 0; t < capTris.length; t++) {
+          indices.push(startBase + capTris[t][0], startBase + capTris[t][2], startBase + capTris[t][1]);
+        }
+
+        const endBase = vertOffset;
+        for (let j = 0; j < m; j++) {
+          positions.push(
+            pts[segments].x + normals[segments].x * profile[j][0],
+            profile[j][1],
+            pts[segments].y + normals[segments].z * profile[j][0]
+          );
+          uvs.push(profile[j][0] * 0.5, profile[j][1] * 0.5);
+          vertOffset++;
+        }
+        for (let t = 0; t < capTris.length; t++) {
+          indices.push(endBase + capTris[t][0], endBase + capTris[t][1], endBase + capTris[t][2]);
+        }
+
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+        geom.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+        geom.setIndex(indices);
+        geom.computeVertexNormals();
+        return trackGeo(geom);
+      }
+
+      // Turned miniature classical baluster geometry (used for InstancedMesh)
+      function createBalusterGeometry(height, radiusScale) {
+        const h = height || 0.56;
+        const r = radiusScale || 1.0;
+        const pts = [
+          new THREE.Vector2(0.048 * r, 0.00 * h),
+          new THREE.Vector2(0.052 * r, 0.09 * h),
+          new THREE.Vector2(0.030 * r, 0.17 * h),
+          new THREE.Vector2(0.056 * r, 0.34 * h),
+          new THREE.Vector2(0.052 * r, 0.48 * h),
+          new THREE.Vector2(0.026 * r, 0.68 * h),
+          new THREE.Vector2(0.038 * r, 0.80 * h),
+          new THREE.Vector2(0.028 * r, 0.89 * h),
+          new THREE.Vector2(0.048 * r, 0.94 * h),
+          new THREE.Vector2(0.048 * r, 1.00 * h)
+        ];
+        return trackGeo(new THREE.LatheGeometry(pts, 10));
+      }
+
+      // Classical stone urn geometry
+      function createUrnGeometry() {
+        const pts = [
+          new THREE.Vector2(0.14, 0.0),
+          new THREE.Vector2(0.15, 0.05),
+          new THREE.Vector2(0.065, 0.13),
+          new THREE.Vector2(0.08, 0.19),
+          new THREE.Vector2(0.17, 0.34),
+          new THREE.Vector2(0.15, 0.45),
+          new THREE.Vector2(0.10, 0.50),
+          new THREE.Vector2(0.16, 0.55),
+          new THREE.Vector2(0.13, 0.58),
+          new THREE.Vector2(0.04, 0.62),
+          new THREE.Vector2(0.005, 0.66)
+        ];
+        return trackGeo(new THREE.LatheGeometry(pts, 14));
+      }
+
+      const sharedUrnGeo = createUrnGeometry();
+
+      // Terracotta pot holding lush layered greenery
+      const sharedPotGeo = trackGeo(new THREE.LatheGeometry([
+        new THREE.Vector2(0.13, 0.0),
+        new THREE.Vector2(0.18, 0.25),
+        new THREE.Vector2(0.21, 0.28),
+        new THREE.Vector2(0.21, 0.34),
+        new THREE.Vector2(0.17, 0.34),
+        new THREE.Vector2(0.15, 0.28)
+      ], 14));
+      const sharedSoilGeo = trackGeo(new THREE.CylinderGeometry(0.16, 0.15, 0.04, 12));
+      const matSoil = makeStandardMat({ color: 0x4b3c2f, roughness: 0.95 }, null, true, true);
+      const sharedLeafClusterGeo = trackGeo(new THREE.DodecahedronGeometry(0.15, 1));
+
+      function createTerracottaPlanter(scale) {
+        const g = new THREE.Group();
+        const pot = new THREE.Mesh(sharedPotGeo, matTerracotta);
+        g.add(pot);
+
+        const soil = new THREE.Mesh(sharedSoilGeo, matSoil);
+        soil.position.y = 0.29;
+        g.add(soil);
+
+        const foliageMats = [matFoliageA, matFoliageB, matFoliageC];
+        const offsets = [
+          [0, 0.47, 0, 1.12],
+          [0.11, 0.40, 0.06, 0.78],
+          [-0.10, 0.42, 0.08, 0.82],
+          [0.03, 0.41, -0.11, 0.76],
+          [-0.08, 0.53, -0.04, 0.66],
+          [0.06, 0.56, 0.04, 0.62]
+        ];
+        offsets.forEach(function (o, idx) {
+          const bush = new THREE.Mesh(sharedLeafClusterGeo, foliageMats[idx % 3]);
+          bush.position.set(o[0], o[1], o[2]);
+          bush.scale.set(o[3], o[3] * 0.92, o[3]);
+          bush.rotation.set(idx * 0.8, idx * 1.3, 0);
+          g.add(bush);
+        });
+
+        g.scale.setScalar(scale || 1.0);
+        enableShadows(g, true, true);
+        return g;
+      }
+
+      // Classical bronze lantern (hanging or standing post)
+      const sharedLanternCageGeo = trackGeo(new THREE.CylinderGeometry(0.085, 0.06, 0.19, 6));
+      const sharedLanternCapGeo  = trackGeo(new THREE.ConeGeometry(0.12, 0.11, 6));
+      const sharedLanternPostGeo = trackGeo(new THREE.CylinderGeometry(0.032, 0.055, 1.08, 8));
+
+      function createLantern(isStanding) {
+        const g = new THREE.Group();
+        const bulbMat = makeStandardMat({
+          color: 0xfff0cc,
+          emissive: 0xffb347,
+          emissiveIntensity: 0.12,
+          roughness: 0.35,
+          metalness: 0.05
+        }, null, false, true);
+        lampBulbMaterials.push(bulbMat);
+
+        if (isStanding) {
+          const post = new THREE.Mesh(sharedLanternPostGeo, matLanternMetal);
+          post.position.y = 0.54;
+          g.add(post);
+
+          const base = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.09, 0.13, 0.12, 8)), matLanternMetal);
+          base.position.y = 0.06;
+          g.add(base);
+
+          const glass = new THREE.Mesh(sharedLanternCageGeo, bulbMat);
+          glass.position.y = 1.18;
+          g.add(glass);
+
+          const cap = new THREE.Mesh(sharedLanternCapGeo, matLanternMetal);
+          cap.position.y = 1.32;
+          g.add(cap);
+        } else {
+          const chain = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.012, 0.012, 0.24, 6)), matLanternMetal);
+          chain.position.y = -0.12;
+          g.add(chain);
+
+          const cap = new THREE.Mesh(sharedLanternCapGeo, matLanternMetal);
+          cap.position.y = -0.26;
+          g.add(cap);
+
+          const glass = new THREE.Mesh(sharedLanternCageGeo, bulbMat);
+          glass.position.y = -0.39;
+          g.add(glass);
+
+          const tip = new THREE.Mesh(trackGeo(new THREE.ConeGeometry(0.05, 0.08, 6)), matLanternMetal);
+          tip.rotation.x = Math.PI;
+          tip.position.y = -0.52;
+          g.add(tip);
+        }
+        return g;
+      }
+
+      /* =========================================================================
+         9. SCULPTURAL BUILDERS (FIGURES, LIONS, EQUESTRIAN STATUE)
+         ========================================================================= */
+
+      // Standing classical allegorical bronze figure (used on pedestal & pavilion niches)
+      function createAllegoricalFigure(variant, material) {
+        const g = new THREE.Group();
+
+        const robePts = [
+          new THREE.Vector2(0.19, 0.0),
+          new THREE.Vector2(0.18, 0.14),
+          new THREE.Vector2(0.14, 0.42),
+          new THREE.Vector2(0.16, 0.62),
+          new THREE.Vector2(0.11, 0.78),
+          new THREE.Vector2(0.14, 0.98),
+          new THREE.Vector2(0.16, 1.12),
+          new THREE.Vector2(0.08, 1.21)
+        ];
+        const robe = new THREE.Mesh(trackGeo(new THREE.LatheGeometry(robePts, 14)), material);
+        g.add(robe);
+
+        const mantle = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.145, 0.042, 8, 16)), material);
+        mantle.position.set(0, 0.96, 0.01);
+        mantle.rotation.set(0.55, 0.25, 0.65);
+        g.add(mantle);
+
+        const head = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.105, 12, 10)), material);
+        head.position.set(0, 1.32, 0.015);
+        head.scale.set(0.92, 1.08, 0.98);
+        g.add(head);
+
+        const crown = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.085, 0.022, 6, 12)), material);
+        crown.position.set(0, 1.38, 0.0);
+        crown.rotation.x = Math.PI * 0.42;
+        g.add(crown);
+
+        const armGeo = trackGeo(new THREE.CylinderGeometry(0.036, 0.044, 0.42, 8));
+        const leftArm = new THREE.Mesh(armGeo, material);
+        const rightArm = new THREE.Mesh(armGeo, material);
+
+        if (variant % 2 === 0) {
+          rightArm.position.set(0.19, 1.24, 0.08);
+          rightArm.rotation.set(-0.55, 0, -0.58);
+          leftArm.position.set(-0.18, 0.92, 0.05);
+          leftArm.rotation.set(0.22, 0, 0.28);
+
+          const wreath = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.09, 0.02, 6, 12)), material);
+          wreath.position.set(0.32, 1.44, 0.18);
+          wreath.rotation.y = 0.4;
+          g.add(wreath);
+        } else {
+          rightArm.position.set(0.19, 1.04, 0.07);
+          rightArm.rotation.set(-0.4, 0, -0.35);
+          leftArm.position.set(-0.18, 0.88, 0.04);
+          leftArm.rotation.set(0.15, 0, 0.22);
+
+          const staff = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.018, 0.02, 1.62, 8)), material);
+          staff.position.set(0.27, 0.82, 0.14);
+          g.add(staff);
+
+          const shield = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.17, 0.17, 0.035, 14)), material);
+          shield.rotation.set(Math.PI * 0.5, 0, 0.3);
+          shield.position.set(-0.22, 0.62, 0.10);
+          g.add(shield);
+        }
+        g.add(leftArm, rightArm);
+
+        enableShadows(g, true, true);
+        return g;
+      }
+
+      // Crouching snarling bronze lion / guardian beast
+      function createBronzeLion(material, mirrorX) {
+        const g = new THREE.Group();
+
+        const pad = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.56, 0.07, 1.04)), material);
+        pad.position.y = 0.035;
+        g.add(pad);
+
+        const chest = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.24, 14, 12)), material);
+        chest.scale.set(0.95, 1.02, 1.25);
+        chest.position.set(0, 0.34, 0.16);
+        g.add(chest);
+
+        const torso = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.17, 0.21, 0.46, 12)), material);
+        torso.rotation.x = Math.PI * 0.45;
+        torso.position.set(0, 0.27, -0.08);
+        g.add(torso);
+
+        const haunch = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.20, 12, 10)), material);
+        haunch.scale.set(0.98, 0.85, 1.15);
+        haunch.position.set(0, 0.22, -0.27);
+        g.add(haunch);
+
+        for (let m = 0; m < 3; m++) {
+          const mane = new THREE.Mesh(trackGeo(new THREE.DodecahedronGeometry(0.25 - m * 0.025, 1)), material);
+          mane.scale.set(1.02, 1.08, 0.92);
+          mane.position.set(0, 0.42 + m * 0.03, 0.24 + m * 0.04);
+          mane.rotation.set(m * 0.5, m * 0.9, 0);
+          g.add(mane);
+        }
+
+        const headGroup = new THREE.Group();
+        headGroup.position.set(0, 0.48, 0.39);
+        headGroup.rotation.x = -0.14;
+        headGroup.rotation.y = mirrorX ? -0.18 : 0.18;
+
+        const skull = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.14, 12, 10)), material);
+        skull.scale.set(1.0, 0.94, 1.12);
+        headGroup.add(skull);
+
+        const upperSnout = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.13, 0.08, 0.16)), material);
+        upperSnout.position.set(0, 0.01, 0.12);
+        headGroup.add(upperSnout);
+
+        const lowerJaw = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.10, 0.045, 0.13)), material);
+        lowerJaw.position.set(0, -0.07, 0.10);
+        lowerJaw.rotation.x = 0.26;
+        headGroup.add(lowerJaw);
+
+        const earGeo = trackGeo(new THREE.SphereGeometry(0.042, 8, 8));
+        [-0.095, 0.095].forEach(function (ex) {
+          const ear = new THREE.Mesh(earGeo, material);
+          ear.position.set(ex, 0.11, -0.01);
+          headGroup.add(ear);
+        });
+        g.add(headGroup);
+
+        const legGeo = trackGeo(new THREE.CylinderGeometry(0.055, 0.068, 0.36, 10));
+        const pawGeo = trackGeo(new THREE.SphereGeometry(0.075, 10, 8));
+        [-0.14, 0.14].forEach(function (lx, i) {
+          const fl = new THREE.Mesh(legGeo, material);
+          fl.position.set(lx, 0.18, 0.34 + i * 0.03);
+          fl.rotation.x = -0.78;
+          g.add(fl);
+
+          const paw = new THREE.Mesh(pawGeo, material);
+          paw.scale.set(1.0, 0.55, 1.4);
+          paw.position.set(lx, 0.095, 0.44 + i * 0.03);
+          g.add(paw);
+
+          const hl = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.12, 10, 8)), material);
+          hl.scale.set(0.7, 0.95, 1.35);
+          hl.position.set(lx * 1.1, 0.16, -0.26);
+          g.add(hl);
+
+          const hp = new THREE.Mesh(pawGeo, material);
+          hp.scale.set(0.95, 0.55, 1.35);
+          hp.position.set(lx * 1.15, 0.09, -0.14);
+          g.add(hp);
+        });
+
+        const tailSide = mirrorX ? -1 : 1;
+        const tailCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(0, 0.25, -0.44),
+          new THREE.Vector3(0.18 * tailSide, 0.15, -0.46),
+          new THREE.Vector3(0.24 * tailSide, 0.11, -0.24),
+          new THREE.Vector3(0.18 * tailSide, 0.12, -0.06)
+        ]);
+        const tail = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(tailCurve, 14, 0.028, 7, false)), material);
+        g.add(tail);
+
+        enableShadows(g, true, true);
+        return g;
+      }
+
+      // Heroic sculpted Equestrian Statue (dynamic horse with raised foreleg + commanding rider)
+      function buildEquestrianStatue(material) {
+        const g = new THREE.Group();
+
+        const plinth = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.18, 0.15, 2.08)), material);
+        plinth.position.set(0, 0.075, 0.02);
+        g.add(plinth);
+
+        const horseGroup = new THREE.Group();
+        horseGroup.position.set(0, 0.14, 0.0);
+        g.add(horseGroup);
+
+        // 1. Horse Torso (Lathe oriented horizontally along Z)
+        const barrelPts = [
+          new THREE.Vector2(0.01, -0.92),
+          new THREE.Vector2(0.28, -0.82),
+          new THREE.Vector2(0.39, -0.58),
+          new THREE.Vector2(0.36, -0.18),
+          new THREE.Vector2(0.37, 0.22),
+          new THREE.Vector2(0.41, 0.58),
+          new THREE.Vector2(0.30, 0.84),
+          new THREE.Vector2(0.01, 0.94)
+        ];
+        const barrelGeo = trackGeo(new THREE.LatheGeometry(barrelPts, 20));
+        barrelGeo.rotateX(Math.PI * 0.5);
+        const barrel = new THREE.Mesh(barrelGeo, material);
+        barrel.scale.set(0.86, 1.06, 1.0);
+        barrel.position.set(0, 1.38, 0.0);
+        horseGroup.add(barrel);
+
+        [-0.19, 0.19].forEach(function (sx) {
+          const shoulder = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.24, 14, 12)), material);
+          shoulder.scale.set(0.82, 1.22, 1.15);
+          shoulder.position.set(sx, 1.34, 0.54);
+          horseGroup.add(shoulder);
+
+          const croup = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.25, 14, 12)), material);
+          croup.scale.set(0.86, 1.14, 1.22);
+          croup.position.set(sx, 1.39, -0.55);
+          horseGroup.add(croup);
+        });
+
+        // 2. Arched Proud Neck & Sculpted Mane
+        const neckPts = [
+          new THREE.Vector2(0.29, 0.0),
+          new THREE.Vector2(0.25, 0.30),
+          new THREE.Vector2(0.20, 0.62),
+          new THREE.Vector2(0.16, 0.90),
+          new THREE.Vector2(0.13, 1.04)
+        ];
+        const neck = new THREE.Mesh(trackGeo(new THREE.LatheGeometry(neckPts, 16)), material);
+        neck.scale.set(0.76, 1.0, 1.14);
+        neck.position.set(0, 1.46, 0.64);
+        neck.rotation.x = 0.52;
+        horseGroup.add(neck);
+
+        const maneShape = new THREE.Shape();
+        maneShape.moveTo(0, 0);
+        maneShape.quadraticCurveTo(0.24, 0.38, 0.10, 0.92);
+        maneShape.lineTo(-0.08, 0.88);
+        maneShape.quadraticCurveTo(-0.02, 0.42, -0.10, 0.02);
+        maneShape.closePath();
+        const maneGeo = trackGeo(new THREE.ExtrudeGeometry(maneShape, {
+          depth: 0.08,
+          bevelEnabled: true,
+          bevelThickness: 0.025,
+          bevelSize: 0.02,
+          bevelSegments: 2
+        }));
+        maneGeo.translate(0, 0, -0.04);
+        maneGeo.rotateY(Math.PI * 0.5);
+        const mane = new THREE.Mesh(maneGeo, material);
+        mane.position.set(0, 1.62, 0.56);
+        mane.rotation.x = 0.54;
+        horseGroup.add(mane);
+
+        // 3. Lifted Sculpted Horse Head
+        const headGroup = new THREE.Group();
+        headGroup.position.set(0, 2.34, 1.16);
+        headGroup.rotation.x = 0.72;
+
+        const cranium = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.17, 14, 12)), material);
+        cranium.scale.set(0.82, 1.0, 1.12);
+        headGroup.add(cranium);
+
+        const muzzlePts = [
+          new THREE.Vector2(0.145, 0.0),
+          new THREE.Vector2(0.115, 0.24),
+          new THREE.Vector2(0.095, 0.46),
+          new THREE.Vector2(0.075, 0.54),
+          new THREE.Vector2(0.02, 0.57)
+        ];
+        const muzzle = new THREE.Mesh(trackGeo(new THREE.LatheGeometry(muzzlePts, 14)), material);
+        muzzle.scale.set(0.84, 1.0, 1.05);
+        muzzle.position.set(0, -0.04, 0.04);
+        muzzle.rotation.x = Math.PI * 0.5;
+        headGroup.add(muzzle);
+
+        const hEarGeo = trackGeo(new THREE.ConeGeometry(0.036, 0.14, 8));
+        [-0.075, 0.075].forEach(function (ex) {
+          const ear = new THREE.Mesh(hEarGeo, material);
+          ear.position.set(ex, 0.16, -0.04);
+          ear.rotation.set(-0.35, 0, ex > 0 ? -0.18 : 0.18);
+          headGroup.add(ear);
+        });
+        horseGroup.add(headGroup);
+
+        // 4. Anatomical Articulated Horse Legs
+        function addLimbSegment(parent, p1, p2, r1, r2) {
+          const v1 = new THREE.Vector3(p1[0], p1[1], p1[2]);
+          const v2 = new THREE.Vector3(p2[0], p2[1], p2[2]);
+          const dir = new THREE.Vector3().subVectors(v2, v1);
+          const len = dir.length();
+          const cyl = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(r2, r1, len, 10)), material);
+          cyl.position.copy(v1).addScaledVector(dir, 0.5);
+          cyl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+          parent.add(cyl);
+
+          const joint = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(r2 * 1.06, 8, 8)), material);
+          joint.position.copy(v2);
+          parent.add(joint);
+        }
+
+        function addHoof(parent, pos, rotX) {
+          const hoof = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.052, 0.072, 0.09, 10)), material);
+          hoof.position.set(pos[0], pos[1], pos[2]);
+          if (rotX) hoof.rotation.x = rotX;
+          parent.add(hoof);
+        }
+
+        // Planted Front-Left leg
+        addLimbSegment(horseGroup, [-0.21, 1.24, 0.54], [-0.21, 0.68, 0.58], 0.125, 0.072);
+        addLimbSegment(horseGroup, [-0.21, 0.68, 0.58], [-0.21, 0.17, 0.61], 0.068, 0.050);
+        addLimbSegment(horseGroup, [-0.21, 0.17, 0.61], [-0.21, 0.05, 0.67], 0.050, 0.052);
+        addHoof(horseGroup, [-0.21, 0.045, 0.68], 0);
+
+        // Dynamically Raised Front-Right Foreleg
+        addLimbSegment(horseGroup, [0.21, 1.25, 0.58], [0.22, 1.02, 1.06], 0.125, 0.074);
+        addLimbSegment(horseGroup, [0.22, 1.02, 1.06], [0.22, 0.54, 0.90], 0.070, 0.050);
+        addLimbSegment(horseGroup, [0.22, 0.54, 0.90], [0.22, 0.43, 0.80], 0.050, 0.052);
+        addHoof(horseGroup, [0.22, 0.41, 0.78], 0.65);
+
+        // Rear-Left leg
+        addLimbSegment(horseGroup, [-0.21, 1.32, -0.56], [-0.22, 0.74, -0.78], 0.145, 0.078);
+        addLimbSegment(horseGroup, [-0.22, 0.74, -0.78], [-0.22, 0.18, -0.74], 0.072, 0.050);
+        addLimbSegment(horseGroup, [-0.22, 0.18, -0.74], [-0.22, 0.05, -0.68], 0.050, 0.052);
+        addHoof(horseGroup, [-0.22, 0.045, -0.67], 0);
+
+        // Rear-Right leg
+        addLimbSegment(horseGroup, [0.21, 1.32, -0.52], [0.22, 0.75, -0.56], 0.145, 0.078);
+        addLimbSegment(horseGroup, [0.22, 0.75, -0.56], [0.22, 0.18, -0.44], 0.072, 0.050);
+        addLimbSegment(horseGroup, [0.22, 0.18, -0.44], [0.22, 0.05, -0.37], 0.050, 0.052);
+        addHoof(horseGroup, [0.22, 0.045, -0.36], 0);
+
+        // 5. Flowing Sculpted Tail
+        const tailCurve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(0, 1.48, -0.86),
+          new THREE.Vector3(0.02, 1.42, -1.12),
+          new THREE.Vector3(0.05, 1.04, -1.22),
+          new THREE.Vector3(0.02, 0.62, -1.15),
+          new THREE.Vector3(-0.02, 0.34, -1.24)
+        ]);
+        const tailMesh = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(tailCurve, 20, 0.078, 10, false)), material);
+        horseGroup.add(tailMesh);
+
+        // 6. Saddle & Draped Saddlecloth
+        const cloth = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.41, 0.43, 0.68, 16, 1, true, -1.35, 2.7)), material);
+        cloth.rotation.z = Math.PI * 0.5;
+        cloth.rotation.y = Math.PI * 0.5;
+        cloth.position.set(0, 1.41, 0.02);
+        horseGroup.add(cloth);
+
+        const saddle = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.56, 0.14, 0.54)), material);
+        saddle.position.set(0, 1.75, 0.02);
+        horseGroup.add(saddle);
+
+        // 7. Heroic Rider with Commanding Extended Arm & Billowing Cloak
+        const riderGroup = new THREE.Group();
+        riderGroup.position.set(0, 1.78, 0.04);
+        horseGroup.add(riderGroup);
+
+        const torsoPts = [
+          new THREE.Vector2(0.18, 0.0),
+          new THREE.Vector2(0.16, 0.20),
+          new THREE.Vector2(0.15, 0.38),
+          new THREE.Vector2(0.21, 0.64),
+          new THREE.Vector2(0.22, 0.78),
+          new THREE.Vector2(0.11, 0.87)
+        ];
+        const riderTorso = new THREE.Mesh(trackGeo(new THREE.LatheGeometry(torsoPts, 14)), material);
+        riderTorso.scale.set(1.08, 1.0, 0.84);
+        riderGroup.add(riderTorso);
+
+        [-1, 1].forEach(function (side) {
+          addLimbSegment(riderGroup, [side * 0.18, 0.08, 0.06], [side * 0.34, -0.26, 0.16], 0.092, 0.072);
+          addLimbSegment(riderGroup, [side * 0.34, -0.26, 0.16], [side * 0.35, -0.68, 0.05], 0.070, 0.055);
+          const boot = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.09, 0.07, 0.19)), material);
+          boot.position.set(side * 0.35, -0.71, 0.11);
+          riderGroup.add(boot);
+        });
+
+        const rHead = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.125, 12, 10)), material);
+        rHead.position.set(0, 0.99, 0.03);
+        rHead.scale.set(0.92, 1.06, 0.98);
+        riderGroup.add(rHead);
+
+        const hatShape = new THREE.Shape();
+        hatShape.moveTo(-0.24, 0.0);
+        hatShape.quadraticCurveTo(0.0, 0.24, 0.24, 0.0);
+        hatShape.lineTo(0.18, -0.04);
+        hatShape.lineTo(-0.18, -0.04);
+        hatShape.closePath();
+        const hatGeo = trackGeo(new THREE.ExtrudeGeometry(hatShape, {
+          depth: 0.14,
+          bevelEnabled: true,
+          bevelThickness: 0.025,
+          bevelSize: 0.02,
+          bevelSegments: 2
+        }));
+        hatGeo.translate(0, 0, -0.07);
+        const hat = new THREE.Mesh(hatGeo, material);
+        hat.position.set(0, 1.07, 0.02);
+        hat.rotation.y = Math.PI * 0.5;
+        riderGroup.add(hat);
+
+        // Left arm holding reins
+        addLimbSegment(riderGroup, [-0.22, 0.72, 0.03], [-0.26, 0.44, 0.22], 0.072, 0.056);
+        addLimbSegment(riderGroup, [-0.26, 0.44, 0.22], [-0.14, 0.34, 0.46], 0.055, 0.044);
+
+        // Right arm extended forward in a commanding gesture
+        addLimbSegment(riderGroup, [0.22, 0.72, 0.04], [0.28, 0.80, 0.44], 0.075, 0.058);
+        addLimbSegment(riderGroup, [0.28, 0.80, 0.44], [0.24, 0.90, 0.82], 0.056, 0.042);
+
+        const baton = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.018, 0.022, 0.36, 8)), material);
+        baton.position.set(0.24, 0.95, 0.96);
+        baton.rotation.x = 1.25;
+        riderGroup.add(baton);
+
+        [-0.08, 0.08].forEach(function (rx) {
+          const reinCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(rx, 2.02, 1.50),
+            new THREE.Vector3(rx * 1.4, 1.98, 0.95),
+            new THREE.Vector3(-0.14, 2.10, 0.48)
+          ]);
+          const rein = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(reinCurve, 12, 0.012, 5, false)), material);
+          horseGroup.add(rein);
+        });
+
+        const capeShape = new THREE.Shape();
+        capeShape.moveTo(0, 0.76);
+        capeShape.quadraticCurveTo(-0.32, 0.54, -0.58, 0.16);
+        capeShape.quadraticCurveTo(-0.74, -0.16, -0.46, -0.34);
+        capeShape.quadraticCurveTo(-0.22, -0.10, -0.06, 0.24);
+        capeShape.closePath();
+        const capeGeo = trackGeo(new THREE.ExtrudeGeometry(capeShape, {
+          depth: 0.44,
+          bevelEnabled: true,
+          bevelThickness: 0.03,
+          bevelSize: 0.025,
+          bevelSegments: 2
+        }));
+        capeGeo.translate(0, 0, -0.22);
+        capeGeo.rotateY(Math.PI * 0.5);
+        const cape = new THREE.Mesh(capeGeo, material);
+        cape.position.set(-0.04, 0.04, -0.12);
+        cape.rotation.y = 0.16;
+        riderGroup.add(cape);
+
+        enableShadows(g, true, true);
+        return g;
+      }
+
+      /* =========================================================================
+         10. DISPLAY SLAB & CORNER NAMEPLATE
+         ========================================================================= */
+
+      function buildDisplaySlab() {
+        const slabW = 26.2;
+        const slabD = 21.4;
+        const slabShape = createRoundedRectShape(slabW, slabD, 1.7);
+        const slabGeo = trackGeo(new THREE.ExtrudeGeometry(slabShape, {
+          depth: 1.45,
+          bevelEnabled: true,
+          bevelThickness: 0.20,
+          bevelSize: 0.24,
+          bevelSegments: 5,
+          curveSegments: 20
+        }));
+        slabGeo.rotateX(-Math.PI * 0.5);
+        slabGeo.computeBoundingBox();
+        slabGeo.translate(0, -slabGeo.boundingBox.max.y, 0);
+
+        const slabMesh = new THREE.Mesh(slabGeo, matSlab);
+        slabMesh.castShadow = true;
+        slabMesh.receiveShadow = true;
+        slabGroup.add(slabMesh);
+
+        // Subtle pale border trim pad on top surface of slab
+        const innerTrim = new THREE.Mesh(
+          trackGeo(new THREE.BoxGeometry(24.0, 0.03, 19.2)),
+          makeStandardMat({ color: 0xcfd3d1, roughness: 0.88, metalness: 0.01 }, null, true, false)
+        );
+        innerTrim.position.y = 0.01;
+        innerTrim.receiveShadow = true;
+        slabGroup.add(innerTrim);
+
+        // Dark rectangular nameplate in front-left corner of the display slab
+        const plateGroup = new THREE.Group();
+        plateGroup.position.set(-8.4, 0.09, 9.05);
+        plateGroup.rotation.x = 0.06;
+
+        const plateBody = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(5.4, 0.17, 1.42)), matNameplateFrame);
+        plateBody.castShadow = true;
+        plateBody.receiveShadow = true;
+        plateGroup.add(plateBody);
+
+        const plateFace = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(5.14, 1.24)), matNameplateFace);
+        plateFace.rotation.x = -Math.PI * 0.5;
+        plateFace.position.y = 0.088;
+        plateGroup.add(plateFace);
+
+        slabGroup.add(plateGroup);
+      }
+
+      /* =========================================================================
+         11. CURVED COLONNADE DEFINITION & ASYMMETRIC PAVILIONS
+         ========================================================================= */
+
+      // 4 Pavilion positions at varying distances from monument center (0, -0.3).
+      // Right arm curves further forward & inward in a tighter dramatic arc!
+      const PAVILION_NODES = [
+        { x: -8.35, z:  3.05 }, // P0: Front-Left End (r ≈ 9.00)
+        { x: -7.15, z: -4.85 }, // P1: Back-Left Corner (r ≈ 8.48)
+        { x:  6.75, z: -5.05 }, // P2: Back-Right Corner (r ≈ 8.24)
+        { x:  6.05, z:  3.95 }  // P3: Front-Right End — tighter inward hook! (r ≈ 7.39)
+      ];
+
+      const COLONNADE_CURVES = [
+        // Left arm (graceful sweeping arc)
+        new THREE.CubicBezierCurve(
+          new THREE.Vector2(PAVILION_NODES[0].x, PAVILION_NODES[0].z),
+          new THREE.Vector2(-9.35,  0.45),
+          new THREE.Vector2(-9.05, -2.55),
+          new THREE.Vector2(PAVILION_NODES[1].x, PAVILION_NODES[1].z)
+        ),
+        // Grand semi-circular back arc
+        new THREE.CubicBezierCurve(
+          new THREE.Vector2(PAVILION_NODES[1].x, PAVILION_NODES[1].z),
+          new THREE.Vector2(-3.35, -7.85),
+          new THREE.Vector2( 3.15, -7.85),
+          new THREE.Vector2(PAVILION_NODES[2].x, PAVILION_NODES[2].z)
+        ),
+        // Right arm (curving forward & hooking inward in a tighter asymmetric arc)
+        new THREE.CubicBezierCurve(
+          new THREE.Vector2(PAVILION_NODES[2].x, PAVILION_NODES[2].z),
+          new THREE.Vector2( 8.95, -2.15),
+          new THREE.Vector2( 8.50,  2.20),
+          new THREE.Vector2(PAVILION_NODES[3].x, PAVILION_NODES[3].z)
+        )
+      ];
+
+      const PLAZA_Y = 0.88;
+      const colonnadeBalusterTransforms = [];
+      const plazaFenceBalusterTransforms = [];
+
+      function buildColonnadeAndPavilions() {
+        const plinthProfile = [
+          [-0.95, PLAZA_Y],
+          [ 0.95, PLAZA_Y],
+          [ 0.95, PLAZA_Y + 0.16],
+          [ 0.84, PLAZA_Y + 0.16],
+          [ 0.84, PLAZA_Y + 0.34],
+          [ 0.76, PLAZA_Y + 0.42],
+          [-0.76, PLAZA_Y + 0.42],
+          [-0.84, PLAZA_Y + 0.34],
+          [-0.84, PLAZA_Y + 0.16],
+          [-0.95, PLAZA_Y + 0.16]
+        ];
+
+        const entabY = PLAZA_Y + 3.45;
+        const entabProfile = [
+          [-0.74, entabY],
+          [ 0.74, entabY],
+          [ 0.74, entabY + 0.24],
+          [ 0.82, entabY + 0.30],
+          [ 0.82, entabY + 0.56],
+          [ 1.02, entabY + 0.66],
+          [ 1.02, entabY + 0.80],
+          [-1.02, entabY + 0.80],
+          [-1.02, entabY + 0.66],
+          [-0.82, entabY + 0.56],
+          [-0.82, entabY + 0.30],
+          [-0.74, entabY + 0.24]
+        ];
+
+        const railBaseY = entabY + 0.80;
+        const curbOuter = [
+          [0.54, railBaseY],
+          [0.86, railBaseY],
+          [0.86, railBaseY + 0.12],
+          [0.54, railBaseY + 0.12]
+        ];
+        const railOuter = [
+          [0.52, railBaseY + 0.62],
+          [0.88, railBaseY + 0.62],
+          [0.92, railBaseY + 0.74],
+          [0.48, railBaseY + 0.74]
+        ];
+        const curbInner = [
+          [-0.86, railBaseY],
+          [-0.54, railBaseY],
+          [-0.54, railBaseY + 0.12],
+          [-0.86, railBaseY + 0.12]
+        ];
+        const railInner = [
+          [-0.88, railBaseY + 0.62],
+          [-0.52, railBaseY + 0.62],
+          [-0.48, railBaseY + 0.74],
+          [-0.92, railBaseY + 0.74]
+        ];
+
+        // Interior structural roof vault beam (revealed by Cross-Section mode)
+        const vaultCoreProfile = [
+          [-0.52, entabY + 0.12],
+          [ 0.52, entabY + 0.12],
+          [ 0.42, entabY + 0.44],
+          [ 0.00, entabY + 0.56],
+          [-0.42, entabY + 0.44]
+        ];
+
+        const columnPositions = [];
+        const pierPositions = [];
+        const lanternPositions = [];
+
+        COLONNADE_CURVES.forEach(function (curve, segIdx) {
+          const segSteps = segIdx === 1 ? 42 : 28;
+          const curveLen = curve.getLength();
+          // Embed cleanly into pavilion side walls while leaving pavilion front statue niches completely unobstructed
+          const sweepTrim = 0.82 / curveLen;
+
+          const plinthMesh = new THREE.Mesh(createSweptProfileGeometry(curve, plinthProfile, segSteps, sweepTrim, 1 - sweepTrim), matColonnadeSand);
+          const entabMesh  = new THREE.Mesh(createSweptProfileGeometry(curve, entabProfile, segSteps, sweepTrim, 1 - sweepTrim), matColonnadeStone);
+          const curbOMesh  = new THREE.Mesh(createSweptProfileGeometry(curve, curbOuter, segSteps, sweepTrim, 1 - sweepTrim), matColonnadeSand);
+          const railOMesh  = new THREE.Mesh(createSweptProfileGeometry(curve, railOuter, segSteps, sweepTrim, 1 - sweepTrim), matColonnadeStone);
+          const curbIMesh  = new THREE.Mesh(createSweptProfileGeometry(curve, curbInner, segSteps, sweepTrim, 1 - sweepTrim), matColonnadeSand);
+          const railIMesh  = new THREE.Mesh(createSweptProfileGeometry(curve, railInner, segSteps, sweepTrim, 1 - sweepTrim), matColonnadeStone);
+          const vaultMesh  = new THREE.Mesh(createSweptProfileGeometry(curve, vaultCoreProfile, segSteps, sweepTrim, 1 - sweepTrim), matInteriorStone);
+
+          layerColonnade.add(plinthMesh, entabMesh, curbOMesh, railOMesh, curbIMesh, railIMesh, vaultMesh);
+
+          const numBays = segIdx === 1 ? 11 : 7;
+          const trim = 1.24 / curveLen;
+          for (let b = 0; b <= numBays; b++) {
+            const t = trim + (b / numBays) * (1 - 2 * trim);
+            const pt = curve.getPointAt(t);
+            const tan = curve.getTangentAt(t).normalize();
+            const nx = tan.y;
+            const nz = -tan.x;
+            const angle = Math.atan2(tan.x, tan.y);
+
+            columnPositions.push({ x: pt.x + nx * 0.52, z: pt.y + nz * 0.52, rotY: angle });
+            columnPositions.push({ x: pt.x - nx * 0.52, z: pt.y - nz * 0.52, rotY: angle });
+
+            if (b % 2 === 0) {
+              pierPositions.push({ x: pt.x + nx * 0.70, z: pt.y + nz * 0.70, rotY: angle });
+              pierPositions.push({ x: pt.x - nx * 0.70, z: pt.y - nz * 0.70, rotY: angle });
+            }
+
+            if (b < numBays && b % 2 === 1) {
+              const midT = trim + ((b + 0.5) / numBays) * (1 - 2 * trim);
+              const mpt = curve.getPointAt(midT);
+              lanternPositions.push({ x: mpt.x, y: entabY, z: mpt.y });
+            }
+          }
+
+          // Hundreds of tiny turned balusters along both outer & inner roofline balustrades
+          const balCount = Math.floor((curveLen - 2.3) / 0.24);
+          for (let k = 0; k <= balCount; k++) {
+            const t = trim + (k / balCount) * (1 - 2 * trim);
+            const pt = curve.getPointAt(t);
+            const tan = curve.getTangentAt(t).normalize();
+            const nx = tan.y;
+            const nz = -tan.x;
+            colonnadeBalusterTransforms.push({ x: pt.x + nx * 0.70, y: railBaseY + 0.11, z: pt.y + nz * 0.70 });
+            colonnadeBalusterTransforms.push({ x: pt.x - nx * 0.70, y: railBaseY + 0.11, z: pt.y - nz * 0.70 });
+          }
+        });
+
+        // InstancedMesh for Colonnade Columns (shafts, bases, simple capitals)
+        const colCount = columnPositions.length;
+        const colShaftGeo = trackGeo(new THREE.CylinderGeometry(0.125, 0.155, 2.74, 14));
+        const colBaseGeo  = trackGeo(new THREE.CylinderGeometry(0.18, 0.21, 0.16, 12));
+        const colCapGeo   = trackGeo(new THREE.CylinderGeometry(0.22, 0.13, 0.17, 12));
+        const colAbacGeo  = trackGeo(new THREE.BoxGeometry(0.42, 0.08, 0.42));
+
+        const instShafts = new THREE.InstancedMesh(colShaftGeo, matColonnadeStone, colCount);
+        const instBases  = new THREE.InstancedMesh(colBaseGeo, matColonnadeSand, colCount);
+        const instCaps   = new THREE.InstancedMesh(colCapGeo, matColonnadeStone, colCount);
+        const instAbacs  = new THREE.InstancedMesh(colAbacGeo, matColonnadeSand, colCount);
+
+        const dummy = new THREE.Object3D();
+        columnPositions.forEach(function (cp, idx) {
+          dummy.rotation.set(0, cp.rotY, 0);
+          dummy.scale.set(1, 1, 1);
+
+          dummy.position.set(cp.x, PLAZA_Y + 0.50, cp.z);
+          dummy.updateMatrix();
+          instBases.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(cp.x, PLAZA_Y + 0.42 + 1.52, cp.z);
+          dummy.updateMatrix();
+          instShafts.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(cp.x, PLAZA_Y + 3.29, cp.z);
+          dummy.updateMatrix();
+          instCaps.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(cp.x, PLAZA_Y + 3.41, cp.z);
+          dummy.updateMatrix();
+          instAbacs.setMatrixAt(idx, dummy.matrix);
+        });
+        [instShafts, instBases, instCaps, instAbacs].forEach(function (im) {
+          im.instanceMatrix.needsUpdate = true;
+          im.castShadow = true;
+          im.receiveShadow = true;
+          layerColonnade.add(im);
+        });
+
+        // Rooftop balustrade piers & small stone urns (InstancedMesh)
+        const pierGeo = trackGeo(new THREE.BoxGeometry(0.34, 0.72, 0.34));
+        const instPiers = new THREE.InstancedMesh(pierGeo, matColonnadeSand, pierPositions.length);
+        const instUrns  = new THREE.InstancedMesh(sharedUrnGeo, matColonnadeStone, pierPositions.length);
+        pierPositions.forEach(function (pp, idx) {
+          dummy.rotation.set(0, pp.rotY, 0);
+          dummy.scale.set(1, 1, 1);
+          dummy.position.set(pp.x, railBaseY + 0.36, pp.z);
+          dummy.updateMatrix();
+          instPiers.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(pp.x, railBaseY + 0.74, pp.z);
+          dummy.scale.set(0.62, 0.62, 0.62);
+          dummy.updateMatrix();
+          instUrns.setMatrixAt(idx, dummy.matrix);
+        });
+        instPiers.instanceMatrix.needsUpdate = true;
+        instUrns.instanceMatrix.needsUpdate = true;
+        instPiers.castShadow = instPiers.receiveShadow = true;
+        instUrns.castShadow = instUrns.receiveShadow = true;
+        layerColonnade.add(instPiers, instUrns);
+
+        // InstancedMesh for Colonnade Turned Balusters
+        const balGeo = createBalusterGeometry(0.52, 0.92);
+        const instColBalusters = new THREE.InstancedMesh(balGeo, matColonnadeStone, colonnadeBalusterTransforms.length);
+        colonnadeBalusterTransforms.forEach(function (bt, idx) {
+          dummy.position.set(bt.x, bt.y, bt.z);
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(1, 1, 1);
+          dummy.updateMatrix();
+          instColBalusters.setMatrixAt(idx, dummy.matrix);
+        });
+        instColBalusters.instanceMatrix.needsUpdate = true;
+        instColBalusters.castShadow = true;
+        instColBalusters.receiveShadow = true;
+        layerColonnade.add(instColBalusters);
+
+        // Hanging warm bronze lanterns + night point lights along colonnade
+        lanternPositions.forEach(function (lp, idx) {
+          const lant = createLantern(false);
+          lant.position.set(lp.x, lp.y, lp.z);
+          layerColonnade.add(lant);
+
+          if (idx % 2 === 0 && nightPointLights.length < 7) {
+            const ptLight = new THREE.PointLight(0xffb454, 0.0, 9.5, 1.8);
+            ptLight.position.set(lp.x, lp.y - 0.55, lp.z);
+            layerColonnade.add(ptLight);
+            nightPointLights.push(ptLight);
+          }
+        });
+
+        enableShadows(layerColonnade, true, true);
+        tagSelectable(layerColonnade, "colonnade");
+        registerAnchor("colonnade", layerColonnade, 4.8, PLAZA_Y + 4.3, -5.8);
+
+        // Build 4 Square Corner & End Pavilions
+        PAVILION_NODES.forEach(function (node, idx) {
+          const pav = buildSquarePavilion(idx);
+          pav.position.set(node.x, PLAZA_Y, node.z);
+          const angleToCenter = Math.atan2(-node.x, -0.3 - node.z);
+          pav.rotation.y = angleToCenter;
+          pav.userData.basePos = new THREE.Vector3(node.x, PLAZA_Y, node.z);
+          layerPavilions.add(pav);
+        });
+
+        enableShadows(layerPavilions, true, true);
+        tagSelectable(layerPavilions, "pavilions");
+        registerAnchor("pavilions", layerPavilions, PAVILION_NODES[3].x, PLAZA_Y + 5.8, PAVILION_NODES[3].z);
+      }
+
+      // Square pavilion with paired pilasters, recessed statue niche, projecting cornice & pyramidal domed roof
+      function buildSquarePavilion(variantIdx) {
+        const g = new THREE.Group();
+
+        const base1 = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.58, 0.24, 2.58)), matPavilionSand);
+        base1.position.y = 0.12;
+        const base2 = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.38, 0.28, 2.38)), matPavilionStone);
+        base2.position.y = 0.38;
+        g.add(base1, base2);
+
+        const backWall = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.12, 3.22, 1.56)), matPavilionStone);
+        backWall.position.set(0, 2.13, -0.28);
+        g.add(backWall);
+
+        [-0.78, 0.78].forEach(function (px) {
+          const cheek = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.56, 3.22, 0.56)), matPavilionStone);
+          cheek.position.set(px, 2.13, 0.78);
+          g.add(cheek);
+        });
+
+        const lintel = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.04, 0.68, 0.56)), matPavilionStone);
+        lintel.position.set(0, 3.40, 0.78);
+        g.add(lintel);
+
+        const archRing = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.46, 0.065, 8, 16, Math.PI)), matPavilionSand);
+        archRing.position.set(0, 2.66, 1.03);
+        g.add(archRing);
+
+        const statPlinth = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.68, 0.44, 0.44)), matPavilionSand);
+        statPlinth.position.set(0, 0.74, 0.74);
+        g.add(statPlinth);
+
+        const nicheFig = createAllegoricalFigure(variantIdx, matPavilionPatina);
+        nicheFig.position.set(0, 0.96, 0.74);
+        nicheFig.scale.setScalar(1.06);
+        g.add(nicheFig);
+
+        const pilGeo = trackGeo(new THREE.BoxGeometry(0.19, 3.04, 0.16));
+        const pilCapGeo = trackGeo(new THREE.BoxGeometry(0.26, 0.14, 0.22));
+        const corners = [
+          [-0.86, 1.06, 0], [-0.58, 1.06, 0], [0.58, 1.06, 0], [0.86, 1.06, 0],
+          [-0.86, -1.06, 0], [0.86, -1.06, 0],
+          [-1.06, 0.82, Math.PI * 0.5], [-1.06, -0.82, Math.PI * 0.5],
+          [ 1.06, 0.82, Math.PI * 0.5], [ 1.06, -0.82, Math.PI * 0.5]
+        ];
+        corners.forEach(function (c) {
+          const pil = new THREE.Mesh(pilGeo, matPavilionSand);
+          pil.position.set(c[0], 2.08, c[1]);
+          pil.rotation.y = c[2];
+          g.add(pil);
+
+          const cap = new THREE.Mesh(pilCapGeo, matPavilionStone);
+          cap.position.set(c[0], 3.63, c[1]);
+          cap.rotation.y = c[2];
+          g.add(cap);
+        });
+
+        const frieze = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.38, 0.32, 2.38)), matPavilionStone);
+        frieze.position.y = 3.90;
+        const cornice = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.74, 0.22, 2.74)), matPavilionStone);
+        cornice.position.y = 4.17;
+        const attic = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.26, 0.42, 2.26)), matPavilionSand);
+        attic.position.y = 4.49;
+        const atticCap = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(2.44, 0.12, 2.44)), matPavilionStone);
+        atticCap.position.y = 4.76;
+        g.add(frieze, cornice, attic, atticCap);
+
+        const domePts = [
+          new THREE.Vector2(1.42, 0.0),
+          new THREE.Vector2(1.30, 0.38),
+          new THREE.Vector2(1.02, 0.82),
+          new THREE.Vector2(0.62, 1.18),
+          new THREE.Vector2(0.24, 1.38),
+          new THREE.Vector2(0.06, 1.48)
+        ];
+        const roofGeo = trackGeo(new THREE.LatheGeometry(domePts, 4));
+        roofGeo.rotateY(Math.PI * 0.25);
+        const roof = new THREE.Mesh(roofGeo, matPavilionRoof);
+        roof.position.y = 4.82;
+        g.add(roof);
+
+        const finialBase = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.11, 0.15, 0.18, 8)), matPavilionPatina);
+        finialBase.position.y = 6.32;
+        const finialOrb = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.10, 10, 10)), matPavilionPatina);
+        finialOrb.position.y = 6.49;
+        const finialSpire = new THREE.Mesh(trackGeo(new THREE.ConeGeometry(0.055, 0.34, 8)), matPavilionPatina);
+        finialSpire.position.y = 6.72;
+        g.add(finialBase, finialOrb, finialSpire);
+
+        return g;
+      }
+
+      /* =========================================================================
+         12. ELEVATED PLAZA, INSTANCED TILES, FRONT STAIRS & BRONZE LIONS
+         ========================================================================= */
+
+      function buildPlazaAndStairs() {
+        // Build contoured raised plaza using (x, -z) in Shape so rotateX(-PI/2) yields exact +Y upward normals!
+        const plazaShape = new THREE.Shape();
+        const frontZ = 5.20;
+        const leftOuterX = -9.65;
+        const rightOuterX = 7.48;
+
+        plazaShape.moveTo(leftOuterX, -frontZ);
+        plazaShape.lineTo(leftOuterX, -PAVILION_NODES[0].z);
+
+        // Trace outer contour of the 3 colonnade curves with generous pavilion margin
+        COLONNADE_CURVES.forEach(function (curve) {
+          const pts = curve.getSpacedPoints(18);
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const prev = pts[Math.max(0, i - 1)];
+            const next = pts[Math.min(pts.length - 1, i + 1)];
+            const tx = next.x - prev.x;
+            const tz = next.y - prev.y;
+            const len = Math.hypot(tx, tz) || 1;
+            const nx = tz / len;
+            const nz = -tx / len;
+            plazaShape.lineTo(p.x + nx * 1.48, -(p.y + nz * 1.48));
+          }
+        });
+
+        plazaShape.lineTo(rightOuterX, -PAVILION_NODES[3].z);
+        plazaShape.lineTo(rightOuterX, -frontZ);
+        plazaShape.closePath();
+
+        const plazaGeo = trackGeo(new THREE.ExtrudeGeometry(plazaShape, {
+          depth: PLAZA_Y,
+          bevelEnabled: true,
+          bevelThickness: 0.05,
+          bevelSize: 0.06,
+          bevelSegments: 2
+        }));
+        plazaGeo.rotateX(-Math.PI * 0.5);
+        plazaGeo.computeBoundingBox();
+        plazaGeo.translate(0, PLAZA_Y - plazaGeo.boundingBox.max.y, 0);
+
+        const plazaBaseMesh = new THREE.Mesh(plazaGeo, matPlazaStone);
+        plazaBaseMesh.castShadow = true;
+        plazaBaseMesh.receiveShadow = true;
+        layerPlaza.add(plazaBaseMesh);
+
+        // Upward-facing patterned paving surface centered cleanly around monument (0, -0.3)
+        const topGeo = trackGeo(new THREE.ShapeGeometry(plazaShape, 18));
+        topGeo.rotateX(-Math.PI * 0.5);
+        const posAttr = topGeo.attributes.position;
+        const uvArr = new Float32Array(posAttr.count * 2);
+        for (let i = 0; i < posAttr.count; i++) {
+          const vx = posAttr.getX(i);
+          const vz = posAttr.getZ(i);
+          uvArr[i * 2]     = 0.5 + vx / 21.0;
+          uvArr[i * 2 + 1] = 0.52 - (vz + 0.3) / 18.0;
+        }
+        topGeo.setAttribute("uv", new THREE.BufferAttribute(uvArr, 2));
+        const plazaSurface = new THREE.Mesh(topGeo, matPlazaFloor);
+        plazaSurface.position.y = PLAZA_Y + 0.008;
+        plazaSurface.receiveShadow = true;
+        layerPlaza.add(plazaSurface);
+
+        // Instanced 3D beveled stone tiles in concentric rings & checkerboard front apron
+        const tileSpecs = [];
+        const ringRadii = [4.68, 5.42, 6.22];
+        const tileColors = [
+          new THREE.Color(0xefe8d9),
+          new THREE.Color(0xdfd3be),
+          new THREE.Color(0xcfc9bd)
+        ];
+        ringRadii.forEach(function (rad, rIdx) {
+          const count = Math.floor((2 * Math.PI * rad) / 0.62);
+          for (let i = 0; i < count; i++) {
+            const ang = (i / count) * Math.PI * 2;
+            const tx = Math.cos(ang) * rad;
+            const tz = -0.3 + Math.sin(ang) * rad;
+            if (tz < 4.75 && tz > -6.1 && tx > -7.3 && tx < 6.4) {
+              tileSpecs.push({ x: tx, z: tz, rotY: -ang, cIdx: (i + rIdx) % 3, sx: 0.44, sz: 0.52 });
+            }
+          }
+        });
+        for (let gx = -5; gx <= 4; gx++) {
+          for (let gz = 0; gz < 3; gz++) {
+            const tx = gx * 0.68 + 0.34;
+            const tz = 3.15 + gz * 0.64;
+            if (Math.hypot(tx, tz + 0.3) > 4.4) {
+              tileSpecs.push({ x: tx, z: tz, rotY: 0, cIdx: (Math.abs(gx) + gz) % 3, sx: 0.60, sz: 0.56 });
+            }
+          }
+        }
+
+        const tileGeo = trackGeo(new THREE.BoxGeometry(1, 0.024, 1));
+        const instTiles = new THREE.InstancedMesh(tileGeo, matPlazaTileInstanced, tileSpecs.length);
+        const dummy = new THREE.Object3D();
+        tileSpecs.forEach(function (ts, idx) {
+          dummy.position.set(ts.x, PLAZA_Y + 0.015, ts.z);
+          dummy.rotation.set(0, ts.rotY, 0);
+          dummy.scale.set(ts.sx, 1, ts.sz);
+          dummy.updateMatrix();
+          instTiles.setMatrixAt(idx, dummy.matrix);
+          instTiles.setColorAt(idx, tileColors[ts.cIdx]);
+        });
+        instTiles.instanceMatrix.needsUpdate = true;
+        if (instTiles.instanceColor) instTiles.instanceColor.needsUpdate = true;
+        instTiles.receiveShadow = true;
+        layerPlaza.add(instTiles);
+
+        // Low front-edge balustrade fence with square posts, top rail & instanced balusters
+        function addFenceRun(x1, z1, x2, z2) {
+          const dx = x2 - x1;
+          const dz = z2 - z1;
+          const len = Math.hypot(dx, dz);
+          const ang = Math.atan2(dx, dz);
+          const mx = (x1 + x2) * 0.5;
+          const mz = (z1 + z2) * 0.5;
+
+          const curb = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.24, 0.14, len)), matPlazaStone);
+          curb.position.set(mx, PLAZA_Y + 0.07, mz);
+          curb.rotation.y = ang;
+          layerPlaza.add(curb);
+
+          const rail = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.28, 0.11, len)), matPlazaStone);
+          rail.position.set(mx, PLAZA_Y + 0.66, mz);
+          rail.rotation.y = ang;
+          layerPlaza.add(rail);
+
+          [[x1, z1], [x2, z2]].forEach(function (pt) {
+            const post = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.36, 0.78, 0.36)), matPlazaStone);
+            post.position.set(pt[0], PLAZA_Y + 0.39, pt[1]);
+            layerPlaza.add(post);
+
+            const cap = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.42, 0.08, 0.42)), matPlazaStone);
+            cap.position.set(pt[0], PLAZA_Y + 0.81, pt[1]);
+            layerPlaza.add(cap);
+          });
+
+          const bCount = Math.max(2, Math.floor((len - 0.55) / 0.24));
+          for (let i = 1; i < bCount; i++) {
+            const f = i / bCount;
+            plazaFenceBalusterTransforms.push({
+              x: x1 + dx * f,
+              y: PLAZA_Y + 0.13,
+              z: z1 + dz * f
+            });
+          }
+        }
+
+        addFenceRun(-9.35, 5.10, -3.25, 5.10);
+        addFenceRun(-9.35, 5.10, -9.35, 3.65);
+        addFenceRun( 3.25, 5.10,  7.18, 5.10);
+        addFenceRun( 7.18, 5.10,  7.18, 4.15);
+
+        [[-9.35, 5.10], [7.18, 5.10]].forEach(function (up) {
+          const urn = new THREE.Mesh(sharedUrnGeo, matPlazaStone);
+          urn.position.set(up[0], PLAZA_Y + 0.84, up[1]);
+          urn.scale.setScalar(0.85);
+          layerPlaza.add(urn);
+        });
+
+        [[-6.15, 5.10], [5.15, 5.10]].forEach(function (lp) {
+          const postLamp = createLantern(true);
+          postLamp.position.set(lp[0], PLAZA_Y + 0.74, lp[1]);
+          postLamp.scale.setScalar(0.95);
+          layerPlaza.add(postLamp);
+
+          const pl = new THREE.PointLight(0xffba5a, 0.0, 8.0, 1.8);
+          pl.position.set(lp[0], PLAZA_Y + 1.95, lp[1]);
+          layerPlaza.add(pl);
+          nightPointLights.push(pl);
+        });
+
+        // Instanced balusters for front balustrade fence
+        const fenceBalGeo = createBalusterGeometry(0.50, 0.90);
+        const instFenceBal = new THREE.InstancedMesh(fenceBalGeo, matPlazaStone, plazaFenceBalusterTransforms.length);
+        plazaFenceBalusterTransforms.forEach(function (bt, idx) {
+          dummy.position.set(bt.x, bt.y, bt.z);
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(1, 1, 1);
+          dummy.updateMatrix();
+          instFenceBal.setMatrixAt(idx, dummy.matrix);
+        });
+        instFenceBal.instanceMatrix.needsUpdate = true;
+        instFenceBal.castShadow = true;
+        instFenceBal.receiveShadow = true;
+        layerPlaza.add(instFenceBal);
+
+        enableShadows(layerPlaza, true, true);
+        tagSelectable(layerPlaza, "plaza");
+        registerAnchor("plaza", layerPlaza, -4.6, PLAZA_Y + 0.25, 3.2);
+
+        // --- WIDE SHALLOW FRONT STAIRS, 4 BRONZE LIONS & TERRACOTTA PLANTERS ---
+        const stairsGroup = new THREE.Group();
+        layerPlaza.add(stairsGroup);
+
+        const numSteps = 7;
+        const stairWidth = 5.4;
+        const stairStartZ = 5.20;
+        const stepDepth = 0.34;
+        const stepHeight = PLAZA_Y / numSteps;
+
+        for (let s = 0; s < numSteps; s++) {
+          const d = (numSteps - s) * stepDepth;
+          const h = stepHeight;
+          const stepMesh = new THREE.Mesh(
+            trackGeo(new THREE.BoxGeometry(stairWidth, h, d)),
+            s % 2 === 0 ? matStairsStone : matStairsSand
+          );
+          stepMesh.position.set(0, s * stepHeight + h * 0.5, stairStartZ + d * 0.5);
+          stairsGroup.add(stepMesh);
+
+          const nosing = new THREE.Mesh(
+            trackGeo(new THREE.BoxGeometry(stairWidth + 0.04, 0.032, 0.06)),
+            matStairsStone
+          );
+          nosing.position.set(0, (s + 1) * stepHeight - 0.016, stairStartZ + d + 0.015);
+          stairsGroup.add(nosing);
+        }
+
+        const lowerLanding = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(9.6, 0.07, 2.45)), matStairsSand);
+        lowerLanding.position.set(0, 0.035, stairStartZ + numSteps * stepDepth + 0.72);
+        stairsGroup.add(lowerLanding);
+
+        [-3.02, 3.02].forEach(function (cx) {
+          const cheek = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.68, PLAZA_Y + 0.14, 2.38)), matStairsStone);
+          cheek.position.set(cx, (PLAZA_Y + 0.14) * 0.5, stairStartZ + 1.15);
+          stairsGroup.add(cheek);
+        });
+
+        const lionSpots = [
+          { x: -3.02, y: 0.0,  z: 5.28, pedH: 1.56, mirror: false },
+          { x:  3.02, y: 0.0,  z: 5.28, pedH: 1.56, mirror: true  },
+          { x: -3.48, y: 0.04, z: 7.75, pedH: 0.88, mirror: false },
+          { x:  3.48, y: 0.04, z: 7.75, pedH: 0.88, mirror: true  }
+        ];
+
+        lionSpots.forEach(function (ls) {
+          const pGroup = new THREE.Group();
+          pGroup.position.set(ls.x, ls.y, ls.z);
+
+          const pBase = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.06, 0.18, 1.38)), matStairsSand);
+          pBase.position.y = 0.09;
+          const pShaft = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.88, ls.pedH - 0.34, 1.20)), matStairsStone);
+          pShaft.position.y = 0.18 + (ls.pedH - 0.34) * 0.5;
+          const pCap = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.02, 0.16, 1.34)), matStairsStone);
+          pCap.position.y = ls.pedH - 0.08;
+          pGroup.add(pBase, pShaft, pCap);
+
+          const lion = createBronzeLion(matLionBronze, ls.mirror);
+          lion.position.set(0, ls.pedH, 0.04);
+          lion.scale.setScalar(0.96);
+          pGroup.add(lion);
+
+          stairsGroup.add(pGroup);
+        });
+
+        const planterSpots = [
+          [-4.22, 0.04, 7.75, 1.15],
+          [ 4.22, 0.04, 7.75, 1.15],
+          [-2.38, PLAZA_Y, 5.02, 0.92],
+          [ 2.38, PLAZA_Y, 5.02, 0.92],
+          [-3.75, PLAZA_Y, 2.05, 1.05],
+          [ 3.75, PLAZA_Y, 2.05, 1.05],
+          [-4.25, PLAZA_Y, -1.85, 1.0],
+          [ 4.25, PLAZA_Y, -1.85, 1.0]
+        ];
+        planterSpots.forEach(function (ps) {
+          const pot = createTerracottaPlanter(ps[3]);
+          pot.position.set(ps[0], ps[1], ps[2]);
+          stairsGroup.add(pot);
+        });
+
+        enableShadows(stairsGroup, true, true);
+        tagSelectable(stairsGroup, "stairs");
+        registerAnchor("stairs", stairsGroup, 2.95, 1.85, 6.45);
+      }
+
+      /* =========================================================================
+         13. CENTRAL MEMORIAL: OCTAGONAL BASE, PEDESTAL, DOME & EQUESTRIAN STATUE
+         ========================================================================= */
+
+      function buildCentralMemorial() {
+        const cx = 0.0;
+        const cz = -0.3;
+
+        // --- LAYER A: WIDE STEPPED OCTAGONAL BASE + BROAD FRONT STAIRS ---
+        layerBase.position.set(cx, PLAZA_Y, cz);
+
+        const octTiers = [
+          { r: 4.35, h: 0.24, y: 0.00, sand: true },
+          { r: 3.96, h: 0.24, y: 0.24, sand: false },
+          { r: 3.58, h: 0.24, y: 0.48, sand: true },
+          { r: 3.22, h: 0.34, y: 0.72, sand: false }
+        ];
+        octTiers.forEach(function (t) {
+          const oct = new THREE.Mesh(
+            trackGeo(new THREE.CylinderGeometry(t.r, t.r + 0.06, t.h, 8)),
+            t.sand ? matPedestalSand : matPedestalStone
+          );
+          oct.rotation.y = Math.PI / 8;
+          oct.position.y = t.y + t.h * 0.5;
+          layerBase.add(oct);
+        });
+
+        const mStepCount = 5;
+        for (let i = 0; i < mStepCount; i++) {
+          const w = 2.75 + (mStepCount - i) * 0.14;
+          const d = 0.34 * (mStepCount - i);
+          const h = 1.06 / mStepCount;
+          const st = new THREE.Mesh(
+            trackGeo(new THREE.BoxGeometry(w, h, d)),
+            i % 2 === 0 ? matPedestalStone : matPedestalSand
+          );
+          st.position.set(0, i * h + h * 0.5, 3.05 + d * 0.5);
+          layerBase.add(st);
+        }
+
+        [-1.85, 1.85].forEach(function (ux) {
+          const cheek = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.54, 0.96, 1.65)), matPedestalStone);
+          cheek.position.set(ux, 0.48, 3.62);
+          layerBase.add(cheek);
+
+          const urn = new THREE.Mesh(sharedUrnGeo, matPedestalStone);
+          urn.position.set(ux, 0.96, 4.18);
+          urn.scale.setScalar(0.95);
+          layerBase.add(urn);
+        });
+
+        enableShadows(layerBase, true, true);
+        tagSelectable(layerBase, "pedestal");
+
+        // --- LAYER B: TALL MULTI-TIERED PEDESTAL WITH HOLLOW INTERIOR ---
+        const pedBaseY = PLAZA_Y + 1.06;
+        layerPedestal.position.set(cx, pedBaseY, cz);
+
+        const plinth1 = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.88, 0.34, 3.48)), matPedestalSand);
+        plinth1.position.y = 0.17;
+        const plinth2 = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.46, 0.42, 3.06)), matPedestalStone);
+        plinth2.position.y = 0.55;
+        const plinthMould = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.62, 0.16, 3.22)), matPedestalSand);
+        plinthMould.position.y = 0.84;
+        layerPedestal.add(plinth1, plinth2, plinthMould);
+
+        // Hollow rectangular shaft built from 4 thick masonry walls for Cross-Section interior
+        const shaftBottom = 0.92;
+        const shaftH = 3.16;
+        const wallT = 0.44;
+        const outerW = 2.74;
+        const outerD = 2.38;
+
+        [-1, 1].forEach(function (side) {
+          const wMesh = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(outerW, shaftH, wallT)), matPedestalStone);
+          wMesh.position.set(0, shaftBottom + shaftH * 0.5, side * (outerD * 0.5 - wallT * 0.5));
+          layerPedestal.add(wMesh);
+        });
+        [-1, 1].forEach(function (side) {
+          const wMesh = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(wallT, shaftH, outerD - wallT * 2)), matPedestalStone);
+          wMesh.position.set(side * (outerW * 0.5 - wallT * 0.5), shaftBottom + shaftH * 0.5, 0);
+          layerPedestal.add(wMesh);
+        });
+
+        // Vaulted chamber interior + miniature spiral staircase + glowing memorial lamp
+        const chamberFloor = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(outerW - 0.8, 0.14, outerD - 0.8)), matInteriorStone);
+        chamberFloor.position.y = shaftBottom + 0.07;
+        layerPedestal.add(chamberFloor);
+
+        const innerVault = new THREE.Mesh(
+          trackGeo(new THREE.SphereGeometry(0.92, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.5)),
+          matInteriorStone
+        );
+        innerVault.position.y = shaftBottom + shaftH - 0.72;
+        layerPedestal.add(innerVault);
+
+        const spiralSpine = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.11, 0.13, shaftH - 0.4, 10)), matInteriorStone);
+        spiralSpine.position.set(-0.22, shaftBottom + shaftH * 0.46, -0.12);
+        layerPedestal.add(spiralSpine);
+
+        const spiralSteps = 18;
+        for (let st = 0; st < spiralSteps; st++) {
+          const ang = st * 0.48;
+          const tread = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.56, 0.07, 0.22)), matSectionAccent);
+          tread.position.set(
+            -0.22 + Math.cos(ang) * 0.28,
+            shaftBottom + 0.18 + st * ((shaftH - 0.65) / spiralSteps),
+            -0.12 + Math.sin(ang) * 0.28
+          );
+          tread.rotation.y = -ang;
+          layerPedestal.add(tread);
+        }
+
+        const innerLamp = new THREE.Mesh(
+          trackGeo(new THREE.SphereGeometry(0.16, 12, 10)),
+          makeStandardMat({ color: 0xffe4a8, emissive: 0xffa638, emissiveIntensity: 0.9, roughness: 0.3 }, "pedestal", false, true)
+        );
+        innerLamp.position.set(0.32, shaftBottom + 1.05, 0.18);
+        layerPedestal.add(innerLamp);
+
+        // Four paired corner columns with ornate dark-bronze capitals & bases
+        const colCornerOffsets = [
+          [-1.56,  1.24], [-1.22,  1.42],
+          [ 1.56,  1.24], [ 1.22,  1.42],
+          [-1.56, -1.24], [-1.22, -1.42],
+          [ 1.56, -1.24], [ 1.22, -1.42]
+        ];
+
+        const pColShaftGeo = trackGeo(new THREE.CylinderGeometry(0.125, 0.145, 2.66, 14));
+        const pColBaseGeo  = trackGeo(new THREE.LatheGeometry([
+          new THREE.Vector2(0.20, 0.0),
+          new THREE.Vector2(0.20, 0.08),
+          new THREE.Vector2(0.16, 0.14),
+          new THREE.Vector2(0.18, 0.19),
+          new THREE.Vector2(0.145, 0.24)
+        ], 12));
+        const pColCapGeo = trackGeo(new THREE.LatheGeometry([
+          new THREE.Vector2(0.13, 0.0),
+          new THREE.Vector2(0.16, 0.07),
+          new THREE.Vector2(0.19, 0.17),
+          new THREE.Vector2(0.24, 0.24),
+          new THREE.Vector2(0.22, 0.29)
+        ], 12));
+
+        [[-1.40, 1.32], [1.40, 1.32], [-1.40, -1.32], [1.40, -1.32]].forEach(function (cp) {
+          const sub = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.84, 0.92, 0.78)), matPedestalSand);
+          sub.position.set(cp[0], 0.46, cp[1]);
+          layerPedestal.add(sub);
+        });
+
+        colCornerOffsets.forEach(function (co) {
+          const cBase = new THREE.Mesh(pColBaseGeo, matPedestalBronzeDark);
+          cBase.position.set(co[0], shaftBottom, co[1]);
+          layerPedestal.add(cBase);
+
+          const cShaft = new THREE.Mesh(pColShaftGeo, matPedestalStone);
+          cShaft.position.set(co[0], shaftBottom + 0.24 + 1.33, co[1]);
+          layerPedestal.add(cShaft);
+
+          const cCap = new THREE.Mesh(pColCapGeo, matPedestalBronzeDark);
+          cCap.position.set(co[0], shaftBottom + 2.86, co[1]);
+          layerPedestal.add(cCap);
+
+          const abac = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.42, 0.07, 0.42)), matPedestalBronzeDark);
+          abac.position.set(co[0], shaftBottom + 3.16, co[1]);
+          layerPedestal.add(abac);
+        });
+
+        // Dark bronze engraved inscription plaques on front & rear faces
+        [1, -1].forEach(function (dirZ) {
+          const frame = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.66, 1.24, 0.10)), matPedestalBronzeDark);
+          frame.position.set(0, shaftBottom + 1.56, dirZ * (outerD * 0.5 + 0.03));
+          layerPedestal.add(frame);
+
+          const plaqueFace = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(1.52, 1.12)), matBronzePlaque);
+          plaqueFace.position.set(0, shaftBottom + 1.56, dirZ * (outerD * 0.5 + 0.084));
+          if (dirZ < 0) plaqueFace.rotation.y = Math.PI;
+          layerPedestal.add(plaqueFace);
+        });
+
+        // Carved stone reliefs on side & upper pedestal faces
+        [-1, 1].forEach(function (dirX) {
+          const relPanel = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.08, 0.86, 1.52)), matCarvedRelief);
+          relPanel.position.set(dirX * (outerW * 0.5 + 0.03), shaftBottom + 2.38, 0);
+          layerPedestal.add(relPanel);
+        });
+        [1, -1].forEach(function (dirZ) {
+          const friezeRel = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.88, 0.44, 0.08)), matCarvedRelief);
+          friezeRel.position.set(0, shaftBottom + 2.62, dirZ * (outerD * 0.5 + 0.03));
+          layerPedestal.add(friezeRel);
+        });
+
+        // Standing allegorical figures in green-grey patinated bronze on small side plinths
+        const figureSpots = [
+          { x: -1.86, z:  0.0,  rotY: -Math.PI * 0.5, variant: 0 },
+          { x:  1.86, z:  0.0,  rotY:  Math.PI * 0.5, variant: 1 },
+          { x:  0.0,  z:  1.66, rotY:  0.0,           variant: 2 },
+          { x:  0.0,  z: -1.66, rotY:  Math.PI,       variant: 3 }
+        ];
+        figureSpots.forEach(function (fs) {
+          const fPlinth = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.76, 1.02, 0.76)), matPedestalSand);
+          fPlinth.position.set(fs.x, 0.51, fs.z);
+          layerPedestal.add(fPlinth);
+
+          const fCap = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.86, 0.12, 0.86)), matPedestalStone);
+          fCap.position.set(fs.x, 1.06, fs.z);
+          layerPedestal.add(fCap);
+
+          const fig = createAllegoricalFigure(fs.variant, matAllegoricalPatina);
+          fig.position.set(fs.x, 1.12, fs.z);
+          fig.rotation.y = fs.rotY;
+          fig.scale.setScalar(1.02);
+          layerPedestal.add(fig);
+        });
+
+        // Heavy moulded cornice, dentils & upper attic
+        const cornY = shaftBottom + shaftH;
+        const architrave = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.48, 0.24, 3.12)), matPedestalStone);
+        architrave.position.y = cornY + 0.12;
+        const friezeBand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.32, 0.34, 2.96)), matPedestalSand);
+        friezeBand.position.y = cornY + 0.41;
+        const corniceOverhang = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.96, 0.24, 3.58)), matPedestalStone);
+        corniceOverhang.position.y = cornY + 0.70;
+        const atticStep = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(3.04, 0.42, 2.74)), matPedestalStone);
+        atticStep.position.y = cornY + 1.03;
+        layerPedestal.add(architrave, friezeBand, corniceOverhang, atticStep);
+
+        const dentilGeo = trackGeo(new THREE.BoxGeometry(0.11, 0.10, 0.11));
+        for (let dx = -1.68; dx <= 1.69; dx += 0.24) {
+          [-1.58, 1.58].forEach(function (dz) {
+            const d = new THREE.Mesh(dentilGeo, matPedestalSand);
+            d.position.set(dx, cornY + 0.56, dz);
+            layerPedestal.add(d);
+          });
+        }
+        for (let dz = -1.44; dz <= 1.45; dz += 0.24) {
+          [-1.78, 1.78].forEach(function (dx) {
+            const d = new THREE.Mesh(dentilGeo, matPedestalSand);
+            d.position.set(dx, cornY + 0.56, dz);
+            layerPedestal.add(d);
+          });
+        }
+
+        enableShadows(layerPedestal, true, true);
+        tagSelectable(layerPedestal, "pedestal");
+        registerAnchor("pedestal", layerPedestal, 0.95, shaftBottom + 1.85, 1.45);
+
+        // --- LAYER C: SHALLOW BLUE-GREEN OXIDISED-COPPER RIBBED DOMED CAP ---
+        const domeBaseY = pedBaseY + cornY + 1.24;
+        layerDomeCap.position.set(cx, domeBaseY, cz);
+
+        const capPts = [
+          new THREE.Vector2(1.56, 0.00),
+          new THREE.Vector2(1.50, 0.14),
+          new THREE.Vector2(1.32, 0.38),
+          new THREE.Vector2(1.02, 0.62),
+          new THREE.Vector2(0.76, 0.76),
+          new THREE.Vector2(0.68, 0.80)
+        ];
+        const copperDomeGeo = trackGeo(new THREE.LatheGeometry(capPts, 8));
+        copperDomeGeo.rotateY(Math.PI / 8);
+        const copperDome = new THREE.Mesh(copperDomeGeo, matCopperDome);
+        copperDome.scale.set(1.02, 1.0, 1.12);
+        layerDomeCap.add(copperDome);
+
+        for (let r = 0; r < 8; r++) {
+          const ang = (r / 8) * Math.PI * 2 + Math.PI / 8;
+          const ribCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(Math.cos(ang) * 1.54, 0.04, Math.sin(ang) * 1.68),
+            new THREE.Vector3(Math.cos(ang) * 1.32, 0.38, Math.sin(ang) * 1.44),
+            new THREE.Vector3(Math.cos(ang) * 0.72, 0.78, Math.sin(ang) * 0.78)
+          ]);
+          const rib = new THREE.Mesh(
+            trackGeo(new THREE.TubeGeometry(ribCurve, 10, 0.036, 6, false)),
+            matPedestalBronzeDark
+          );
+          layerDomeCap.add(rib);
+        }
+
+        const domeCrown = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.36, 0.22, 2.24)), matPedestalSand);
+        domeCrown.position.y = 0.86;
+        layerDomeCap.add(domeCrown);
+
+        enableShadows(layerDomeCap, true, true);
+        tagSelectable(layerDomeCap, "pedestal");
+
+        // --- LAYER D: LARGE DYNAMIC EQUESTRIAN STATUE ---
+        const statueBaseY = domeBaseY + 0.97;
+        layerStatue.position.set(cx, statueBaseY, cz);
+
+        const equestrian = buildEquestrianStatue(matEquestrianBronze);
+        equestrian.scale.setScalar(1.16);
+        layerStatue.add(equestrian);
+
+        enableShadows(layerStatue, true, true);
+        tagSelectable(layerStatue, "equestrian");
+        registerAnchor("equestrian", layerStatue, 0.2, 2.45, 0.35);
+
+        // Save default layer Y positions for smooth Explode animations
+        layerBase.userData.baseY      = layerBase.position.y;
+        layerColonnade.userData.baseY = layerColonnade.position.y;
+        layerPavilions.userData.baseY = layerPavilions.position.y;
+        layerPedestal.userData.baseY  = layerPedestal.position.y;
+        layerDomeCap.userData.baseY   = layerDomeCap.position.y;
+        layerStatue.userData.baseY    = layerStatue.position.y;
+      }
+
+      /* =========================================================================
+         14. LIVING DETAILS: WALKING MINIATURE FIGURES, CIRCLING BIRDS & DUST MOTES
+         ========================================================================= */
+
+      const walkers = [];
+      const birds = [];
+      let dustPoints = null;
+      let dustBasePositions = null;
+
+      function buildLivingDetails() {
+        const coatPalette = [0x4c5d6e, 0x7d4c44, 0x5c684a, 0x8f7550, 0x3b414c, 0x997f6e, 0x625066];
+        const headMat = makeStandardMat({ color: 0xe6c8a8, roughness: 0.78 }, null, false, true);
+        const legMat  = makeStandardMat({ color: 0x2f3338, roughness: 0.85 }, null, false, true);
+        const headGeo = trackGeo(new THREE.SphereGeometry(0.055, 8, 8));
+        const bodyGeo = trackGeo(new THREE.ConeGeometry(0.075, 0.28, 8));
+        const legGeo  = trackGeo(new THREE.CylinderGeometry(0.018, 0.016, 0.16, 6));
+
+        for (let i = 0; i < 16; i++) {
+          const wGroup = new THREE.Group();
+          const coatMat = makeStandardMat({ color: coatPalette[i % coatPalette.length], roughness: 0.82 }, null, false, true);
+
+          const body = new THREE.Mesh(bodyGeo, coatMat);
+          body.position.y = 0.27;
+          const head = new THREE.Mesh(headGeo, headMat);
+          head.position.y = 0.45;
+          const legL = new THREE.Mesh(legGeo, legMat);
+          legL.position.set(-0.028, 0.08, 0);
+          const legR = new THREE.Mesh(legGeo, legMat);
+          legR.position.set( 0.028, 0.08, 0);
+
+          wGroup.add(body, head, legL, legR);
+          enableShadows(wGroup, true, false);
+          layerLiving.add(wGroup);
+
+          const isRing = i < 12;
+          walkers.push({
+            mesh: wGroup,
+            legL: legL,
+            legR: legR,
+            mode: isRing ? "ring" : "forecourt",
+            angle: (i / 12) * Math.PI * 2,
+            radius: isRing ? (4.7 + (i % 3) * 0.65) : 0,
+            speed: (0.12 + (i % 4) * 0.03) * (i % 2 === 0 ? 1 : -1),
+            phase: i * 1.7,
+            xRange: 3.6 + (i % 3) * 0.9,
+            zLine: 7.45 + (i % 2) * 0.55
+          });
+        }
+
+        const birdMat = makeStandardMat({ color: 0xfaf7ef, roughness: 0.72 }, null, false, false);
+        const wingGeo = trackGeo(new THREE.BoxGeometry(0.24, 0.014, 0.075));
+        wingGeo.translate(0.12, 0, 0);
+        const birdBodyGeo = trackGeo(new THREE.ConeGeometry(0.032, 0.16, 6));
+        birdBodyGeo.rotateX(Math.PI * 0.5);
+
+        for (let b = 0; b < 6; b++) {
+          const bGroup = new THREE.Group();
+          const bBody = new THREE.Mesh(birdBodyGeo, birdMat);
+          const wLeft = new THREE.Mesh(wingGeo, birdMat);
+          const wRight = new THREE.Mesh(wingGeo, birdMat);
+          wLeft.scale.x = -1;
+          bGroup.add(bBody, wLeft, wRight);
+          layerLiving.add(bGroup);
+
+          birds.push({
+            group: bGroup,
+            wLeft: wLeft,
+            wRight: wRight,
+            radiusX: 5.5 + (b % 3) * 2.1,
+            radiusZ: 4.8 + (b % 2) * 2.4,
+            baseY: 9.4 + b * 0.82,
+            angle: b * 1.15,
+            speed: 0.28 + (b % 3) * 0.07,
+            flapSpeed: 6.2 + b * 0.8
+          });
+        }
+
+        const moteCount = 130;
+        const posArr = new Float32Array(moteCount * 3);
+        dustBasePositions = new Float32Array(moteCount * 3);
+        const rand = createSeededRandom(1204);
+        for (let m = 0; m < moteCount; m++) {
+          const mx = (rand() - 0.5) * 24;
+          const my = 0.6 + rand() * 12.8;
+          const mz = (rand() - 0.5) * 19;
+          posArr[m * 3] = dustBasePositions[m * 3] = mx;
+          posArr[m * 3 + 1] = dustBasePositions[m * 3 + 1] = my;
+          posArr[m * 3 + 2] = dustBasePositions[m * 3 + 2] = mz;
+        }
+        const dustGeo = trackGeo(new THREE.BufferGeometry());
+        dustGeo.setAttribute("position", new THREE.BufferAttribute(posArr, 3));
+        const dustMat = trackMat(new THREE.PointsMaterial({
+          size: 0.22,
+          map: createDustTexture(),
+          transparent: true,
+          opacity: 0.52,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          color: 0xfff4d4
+        }));
+        dustPoints = new THREE.Points(dustGeo, dustMat);
+        scene.add(dustPoints);
+      }
+
+      /* =========================================================================
+         15. ASSEMBLE THE DIORAMA
+         ========================================================================= */
+
+      buildDisplaySlab();
+      buildColonnadeAndPavilions();
+      buildPlazaAndStairs();
+      buildCentralMemorial();
+      buildLivingDetails();
+
+      /* =========================================================================
+         16. HAND-WRITTEN ORBIT CONTROLS (DRAG, WHEEL, PINCH, DAMPING, IDLE ROTATE)
+         ========================================================================= */
+
+      function getResponsiveRadiusScale() {
+        const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+        return aspect < 1.35 ? Math.min(1.45, 1.35 / Math.max(0.75, aspect)) : 1.0;
+      }
+
+      const initialOverviewRadius = CAMERA_PRESETS.overview.radius * getResponsiveRadiusScale();
+
+      const orbit = {
+        theta: CAMERA_PRESETS.overview.theta,
+        phi: CAMERA_PRESETS.overview.phi,
+        radius: initialOverviewRadius,
+        target: new THREE.Vector3().fromArray(CAMERA_PRESETS.overview.target),
+
+        targetTheta: CAMERA_PRESETS.overview.theta,
+        targetPhi: CAMERA_PRESETS.overview.phi,
+        targetRadius: initialOverviewRadius,
+        targetLook: new THREE.Vector3().fromArray(CAMERA_PRESETS.overview.target),
+
+        minPhi: 0.12,
+        maxPhi: Math.PI * 0.465, // keeps camera above the display slab
+        minRadius: 5.5,
+        maxRadius: 58.0,
+        damping: 0.085,
+
+        isDragging: false,
+        isFlying: false,
+        pointerMoved: false,
+        lastInteractionTime: performance.now(),
+        idleDelayMs: 4200,
+        autoRotateSpeed: 0.075,
+
+        prevX: 0,
+        prevY: 0,
+        pinchDist: 0,
+        lastTapTime: 0
+      };
+
+      function syncCameraFromOrbit() {
+        const sinPhi = Math.sin(orbit.phi);
+        camera.position.set(
+          orbit.target.x + orbit.radius * sinPhi * Math.sin(orbit.theta),
+          orbit.target.y + orbit.radius * Math.cos(orbit.phi),
+          orbit.target.z + orbit.radius * sinPhi * Math.cos(orbit.theta)
+        );
+        camera.lookAt(orbit.target);
+      }
+      syncCameraFromOrbit();
+
+      function markUserInteraction() {
+        orbit.lastInteractionTime = performance.now();
+        if (orbit.isFlying) {
+          gsap.killTweensOf(orbit);
+          gsap.killTweensOf(orbit.targetLook);
+          orbit.isFlying = false;
+        }
+      }
+
+      const domElem = renderer.domElement;
+
+      domElem.addEventListener("pointerdown", function (e) {
+        if (e.pointerType === "touch") return;
+        if (e.button !== 0) return;
+        markUserInteraction();
+        orbit.isDragging = true;
+        orbit.pointerMoved = false;
+        orbit.prevX = e.clientX;
+        orbit.prevY = e.clientY;
+      });
+
+      window.addEventListener("pointermove", function (e) {
+        if (e.pointerType === "touch") return;
+        updatePointerCoords(e.clientX, e.clientY);
+        if (!orbit.isDragging) return;
+        const dx = e.clientX - orbit.prevX;
+        const dy = e.clientY - orbit.prevY;
+        if (Math.hypot(dx, dy) > 3) orbit.pointerMoved = true;
+        orbit.prevX = e.clientX;
+        orbit.prevY = e.clientY;
+
+        orbit.targetTheta -= dx * 0.0068;
+        orbit.targetPhi = Math.max(orbit.minPhi, Math.min(orbit.maxPhi, orbit.targetPhi - dy * 0.0058));
+        orbit.lastInteractionTime = performance.now();
+      });
+
+      window.addEventListener("pointerup", function (e) {
+        if (e.pointerType === "touch") return;
+        if (orbit.isDragging && !orbit.pointerMoved) {
+          handleSceneClick(e.clientX, e.clientY);
+        }
+        orbit.isDragging = false;
+      });
+
+      domElem.addEventListener("wheel", function (e) {
+        e.preventDefault();
+        markUserInteraction();
+        const factor = 1 + Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY) * 0.0014, 0.14);
+        orbit.targetRadius = Math.max(orbit.minRadius, Math.min(orbit.maxRadius, orbit.targetRadius * factor));
+      }, { passive: false });
+
+      domElem.addEventListener("dblclick", function () {
+        flyToPreset("overview");
+      });
+
+      // Touch drag + two-finger pinch zoom + double-tap reset
+      domElem.addEventListener("touchstart", function (e) {
+        markUserInteraction();
+        if (e.touches.length === 1) {
+          orbit.isDragging = true;
+          orbit.pointerMoved = false;
+          orbit.prevX = e.touches[0].clientX;
+          orbit.prevY = e.touches[0].clientY;
+
+          const now = performance.now();
+          if (now - orbit.lastTapTime < 300) {
+            flyToPreset("overview");
+          }
+          orbit.lastTapTime = now;
+        } else if (e.touches.length === 2) {
+          orbit.isDragging = false;
+          orbit.pinchDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+        }
+      }, { passive: true });
+
+      domElem.addEventListener("touchmove", function (e) {
+        if (e.touches.length === 1 && orbit.isDragging) {
+          const dx = e.touches[0].clientX - orbit.prevX;
+          const dy = e.touches[0].clientY - orbit.prevY;
+          if (Math.hypot(dx, dy) > 4) orbit.pointerMoved = true;
+          orbit.prevX = e.touches[0].clientX;
+          orbit.prevY = e.touches[0].clientY;
+          orbit.targetTheta -= dx * 0.008;
+          orbit.targetPhi = Math.max(orbit.minPhi, Math.min(orbit.maxPhi, orbit.targetPhi - dy * 0.0068));
+          orbit.lastInteractionTime = performance.now();
+        } else if (e.touches.length === 2) {
+          e.preventDefault();
+          const dist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          if (orbit.pinchDist > 0) {
+            const ratio = orbit.pinchDist / dist;
+            orbit.targetRadius = Math.max(orbit.minRadius, Math.min(orbit.maxRadius, orbit.targetRadius * ratio));
+          }
+          orbit.pinchDist = dist;
+          orbit.lastInteractionTime = performance.now();
+        }
+      }, { passive: false });
+
+      domElem.addEventListener("touchend", function (e) {
+        if (e.touches.length === 0) {
+          if (orbit.isDragging && !orbit.pointerMoved && e.changedTouches.length === 1) {
+            handleSceneClick(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+          }
+          orbit.isDragging = false;
+          orbit.pinchDist = 0;
+        }
+      });
+
+      /* =========================================================================
+         17. GSAP CAMERA PRESETS
+         ========================================================================= */
+
+      const presetButtons = document.querySelectorAll(".preset-chip");
+
+      function flyToPreset(presetName) {
+        const p = CAMERA_PRESETS[presetName];
+        if (!p) return;
+
+        presetButtons.forEach(function (btn) {
+          btn.classList.toggle("active", btn.dataset.preset === presetName);
+        });
+
+        gsap.killTweensOf(orbit);
+        gsap.killTweensOf(orbit.targetLook);
+        orbit.isFlying = true;
+        orbit.lastInteractionTime = performance.now();
+
+        let deltaTheta = ((p.theta - orbit.targetTheta + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        const destTheta = orbit.targetTheta + deltaTheta;
+
+        const radMult = (presetName === "overview" || presetName === "topdown") ? getResponsiveRadiusScale() : 1.0;
+
+        gsap.to(orbit, {
+          targetTheta: destTheta,
+          targetPhi: p.phi,
+          targetRadius: p.radius * radMult,
+          duration: 1.35,
+          ease: "power3.inOut",
+          onComplete: function () {
+            orbit.isFlying = false;
+            orbit.lastInteractionTime = performance.now();
+          }
+        });
+
+        gsap.to(orbit.targetLook, {
+          x: p.target[0],
+          y: p.target[1],
+          z: p.target[2],
+          duration: 1.35,
+          ease: "power3.inOut"
+        });
+      }
+
+      presetButtons.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          flyToPreset(btn.dataset.preset);
+        });
+      });
+
+      /* =========================================================================
+         18. RAYCASTING, HOVER HIGHLIGHTS & FLOATING INFO CARDS + LEADER LINE
+         ========================================================================= */
+
+      const raycaster = new THREE.Raycaster();
+      const pointerNDC = new THREE.Vector2(-10, -10);
+      let pointerScreen = { x: 0, y: 0 };
+      let hoveredPart = null;
+      let selectedPart = null;
+
+      const hoverPill  = document.getElementById("hover-pill");
+      const infoCard   = document.getElementById("info-card");
+      const infoTag    = document.getElementById("info-tag");
+      const infoTitle  = document.getElementById("info-title");
+      const infoBody   = document.getElementById("info-body");
+      const infoMatEl  = document.getElementById("info-material");
+      const infoScale  = document.getElementById("info-scale");
+      const infoClose  = document.getElementById("info-close");
+      const leaderLine = document.getElementById("leader-line");
+      const leaderDot  = document.getElementById("leader-dot");
+
+      function updatePointerCoords(clientX, clientY) {
+        pointerScreen.x = clientX;
+        pointerScreen.y = clientY;
+        pointerNDC.x = (clientX / window.innerWidth) * 2 - 1;
+        pointerNDC.y = -(clientY / window.innerHeight) * 2 + 1;
+      }
+
+      function setPartHighlight(partKey, active) {
+        if (!partKey || !partMaterialsMap[partKey]) return;
+        const targetColor = active ? new THREE.Color(0x4a3d24) : new THREE.Color(0x000000);
+        partMaterialsMap[partKey].forEach(function (mat) {
+          if (mat.emissive) {
+            gsap.to(mat.emissive, {
+              r: targetColor.r,
+              g: targetColor.g,
+              b: targetColor.b,
+              duration: 0.22,
+              overwrite: "auto"
+            });
+          }
+        });
+      }
+
+      function pickPartAtPointer() {
+        raycaster.setFromCamera(pointerNDC, camera);
+        const hits = raycaster.intersectObjects(selectableMeshes, false);
+        for (let i = 0; i < hits.length; i++) {
+          const hit = hits[i];
+          if (sectionClipPlane.distanceToPoint(hit.point) < -0.02) continue;
+          const key = hit.object.userData.partKey;
+          if (key && MONUMENT_INFO[key]) {
+            return { key: key, point: hit.point };
+          }
+        }
+        return null;
+      }
+
+      function updateHoverState() {
+        if (orbit.isDragging) {
+          hoverPill.classList.remove("visible");
+          return;
+        }
+        const hit = pickPartAtPointer();
+        const nextKey = hit ? hit.key : null;
+
+        if (nextKey !== hoveredPart) {
+          if (hoveredPart && hoveredPart !== selectedPart) setPartHighlight(hoveredPart, false);
+          hoveredPart = nextKey;
+          if (hoveredPart) setPartHighlight(hoveredPart, true);
+        }
+
+        if (hoveredPart) {
+          container.classList.add("pointer-hover");
+          hoverPill.textContent = MONUMENT_INFO[hoveredPart].title;
+          hoverPill.style.left = pointerScreen.x + "px";
+          hoverPill.style.top = pointerScreen.y + "px";
+          hoverPill.classList.add("visible");
+        } else {
+          container.classList.remove("pointer-hover");
+          hoverPill.classList.remove("visible");
+        }
+      }
+
+      function openInfoCard(partKey) {
+        const data = MONUMENT_INFO[partKey];
+        if (!data) return;
+        if (selectedPart && selectedPart !== partKey) {
+          setPartHighlight(selectedPart, false);
+        }
+        selectedPart = partKey;
+        setPartHighlight(selectedPart, true);
+
+        infoTag.textContent = data.tag;
+        infoTitle.textContent = data.title;
+        infoBody.textContent = data.body;
+        infoMatEl.textContent = data.material;
+        infoScale.textContent = data.scale;
+
+        infoCard.classList.add("visible");
+        updateLeaderLineAndCard();
+      }
+
+      function closeInfoCard() {
+        if (selectedPart) {
+          if (selectedPart !== hoveredPart) setPartHighlight(selectedPart, false);
+          selectedPart = null;
+        }
+        infoCard.classList.remove("visible");
+        leaderLine.setAttribute("visibility", "hidden");
+        leaderDot.setAttribute("visibility", "hidden");
+      }
+
+      infoClose.addEventListener("click", closeInfoCard);
+
+      function handleSceneClick(clientX, clientY) {
+        updatePointerCoords(clientX, clientY);
+        const hit = pickPartAtPointer();
+        if (hit) {
+          openInfoCard(hit.key);
+        } else {
+          closeInfoCard();
+        }
+      }
+
+      const tempWorldVec = new THREE.Vector3();
+      function updateLeaderLineAndCard() {
+        if (!selectedPart || !partAnchors[selectedPart]) return;
+
+        partAnchors[selectedPart].getWorldPosition(tempWorldVec);
+        tempWorldVec.project(camera);
+
+        if (tempWorldVec.z > 1) {
+          leaderLine.setAttribute("visibility", "hidden");
+          leaderDot.setAttribute("visibility", "hidden");
+          return;
+        }
+
+        const ax = (tempWorldVec.x * 0.5 + 0.5) * window.innerWidth;
+        const ay = (-tempWorldVec.y * 0.5 + 0.5) * window.innerHeight;
+
+        const cardW = infoCard.offsetWidth || 268;
+        const cardH = infoCard.offsetHeight || 168;
+        const margin = 18;
+        const rightReserve = uiHidden ? margin : (window.innerWidth > 680 ? 270 : margin);
+
+        let cx = ax > window.innerWidth * 0.46 ? ax - cardW - 64 : ax + 64;
+        let cy = ay - cardH * 0.52;
+
+        cx = Math.max(margin, Math.min(window.innerWidth - cardW - rightReserve, cx));
+        cy = Math.max(76, Math.min(window.innerHeight - cardH - 86, cy));
+
+        infoCard.style.left = cx + "px";
+        infoCard.style.top = cy + "px";
+
+        const attachX = ax > cx + cardW * 0.5 ? cx + cardW : cx;
+        const attachY = Math.max(cy + 18, Math.min(cy + cardH - 18, ay));
+
+        leaderLine.setAttribute("x1", ax.toFixed(1));
+        leaderLine.setAttribute("y1", ay.toFixed(1));
+        leaderLine.setAttribute("x2", attachX.toFixed(1));
+        leaderLine.setAttribute("y2", attachY.toFixed(1));
+        leaderLine.setAttribute("visibility", "visible");
+
+        leaderDot.setAttribute("cx", ax.toFixed(1));
+        leaderDot.setAttribute("cy", ay.toFixed(1));
+        leaderDot.setAttribute("visibility", "visible");
+      }
+
+      /* =========================================================================
+         19. TIME OF DAY, SEASON, CROSS-SECTION, EXPLODE, WIREFRAME & SCREENSHOT
+         ========================================================================= */
+
+      let currentTimeVal = 28;
+      let currentSeason = "spring";
+      let isCrossSection = false;
+      let isExploded = false;
+      let isWireframe = false;
+      let uiHidden = false;
+
+      const timeSlider    = document.getElementById("time-slider");
+      const timeReadout   = document.getElementById("time-readout");
+      const seasonReadout = document.getElementById("season-readout");
+
+      function lerpColorArray(a, b, t) {
+        return [
+          Math.round(a[0] + (b[0] - a[0]) * t),
+          Math.round(a[1] + (b[1] - a[1]) * t),
+          Math.round(a[2] + (b[2] - a[2]) * t)
+        ];
+      }
+
+      function updateEnvironmentLighting() {
+        const t = currentTimeVal / 100;
+
+        const totalHours = 6 + t * 16;
+        const hh24 = Math.floor(totalHours);
+        const mm = Math.floor((totalHours - hh24) * 60);
+        const suffix = hh24 >= 12 ? "PM" : "AM";
+        const hh12 = ((hh24 + 11) % 12) + 1;
+        timeReadout.textContent = hh12 + ":" + (mm < 10 ? "0" + mm : mm) + " " + suffix;
+
+        const azimuth = -0.82 + t * 2.55;
+        const elevation = Math.max(0.14, Math.sin(Math.min(1, t * 1.18) * Math.PI) * 1.18);
+        const sunR = 30;
+        keyLight.position.set(
+          Math.sin(azimuth) * Math.cos(elevation) * sunR,
+          Math.max(4.5, Math.sin(elevation) * sunR),
+          Math.cos(azimuth) * Math.cos(elevation) * sunR
+        );
+
+        const nightFactor = Math.max(0, Math.min(1, (t - 0.66) / 0.30));
+        const goldenFactor = Math.exp(-Math.pow((t - 0.68) / 0.14, 2)) + Math.exp(-Math.pow((t - 0.04) / 0.10, 2)) * 0.75;
+
+        const dayKeyColor  = new THREE.Color(0xfff2d8);
+        const goldKeyColor = new THREE.Color(0xffa95e);
+        const moonKeyColor = new THREE.Color(0x88a8e6);
+        const mixedKey = dayKeyColor.clone().lerp(goldKeyColor, Math.min(1, goldenFactor)).lerp(moonKeyColor, nightFactor);
+        keyLight.color.copy(mixedKey);
+        keyLight.intensity = 1.84 * (1 - nightFactor * 0.74) + goldenFactor * 0.22;
+
+        fillLight.intensity = 0.58 * (1 - nightFactor * 0.55);
+        hemiLight.intensity = 0.66 * (1 - nightFactor * 0.64);
+        renderer.toneMappingExposure = 1.06 - nightFactor * 0.14;
+
+        // Warm colonnade & plaza lamps illuminate smoothly at dusk and night
+        const lampGlow = Math.pow(nightFactor, 0.85);
+        lampBulbMaterials.forEach(function (bm) {
+          bm.emissiveIntensity = 0.12 + lampGlow * 3.2;
+        });
+        nightPointLights.forEach(function (pl) {
+          pl.intensity = lampGlow * 2.25;
+        });
+
+        let baseTop = [207, 228, 147];
+        let baseMid = [126, 163, 83];
+        let baseBot = [46, 67, 31];
+
+        if (currentSeason === "autumn") {
+          baseTop = [226, 212, 138];
+          baseMid = [154, 142, 74];
+          baseBot = [62, 56, 28];
+        } else if (currentSeason === "winter") {
+          baseTop = [206, 222, 198];
+          baseMid = [132, 156, 126];
+          baseBot = [46, 62, 50];
+        }
+
+        const goldTop = [242, 192, 124];
+        const goldMid = [148, 118, 66];
+        const goldBot = [48, 42, 26];
+
+        const duskTop = [44, 62, 54];
+        const duskMid = [24, 38, 30];
+        const duskBot = [10, 18, 14];
+
+        const gMix = Math.min(0.65, goldenFactor * 0.65);
+        let cTop = lerpColorArray(baseTop, goldTop, gMix);
+        let cMid = lerpColorArray(baseMid, goldMid, gMix);
+        let cBot = lerpColorArray(baseBot, goldBot, gMix);
+
+        cTop = lerpColorArray(cTop, duskTop, nightFactor * 0.88);
+        cMid = lerpColorArray(cMid, duskMid, nightFactor * 0.88);
+        cBot = lerpColorArray(cBot, duskBot, nightFactor * 0.88);
+
+        bokehPalette.top = cTop;
+        bokehPalette.mid = cMid;
+        bokehPalette.bot = cBot;
+        bokehPalette.glowA = nightFactor > 0.45 ? "rgba(255, 204, 124, 0.22)" : "rgba(246, 255, 206, 0.24)";
+        bokehPalette.glowB = nightFactor > 0.45 ? "rgba(148, 188, 172, 0.14)" : "rgba(204, 232, 134, 0.18)";
+        bokehPalette.glowC = nightFactor > 0.45 ? "rgba(255, 184, 102, 0.18)" : "rgba(255, 248, 210, 0.20)";
+
+        const rootStyle = document.documentElement.style;
+        rootStyle.setProperty("--bg-top", "rgb(" + cTop.join(",") + ")");
+        rootStyle.setProperty("--bg-mid", "rgb(" + cMid.join(",") + ")");
+        rootStyle.setProperty("--bg-bot", "rgb(" + cBot.join(",") + ")");
+      }
+
+      timeSlider.addEventListener("input", function () {
+        currentTimeVal = parseFloat(timeSlider.value);
+        updateEnvironmentLighting();
+      });
+
+      const seasonButtons = document.querySelectorAll(".seg-btn");
+      function setSeason(season) {
+        currentSeason = season;
+        seasonReadout.textContent = season === "spring" ? "Spring" : (season === "autumn" ? "Autumn" : "Snow");
+        seasonButtons.forEach(function (b) {
+          b.classList.toggle("active", b.dataset.season === season);
+        });
+
+        gsap.to(seasonUniforms.uSnowAmount, {
+          value: season === "winter" ? 1.0 : 0.0,
+          duration: 1.15,
+          ease: "power2.inOut"
+        });
+        gsap.to(seasonUniforms.uAutumnAmount, {
+          value: season === "autumn" ? 1.0 : 0.0,
+          duration: 1.0,
+          ease: "power2.inOut"
+        });
+
+        foliageMaterials.forEach(function (fm) {
+          const targetCol = season === "spring"
+            ? fm.userData.springColor
+            : (season === "autumn" ? fm.userData.autumnColor : fm.userData.winterColor);
+          gsap.to(fm.color, {
+            r: targetCol.r,
+            g: targetCol.g,
+            b: targetCol.b,
+            duration: 0.95,
+            ease: "power2.inOut"
+          });
+        });
+
+        updateEnvironmentLighting();
+      }
+
+      seasonButtons.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          setSeason(btn.dataset.season);
+        });
+      });
+
+      const sectionBtn = document.getElementById("toggle-section");
+      sectionBtn.addEventListener("click", function () {
+        isCrossSection = !isCrossSection;
+        sectionBtn.classList.toggle("active", isCrossSection);
+        sectionBtn.setAttribute("aria-pressed", String(isCrossSection));
+
+        gsap.to(sectionClipPlane, {
+          constant: isCrossSection ? 0.08 : 22.0,
+          duration: 1.15,
+          ease: "power3.inOut"
+        });
+      });
+
+      const explodeBtn = document.getElementById("toggle-explode");
+      explodeBtn.addEventListener("click", function () {
+        isExploded = !isExploded;
+        explodeBtn.classList.toggle("active", isExploded);
+        explodeBtn.setAttribute("aria-pressed", String(isExploded));
+
+        const dur = 1.2;
+        const ease = "power3.inOut";
+
+        gsap.to(layerBase.position,      { y: layerBase.userData.baseY      + (isExploded ? 0.95 : 0), duration: dur, ease: ease });
+        gsap.to(layerColonnade.position, { y: layerColonnade.userData.baseY + (isExploded ? 2.15 : 0), duration: dur, ease: ease });
+        gsap.to(layerPavilions.position, { y: layerPavilions.userData.baseY + (isExploded ? 2.85 : 0), duration: dur, ease: ease });
+        gsap.to(layerPedestal.position,  { y: layerPedestal.userData.baseY  + (isExploded ? 3.35 : 0), duration: dur, ease: ease });
+        gsap.to(layerDomeCap.position,   { y: layerDomeCap.userData.baseY   + (isExploded ? 4.85 : 0), duration: dur, ease: ease });
+        gsap.to(layerStatue.position,    { y: layerStatue.userData.baseY    + (isExploded ? 6.25 : 0), duration: dur, ease: ease });
+
+        layerPavilions.children.forEach(function (pav) {
+          if (!pav.userData.basePos) return;
+          const mult = isExploded ? 1.13 : 1.0;
+          gsap.to(pav.position, {
+            x: pav.userData.basePos.x * mult,
+            z: pav.userData.basePos.z * mult,
+            duration: dur,
+            ease: ease
+          });
+        });
+      });
+
+      const wireBtn = document.getElementById("toggle-wireframe");
+      wireBtn.addEventListener("click", function () {
+        isWireframe = !isWireframe;
+        wireBtn.classList.toggle("active", isWireframe);
+        wireBtn.setAttribute("aria-pressed", String(isWireframe));
+        allWireframeMaterials.forEach(function (m) {
+          m.wireframe = isWireframe;
+        });
+      });
+
+      const uiLayer = document.getElementById("ui-layer");
+      const hideUiBtn = document.getElementById("hide-ui-btn");
+      const restoreUiBtn = document.getElementById("restore-ui-btn");
+
+      function setUiHidden(hidden) {
+        uiHidden = hidden;
+        uiLayer.classList.toggle("hidden", uiHidden);
+        restoreUiBtn.classList.toggle("visible", uiHidden);
+        if (uiHidden) {
+          closeInfoCard();
+          hoverPill.classList.remove("visible");
+        }
+      }
+
+      hideUiBtn.addEventListener("click", function () { setUiHidden(true); });
+      restoreUiBtn.addEventListener("click", function () { setUiHidden(false); });
+
+      const screenshotBtn = document.getElementById("screenshot-btn");
+      screenshotBtn.addEventListener("click", function () {
+        const w = renderer.domElement.width;
+        const h = renderer.domElement.height;
+        const outCanvas = document.createElement("canvas");
+        outCanvas.width = w;
+        outCanvas.height = h;
+        const ctx = outCanvas.getContext("2d");
+
+        drawBokehToContext(ctx, w, h, elapsedClock, true);
+        renderer.render(scene, camera);
+        ctx.drawImage(renderer.domElement, 0, 0, w, h);
+
+        const vig = ctx.createRadialGradient(w * 0.5, h * 0.5, Math.min(w, h) * 0.34, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
+        vig.addColorStop(0, "rgba(16, 26, 11, 0)");
+        vig.addColorStop(1, "rgba(16, 26, 11, 0.32)");
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, w, h);
+
+        const link = document.createElement("a");
+        const safeName = PLAQUE_TEXT.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "pocket-world-3d";
+        link.download = safeName + "-diorama.png";
+        link.href = outCanvas.toDataURL("image/png");
+        link.click();
+      });
+
+      updateEnvironmentLighting();
+
+      /* =========================================================================
+         20. ANIMATION LOOP, VISIBILITY PAUSE, RESIZE & CLEANUP
+         ========================================================================= */
+
+      let animFrameId = null;
+      let isPageVisible = !document.hidden;
+      let lastTime = performance.now();
+      let elapsedClock = 0;
+
+      function animate(now) {
+        if (!isPageVisible) return;
+        animFrameId = requestAnimationFrame(animate);
+
+        const dt = Math.min((now - lastTime) * 0.001, 0.05);
+        lastTime = now;
+        elapsedClock += dt;
+
+        // Gentle idle auto-rotate when user hasn't interacted recently
+        if (!orbit.isDragging && !orbit.isFlying && (now - orbit.lastInteractionTime > orbit.idleDelayMs)) {
+          orbit.targetTheta += orbit.autoRotateSpeed * dt;
+        }
+
+        // Smooth damped orbit camera
+        const damp = 1 - Math.pow(1 - orbit.damping, dt * 60);
+        orbit.theta  += (orbit.targetTheta - orbit.theta) * damp;
+        orbit.phi    += (orbit.targetPhi - orbit.phi) * damp;
+        orbit.radius += (orbit.targetRadius - orbit.radius) * damp;
+        orbit.target.lerp(orbit.targetLook, damp);
+        syncCameraFromOrbit();
+
+        // Subtle floating collectible miniature motion
+        dioramaRoot.position.y = Math.sin(elapsedClock * 0.85) * 0.09;
+        dioramaRoot.rotation.z = -0.02 + Math.sin(elapsedClock * 0.55) * 0.004;
+        dioramaRoot.rotation.x =  0.018 + Math.cos(elapsedClock * 0.45) * 0.004;
+
+        // Animate tiny walking crowd for scale
+        for (let i = 0; i < walkers.length; i++) {
+          const w = walkers[i];
+          if (w.mode === "ring") {
+            w.angle += w.speed * dt;
+            const wx = Math.cos(w.angle) * w.radius;
+            const wz = -0.3 + Math.sin(w.angle) * w.radius * 0.82;
+            w.mesh.position.set(wx, PLAZA_Y + 0.02 + Math.abs(Math.sin(elapsedClock * 7 + w.phase)) * 0.018, wz);
+            w.mesh.rotation.y = Math.atan2(-Math.sin(w.angle) * w.speed, Math.cos(w.angle) * w.speed);
+          } else {
+            const p = Math.sin(elapsedClock * 0.22 + w.phase);
+            const wx = p * w.xRange;
+            const dir = Math.cos(elapsedClock * 0.22 + w.phase) >= 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+            w.mesh.position.set(wx, 0.07 + Math.abs(Math.sin(elapsedClock * 7 + w.phase)) * 0.015, w.zLine);
+            w.mesh.rotation.y = dir;
+          }
+          const stride = Math.sin(elapsedClock * 7.2 + w.phase) * 0.38;
+          w.legL.rotation.x = stride;
+          w.legR.rotation.x = -stride;
+        }
+
+        // Animate circling miniature birds
+        const explodeBirdOffset = isExploded ? 4.8 : 0;
+        for (let b = 0; b < birds.length; b++) {
+          const bd = birds[b];
+          bd.angle += bd.speed * dt;
+          const bx = Math.cos(bd.angle) * bd.radiusX;
+          const bz = -0.5 + Math.sin(bd.angle) * bd.radiusZ;
+          const by = bd.baseY + explodeBirdOffset + Math.sin(elapsedClock * 1.1 + b) * 0.45;
+          bd.group.position.set(bx, by, bz);
+
+          const dx = -Math.sin(bd.angle) * bd.radiusX;
+          const dz =  Math.cos(bd.angle) * bd.radiusZ;
+          bd.group.rotation.y = Math.atan2(dx, dz);
+          bd.group.rotation.z = -0.22;
+
+          const flap = Math.sin(elapsedClock * bd.flapSpeed + b * 2.0) * 0.58;
+          bd.wLeft.rotation.z = -flap;
+          bd.wRight.rotation.z = flap;
+        }
+
+        // Drift floating dust motes softly through the light
+        if (dustPoints) {
+          const pArr = dustPoints.geometry.attributes.position.array;
+          for (let m = 0; m < pArr.length; m += 3) {
+            const idx = m * 0.333;
+            pArr[m]     = dustBasePositions[m]     + Math.sin(elapsedClock * 0.35 + idx) * 0.45;
+            pArr[m + 1] = dustBasePositions[m + 1] + Math.sin(elapsedClock * 0.28 + idx * 1.3) * 0.35;
+            pArr[m + 2] = dustBasePositions[m + 2] + Math.cos(elapsedClock * 0.31 + idx * 0.9) * 0.45;
+          }
+          dustPoints.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // Render soft animated bokeh background
+        drawBokehToContext(bokehCtx, bokehCanvas.width, bokehCanvas.height, elapsedClock, false);
+
+        if (!uiHidden) {
+          updateHoverState();
+          updateLeaderLineAndCard();
+        }
+
+        renderer.render(scene, camera);
+      }
+
+      // Pause rendering when tab is hidden
+      document.addEventListener("visibilitychange", function () {
+        isPageVisible = !document.hidden;
+        if (isPageVisible) {
+          lastTime = performance.now();
+          if (animFrameId !== null) cancelAnimationFrame(animFrameId);
+          animFrameId = requestAnimationFrame(animate);
+        } else if (animFrameId !== null) {
+          cancelAnimationFrame(animFrameId);
+          animFrameId = null;
+        }
+      });
+
+      // Responsive window resize handler
+      function onResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        resizeBokeh();
+        updateLeaderLineAndCard();
+      }
+      window.addEventListener("resize", onResize);
+
+      // Clean resource disposal on page unload
+      window.addEventListener("beforeunload", function () {
+        if (animFrameId !== null) cancelAnimationFrame(animFrameId);
+        disposeAllResources();
+      });
+
+      // First render & smooth loading ring fade-out
+      renderer.render(scene, camera);
+      requestAnimationFrame(function () {
+        const loader = document.getElementById("loader");
+        if (loader) loader.classList.add("done");
+        lastTime = performance.now();
+        animFrameId = requestAnimationFrame(animate);
+      });
+    })();
+  </script>
+</body>
+</html>

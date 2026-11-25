@@ -1,12 +1,12 @@
 # AI 3D Benchmarks
 
-A collection of **16 single-file AI benchmark builds** (procedural Three.js 3D scenes, physics simulations & interactive web OS demos) running live at **60 FPS** directly in the browser — built with **no external 3D models, image textures, audio files, or build steps**.
+A collection of **18 single-file AI benchmark builds** (procedural Three.js 3D scenes, physics simulations & interactive web OS demos) running live at **60 FPS** directly in the browser — built with **no external 3D models, image textures, audio files, or build steps**.
 
 - **Live Fullscreen Showcase (auto-plays immediately):** https://vsrikanth05.github.io/ai-3d-benchmarks/
 
 ## Playable 3D Scenes
 
-Opening the showcase URL above plays **Chandrayaan-3 Landing** fullscreen right away, with a subtle bottom-right scene switcher to browse all 16 builds, replay, or jump to any standalone no-UI file.
+Opening the showcase URL above plays **Chandrayaan-3 Landing** fullscreen right away, with a subtle bottom-right scene switcher to browse all 18 builds, replay, or jump to any standalone no-UI file.
 
 | # | Scene | Showcase Link | Direct Standalone (No UI) | Source |
 |---|---|---|---|---|

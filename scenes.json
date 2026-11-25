@@ -100,5 +100,11 @@
     "title": "Samsung Galaxy Z TriFold — Interactive 3D Unboxing",
     "file": "samsung-galaxy-z-trifold-unboxing.html",
     "description": "Single-file interactive 3D Samsung Galaxy Z TriFold unboxing with procedural Three.js geometry, Canvas textures, and Web Audio: lift the box lid, pull out the phone, peel the protective film, inspect the 200MP cameras, unfold both titanium hinges to 10.0\", and unlock live 3-panel One UI."
+  },
+  {
+    "id": "pocket-world-equestrian-memorial",
+    "title": "Pocket World 3D — Monumental Equestrian Memorial",
+    "file": "pocket-world-equestrian-memorial.html",
+    "description": "Collectible floating 3D architectural diorama of a monumental equestrian memorial with an asymmetrical curved colonnade, 4 domed corner pavilions, 360+ instanced turned balusters, crouching bronze lions, custom snow/autumn shaders, cross-section cutaway, explode layers, and GSAP camera presets."
   }
 ]
